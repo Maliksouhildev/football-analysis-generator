@@ -1,0 +1,4 @@
+node_modules/
+*.log
+.n8n-sync-events.jsonl
+.n8n-state.json

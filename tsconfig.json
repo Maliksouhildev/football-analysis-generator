@@ -1,0 +1,19 @@
+{
+    "compilerOptions": {
+        "target": "ES2022",
+        "module": "NodeNext",
+        "moduleResolution": "NodeNext",
+        "experimentalDecorators": true,
+        "emitDecoratorMetadata": false,
+        "strict": false,
+        "noEmit": true,
+        "skipLibCheck": true
+    },
+    "include": [
+        "**/*.workflow.ts",
+        "**/*.d.ts"
+    ],
+    "exclude": [
+        "node_modules"
+    ]
+}
