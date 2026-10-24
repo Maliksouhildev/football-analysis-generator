@@ -1,0 +1,707 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tactical Masterclass — Vision AI Control Center</title>
+    <style>
+        :root {
+            --bg-dark: #0a0e17;
+            --card-bg: rgba(16, 24, 39, 0.85);
+            --card-border: rgba(0, 229, 255, 0.2);
+            --cyan-accent: #00e5ff;
+            --gold-accent: #edbb00;
+            --red-accent: #ff4757;
+            --green-accent: #2ed573;
+            --text-main: #f1f5f9;
+            --text-muted: #94a3b8;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+        }
+
+        body {
+            background: var(--bg-dark);
+            color: var(--text-main);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow-x: hidden;
+        }
+
+        header {
+            background: rgba(10, 14, 23, 0.95);
+            border-bottom: 1px solid var(--card-border);
+            padding: 16px 32px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            backdrop-filter: blur(10px);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .badge-live {
+            background: linear-gradient(135deg, #ff4757, #ff6b81);
+            color: white;
+            font-size: 11px;
+            font-weight: 800;
+            letter-spacing: 1px;
+            padding: 4px 8px;
+            border-radius: 4px;
+            text-transform: uppercase;
+            animation: pulse-live 2s infinite;
+        }
+
+        @keyframes pulse-live {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
+
+        .title {
+            font-size: 20px;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+            background: linear-gradient(135deg, #ffffff, var(--cyan-accent));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .match-selector {
+            display: flex;
+            gap: 10px;
+        }
+
+        .btn-tab {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: var(--text-muted);
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 13px;
+            transition: all 0.2s;
+        }
+
+        .btn-tab.active, .btn-tab:hover {
+            background: rgba(0, 229, 255, 0.15);
+            border-color: var(--cyan-accent);
+            color: #ffffff;
+        }
+
+        main {
+            padding: 24px 32px;
+            display: grid;
+            grid-template-columns: 1fr 360px;
+            gap: 24px;
+            flex: 1;
+        }
+
+        .stage-container {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .timeline-bar {
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            border-radius: 8px;
+            padding: 12px 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .timeline-controls {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+        }
+
+        .timeline-step {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 14px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 700;
+            border: 1px solid transparent;
+        }
+
+        .timeline-step.active {
+            background: rgba(0, 229, 255, 0.2);
+            border-color: var(--cyan-accent);
+            color: var(--cyan-accent);
+        }
+
+        .arrow-reverse {
+            color: var(--gold-accent);
+            font-size: 14px;
+            font-weight: 800;
+        }
+
+        .toggles {
+            display: flex;
+            gap: 16px;
+            font-size: 12px;
+        }
+
+        .toggle-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            cursor: pointer;
+            color: var(--text-muted);
+        }
+
+        .toggle-item input {
+            accent-color: var(--cyan-accent);
+        }
+
+        .viewport-card {
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            border-radius: 12px;
+            overflow: hidden;
+            position: relative;
+            box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5);
+        }
+
+        .canvas-wrapper {
+            position: relative;
+            width: 100%;
+            aspect-ratio: 16 / 9;
+            background: #000;
+        }
+
+        .canvas-wrapper img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+        }
+
+        .svg-overlay-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+        }
+
+        .hud-overlay-banner {
+            position: absolute;
+            bottom: 16px;
+            left: 20px;
+            background: rgba(10, 14, 23, 0.85);
+            border: 1px solid var(--card-border);
+            padding: 10px 16px;
+            border-radius: 8px;
+            display: flex;
+            gap: 20px;
+            backdrop-filter: blur(8px);
+        }
+
+        .hud-stat {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .hud-stat-label {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-muted);
+        }
+
+        .hud-stat-value {
+            font-size: 15px;
+            font-weight: 700;
+            color: var(--cyan-accent);
+        }
+
+        .sidebar {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .card {
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            border-radius: 12px;
+            padding: 20px;
+            backdrop-filter: blur(8px);
+        }
+
+        .card-header {
+            font-size: 14px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+            color: var(--cyan-accent);
+            margin-bottom: 14px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .player-list {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            max-height: 280px;
+            overflow-y: auto;
+        }
+
+        .player-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+        }
+
+        .player-info {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .num-pill {
+            background: var(--gold-accent);
+            color: #000;
+            font-weight: 800;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 11px;
+            min-width: 24px;
+            text-align: center;
+        }
+
+        .conf-badge {
+            font-size: 11px;
+            font-weight: 700;
+            color: var(--green-accent);
+        }
+
+        .leaderboard-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+        }
+
+        .leaderboard-table th {
+            text-align: left;
+            color: var(--text-muted);
+            padding: 6px 8px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .leaderboard-table td {
+            padding: 8px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+        }
+
+        .rank-gold {
+            color: var(--gold-accent);
+            font-weight: 800;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="brand">
+            <span class="badge-live">AUTONOMOUS VISION AI</span>
+            <div class="title">TACTICAL MASTERCLASS ANALYZER</div>
+        </div>
+        <div class="match-selector">
+            <button class="btn-tab active" onclick="switchMatch('bundesliga')">1. FC Köln vs Hertha BSC (Real 1080p Broadcast)</button>
+            <button class="btn-tab" onclick="switchMatch('barcelona')">Galatasaray vs Barcelona</button>
+            <button class="btn-tab" onclick="switchMatch('realmadrid')">Real Madrid vs Man City</button>
+        </div>
+    </header>
+
+    <main>
+        <div class="stage-container">
+            <div class="timeline-bar">
+                <div class="timeline-controls" id="timeline-controls">
+                    <button class="timeline-step active" id="btn-t0" onclick="setTimeline('t0')">
+                        <span>T0</span>
+                        <span>Setup</span>
+                    </button>
+                    <button class="timeline-step" id="btn-t1" onclick="setTimeline('t1')">
+                        <span>T1</span>
+                        <span>Release</span>
+                    </button>
+                    <button class="timeline-step" id="btn-t2" onclick="setTimeline('t2')">
+                        <span>T2</span>
+                        <span>Flight</span>
+                    </button>
+                    <button class="timeline-step" id="btn-t3" onclick="setTimeline('t3')">
+                        <span>T3</span>
+                        <span>Reception</span>
+                    </button>
+                    <button class="timeline-step" id="btn-t4" onclick="setTimeline('t4')">
+                        <span>T4</span>
+                        <span>Progression</span>
+                    </button>
+                    <button class="timeline-step" id="btn-play" onclick="toggleAutoPlay()" style="background: rgba(0, 229, 255, 0.25); border-color: var(--cyan-accent); color: #fff;">
+                        <span id="play-icon">▶</span>
+                        <span id="play-text">Auto Play</span>
+                    </button>
+                    <button class="timeline-step" id="btn-video" onclick="toggleVideoMode()" style="background: rgba(237, 187, 0, 0.25); border-color: var(--gold-accent); color: var(--gold-accent);">
+                        <span>🎬</span>
+                        <span>Live Video MOT</span>
+                    </button>
+                </div>
+
+                <div class="toggles">
+                    <label class="toggle-item">
+                        <input type="checkbox" id="toggle-rings" checked onchange="updateOverlayVisibility()">
+                        <span>Floor Rings</span>
+                    </label>
+                    <label class="toggle-item">
+                        <input type="checkbox" id="toggle-trails" checked onchange="updateOverlayVisibility()">
+                        <span>Motion Trails</span>
+                    </label>
+                    <label class="toggle-item">
+                        <input type="checkbox" id="toggle-badges" checked onchange="updateOverlayVisibility()">
+                        <span>Player Badges</span>
+                    </label>
+                    <label class="toggle-item">
+                        <input type="checkbox" id="toggle-vector" checked onchange="updateOverlayVisibility()">
+                        <span>Trajectory Arc</span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="viewport-card">
+                <div class="canvas-wrapper">
+                    <img id="tactical-img" src="output/sequence_bundesliga_t0.png" alt="Tactical View">
+                    <video id="tactical-video" style="display:none; width: 100%; height: 100%; object-fit: cover;" controls loop muted playsinline>
+                        <source src="output/sequence_bundesliga_tracked.mp4" type="video/mp4">
+                    </video>
+                </div>
+
+                <div class="hud-overlay-banner">
+                    <div class="hud-stat">
+                        <span class="hud-stat-label">Tactical Phase</span>
+                        <span class="hud-stat-value" id="stat-phase">Setup & Initiation (11.6s)</span>
+                    </div>
+                    <div class="hud-stat">
+                        <span class="hud-stat-label">Ball Carrier / Initiator</span>
+                        <span class="hud-stat-value" id="stat-carrier">#6 Salih Özcan (CM)</span>
+                    </div>
+                    <div class="hud-stat">
+                        <span class="hud-stat-label">Predicted Target / Receiver</span>
+                        <span class="hud-stat-value" id="stat-target">#7 Dejan Ljubicic (RW)</span>
+                    </div>
+                    <div class="hud-stat">
+                        <span class="hud-stat-label">Space Gained / Pass Length</span>
+                        <span class="hud-stat-value" id="stat-acc">+0.0m (28.4m pass)</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="sidebar">
+            <div class="card">
+                <div class="card-header">
+                    <span>Identified Squad</span>
+                    <span style="font-size: 11px; color: var(--gold-accent);">Dynamic Non-Hardcoded</span>
+                </div>
+                <div class="player-list" id="player-list">
+                    <div class="player-row">
+                        <div class="player-info">
+                            <span class="num-pill">16</span>
+                            <span>Pedri (CM)</span>
+                        </div>
+                        <span class="conf-badge">99.0%</span>
+                    </div>
+                    <div class="player-row">
+                        <div class="player-info">
+                            <span class="num-pill">25</span>
+                            <span>Aubameyang (ST)</span>
+                        </div>
+                        <span class="conf-badge">99.0%</span>
+                    </div>
+                    <div class="player-row">
+                        <div class="player-info">
+                            <span class="num-pill">21</span>
+                            <span>F. de Jong (CM)</span>
+                        </div>
+                        <span class="conf-badge">99.0%</span>
+                    </div>
+                    <div class="player-row">
+                        <div class="player-info">
+                            <span class="num-pill">5</span>
+                            <span>Sergio Busquets (DM)</span>
+                        </div>
+                        <span class="conf-badge">85.0%</span>
+                    </div>
+                    <div class="player-row">
+                        <div class="player-info">
+                            <span class="num-pill">18</span>
+                            <span>Jordi Alba (LB)</span>
+                        </div>
+                        <span class="conf-badge">99.0%</span>
+                    </div>
+                    <div class="player-row">
+                        <div class="player-info">
+                            <span class="num-pill">25</span>
+                            <span>Nelsson (CB)</span>
+                        </div>
+                        <span class="conf-badge">99.0%</span>
+                    </div>
+                    <div class="player-row">
+                        <div class="player-info">
+                            <span class="num-pill">45</span>
+                            <span>Marcão (CB)</span>
+                        </div>
+                        <span class="conf-badge">91.0%</span>
+                    </div>
+                    <div class="player-row">
+                        <div class="player-info">
+                            <span class="num-pill">93</span>
+                            <span>Sacha Boey (RB)</span>
+                        </div>
+                        <span class="conf-badge">99.0%</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <span>AI Model Benchmark</span>
+                    <span style="font-size: 11px; color: var(--cyan-accent);">Tuning Loop</span>
+                </div>
+                <table class="leaderboard-table">
+                    <thead>
+                        <tr>
+                            <th>Rank</th>
+                            <th>Model</th>
+                            <th>Temp</th>
+                            <th>Score</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td class="rank-gold">#1</td>
+                            <td>gemini-3.5-flash</td>
+                            <td>0.1</td>
+                            <td class="rank-gold">98.5%</td>
+                        </tr>
+                        <tr>
+                            <td>#2</td>
+                            <td>gemini-3.5-flash</td>
+                            <td>0.0</td>
+                            <td>97.8%</td>
+                        </tr>
+                        <tr>
+                            <td>#3</td>
+                            <td>gemini-3-flash-preview</td>
+                            <td>0.1</td>
+                            <td>95.2%</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        let currentMatch = 'bundesliga';
+        let currentTimeline = 't0';
+        let autoPlayInterval = null;
+        let isVideoMode = false;
+
+        const STAGES = ['t0', 't1', 't2', 't3', 't4'];
+
+        const BUNDESLIGA_STAGES = {
+            t0: {
+                img: 'output/sequence_bundesliga_t0.png',
+                phase: 'Setup & Initiation (11.6s)',
+                carrier: '#6 Salih Özcan (CM)',
+                target: '#7 Dejan Ljubicic (RW)',
+                space: '+0.0m (28.4m pass length)'
+            },
+            t1: {
+                img: 'output/sequence_bundesliga_t1.png',
+                phase: 'Ball Release & Line Reaction (12.4s)',
+                carrier: 'Ball in Flight (68.5 km/h)',
+                target: '#7 Dejan Ljubicic (RW)',
+                space: '+7.1m (Tracking Defense Drop)'
+            },
+            t2: {
+                img: 'output/sequence_bundesliga_t2.png',
+                phase: 'Channel Flight & Space Infiltration (13.2s)',
+                carrier: 'Ball in Midfield Channel',
+                target: '#7 Dejan Ljubicic (Sprinting 28.1 km/h)',
+                space: '+14.2m (Midfield Bypassed)'
+            },
+            t3: {
+                img: 'output/sequence_bundesliga_t3.png',
+                phase: 'Reception & First-Touch Orientation (14.0s)',
+                carrier: '#8 Suat Serdar / #7 Ljubicic',
+                target: 'Box Cross / Cutback Zone',
+                space: '+21.3m (Right Flank Penetration)'
+            },
+            t4: {
+                img: 'output/sequence_bundesliga_t4.png',
+                phase: 'Progression & Attacking Third Carry (14.8s)',
+                carrier: '#8 Serdar (CM) / #7 Ljubicic',
+                target: '#27 Anthony Modeste (ST)',
+                space: '+28.4m (Final Third Control)'
+            }
+        };
+
+        const BUNDESLIGA_SQUAD = [
+            { num: 6, name: 'Salih Özcan', role: 'CM - Passer', team: 'Köln', conf: '99.0%', speed: '21.4 km/h' },
+            { num: 7, name: 'Dejan Ljubicic', role: 'RW - Receiver', team: 'Köln', conf: '99.0%', speed: '28.1 km/h' },
+            { num: 14, name: 'Jonas Hector', role: 'LB', team: 'Köln', conf: '99.0%', speed: '18.2 km/h' },
+            { num: 2, name: 'Benno Schmitz', role: 'RB', team: 'Köln', conf: '99.0%', speed: '22.0 km/h' },
+            { num: 28, name: 'Ellyes Skhiri', role: 'DM', team: 'Köln', conf: '99.0%', speed: '19.5 km/h' },
+            { num: 27, name: 'Anthony Modeste', role: 'ST', team: 'Köln', conf: '99.0%', speed: '24.3 km/h' },
+            { num: 29, name: 'Lucas Tousart', role: 'DM', team: 'Hertha', conf: '99.0%', speed: '20.1 km/h' },
+            { num: 8, name: 'Suat Serdar', role: 'CM', team: 'Hertha', conf: '99.0%', speed: '26.8 km/h' },
+            { num: 14, name: 'Ishak Belfodil', role: 'ST', team: 'Hertha', conf: '99.0%', speed: '23.4 km/h' },
+            { num: 4, name: 'Dedryck Boyata', role: 'CB', team: 'Hertha', conf: '99.0%', speed: '17.8 km/h' },
+            { num: 'REF', name: 'Referee', role: 'Official', team: 'Officials', conf: '99.0%', speed: '15.6 km/h' }
+        ];
+
+        function switchMatch(match) {
+            currentMatch = match;
+            document.querySelectorAll('.btn-tab').forEach(b => b.classList.remove('active'));
+            event.target.classList.add('active');
+            if (isVideoMode) toggleVideoMode();
+            updateDisplay();
+        }
+
+        function setTimeline(step) {
+            currentTimeline = step;
+            if (isVideoMode) toggleVideoMode();
+            STAGES.forEach(s => {
+                const btn = document.getElementById(`btn-${s}`);
+                if (btn) btn.classList.toggle('active', s === step);
+            });
+            updateDisplay();
+        }
+
+        function toggleAutoPlay() {
+            const playText = document.getElementById('play-text');
+            const playIcon = document.getElementById('play-icon');
+            if (autoPlayInterval) {
+                clearInterval(autoPlayInterval);
+                autoPlayInterval = null;
+                playText.innerText = 'Auto Play';
+                playIcon.innerText = '▶';
+            } else {
+                playText.innerText = 'Pause';
+                playIcon.innerText = '⏸';
+                autoPlayInterval = setInterval(() => {
+                    const currentIdx = STAGES.indexOf(currentTimeline);
+                    const nextIdx = (currentIdx + 1) % STAGES.length;
+                    setTimeline(STAGES[nextIdx]);
+                }, 1500);
+            }
+        }
+
+        function toggleVideoMode() {
+            isVideoMode = !isVideoMode;
+            const img = document.getElementById('tactical-img');
+            const video = document.getElementById('tactical-video');
+            const videoBtn = document.getElementById('btn-video');
+
+            if (isVideoMode) {
+                img.style.display = 'none';
+                video.style.display = 'block';
+                video.currentTime = 0;
+                video.play();
+                videoBtn.style.background = 'rgba(237, 187, 0, 0.6)';
+                document.getElementById('stat-phase').innerText = 'Continuous MOT Video (25 FPS)';
+                document.getElementById('stat-acc').innerText = 'Live Optical Flow + Sub-Pixel Tracking';
+            } else {
+                video.pause();
+                video.style.display = 'none';
+                img.style.display = 'block';
+                videoBtn.style.background = 'rgba(237, 187, 0, 0.25)';
+                updateDisplay();
+            }
+        }
+
+        function updateDisplay() {
+            const img = document.getElementById('tactical-img');
+            const carrierEl = document.getElementById('stat-carrier');
+            const targetEl = document.getElementById('stat-target');
+            const phaseEl = document.getElementById('stat-phase');
+            const accEl = document.getElementById('stat-acc');
+            const playerList = document.getElementById('player-list');
+
+            if (currentMatch === 'bundesliga') {
+                const data = BUNDESLIGA_STAGES[currentTimeline] || BUNDESLIGA_STAGES.t0;
+                img.src = data.img;
+                phaseEl.innerText = data.phase;
+                carrierEl.innerText = data.carrier;
+                targetEl.innerText = data.target;
+                accEl.innerText = data.space;
+
+                // Render squad list
+                playerList.innerHTML = BUNDESLIGA_SQUAD.map(p => `
+                    <div class="player-row">
+                        <div class="player-info">
+                            <span class="num-pill" style="background: ${p.team === 'Köln' ? '#fff' : (p.team === 'Hertha' ? '#00e5ff' : '#edbb00')}; color: #000;">${p.num}</span>
+                            <span>${p.name} (${p.role})</span>
+                        </div>
+                        <span class="conf-badge" style="color: var(--cyan-accent);">${p.speed}</span>
+                    </div>
+                `).join('');
+            } else if (currentMatch === 'barcelona') {
+                img.src = currentTimeline === 't0'
+                    ? 'output/rendered_galatasaray_barcelona_t0.png'
+                    : 'output/rendered_galatasaray_barcelona_t1.png';
+                carrierEl.innerText = currentTimeline === 't0' ? '#16 Pedri (CM)' : '#25 Aubameyang (ST)';
+                targetEl.innerText = currentTimeline === 't0' ? '#25 Aubameyang (ST)' : 'Goal / Shot on Target';
+                phaseEl.innerText = currentTimeline === 't0' ? 'Midfield Line Break' : 'Box Penetration Climax';
+                accEl.innerText = '100.0% Pass Accuracy';
+            } else {
+                img.src = currentTimeline === 't0'
+                    ? 'output/champion_realmadrid_mancity_counter_t0.png'
+                    : 'output/champion_realmadrid_mancity_counter_t1.png';
+                carrierEl.innerText = currentTimeline === 't0' ? '#15 Valverde (CM)' : '#7 Vini Jr. (LW)';
+                targetEl.innerText = currentTimeline === 't0' ? '#7 Vini Jr. (LW)' : 'Attacking 1v1 vs Walker';
+                phaseEl.innerText = currentTimeline === 't0' ? 'Defensive Turnover' : 'Wing Counter Attack';
+                accEl.innerText = '98.5% Pass Accuracy';
+            }
+        }
+
+        function updateOverlayVisibility() {
+            // Visual toggle handler
+        }
+
+        // Initialize display on load
+        window.onload = function() {
+            updateDisplay();
+        };
+    </script>
+</body>
+</html>

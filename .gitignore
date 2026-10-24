@@ -2,3 +2,17 @@ node_modules/
 *.log
 .n8n-sync-events.jsonl
 .n8n-state.json
+output/
+__pycache__/
+*.pyc
+
+*.pt
+*.part
+checkpoints/
+assets/
+audio/
+.env
+*.mp4
+*.wav
+*.jpg
+*.png
