@@ -16,3 +16,5 @@ audio/
 *.wav
 *.jpg
 *.png
+test_data/
+*.mp3

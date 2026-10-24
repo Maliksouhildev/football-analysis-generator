@@ -39,6 +39,7 @@ Event Telemetry Context:
   * Defensive Backline / Structural Shape: {backline_info}
   * Attacking Shape / Overload: {triangle_info}
   * Key Players In Spotlight: {focal_info}
+  * Ball Carrier / Catalyst In Focus: {catalyst_info}
 
 TASK:
 Write exactly 3 distinct spoken voiceover commentary beats in valid JSON format.
@@ -71,7 +72,7 @@ CRITICAL BROADCAST RULES:
 4. Every clip must receive a completely distinct, non-repetitive sentence structure and opener tailored to its tactical zone ({tactical_zone}) and match minute ({clock}). Never repeat openers across clips.
 5. No emojis, no hashtags, no conversational filler (no "Here we see", no "Notice how").
 6. Output ONLY the valid JSON object.
-7. Identify players strictly by Tactical Role ('BALL CARRIER', 'PRESSING TRIGGER', 'THIRD-MAN RUNNER', 'ISOLATED FULLBACK', 'COVERING CB', 'MIDFIELD PIVOT'). Never hallucinate real player names.
+7. When referring to the ball carrier or tactical actors, use their verified name ({catalyst_info}, etc.) rather than generic placeholder words ('BALL CARRIER'). Never invent or hallucinate players outside the verified roster.
 8. For corner kicks (CORNER_SET_PIECE) and deep buildup (DEEP_BUILDUP_PROGRESSION), focus on box marking/delivery zone or passing structure vs first pressing line, and NEVER claim a shot or goal conversion when none occurred.
 """
 
@@ -153,7 +154,7 @@ class TacticalNarrator:
         # Dynamic commentary: If custom script beats provided in event_window, use them
         custom_beats = event_window.get("script") or event_window.get("commentary_beats")
         if custom_beats and isinstance(custom_beats, dict) and all(k in custom_beats for k in ("beat_1_setup", "beat_2_cause", "beat_3_effect")):
-            return copy.deepcopy(custom_beats)
+            return self._inject_real_names(copy.deepcopy(custom_beats), tel)
 
         # Check circuit breaker
         now = time.time()
@@ -161,7 +162,7 @@ class TacticalNarrator:
             if now - self._circuit_opened_at > self._cooldown:
                 self._circuit_open = False
             else:
-                return self._generate_fallback_3beat_script(
+                res = self._generate_fallback_3beat_script(
                     tone=tone,
                     thesis=thesis,
                     t_cause_clock=t_cause_clock,
@@ -188,14 +189,14 @@ class TacticalNarrator:
                 )
                 if beats and all(k in beats for k in ("beat_1_setup", "beat_2_cause", "beat_3_effect")):
                     logger.info("Successfully generated 3-beat script via Gemini 3.8 Flash.")
-                    return beats
+                    return self._inject_real_names(beats, tel)
             except Exception as e:
                 logger.warning(f"Live Gemini 3-beat generation failed: {e}. Tripping circuit breaker.")
                 self._circuit_open = True
                 self._circuit_opened_at = time.time()
 
         # Deterministic broadcast-grade fallback
-        return self._generate_fallback_3beat_script(
+        res = self._generate_fallback_3beat_script(
             tone=tone,
             thesis=thesis,
             t_cause_clock=t_cause_clock,
@@ -206,6 +207,7 @@ class TacticalNarrator:
             tactical_zone=tactical_zone,
             clip_id=clip_id_str,
         )
+        return self._inject_real_names(res, tel)
 
     @staticmethod
     def _resolve_tactical_zone(
@@ -292,6 +294,10 @@ class TacticalNarrator:
         backline_info = "Yes (defensive unit linked)" if cause_telestration.get("backline_track_ids") else "None"
         triangle_info = "Yes (attacking overload triangle)" if cause_telestration.get("triangle_track_ids") else "None"
         focal_info = f"Tracks {cause_telestration.get('focal_track_ids', [])}"
+        cat_p = cause_telestration.get("catalyst_player") or {}
+        raw_cat = str(cat_p.get("name") or cat_p.get("name_pos") or "The ball carrier").strip()
+        cleaned_cat = re.sub(r'[\(\[\/].*?[\)\]\/]', '', raw_cat).strip()
+        catalyst_info = cleaned_cat if cleaned_cat and cleaned_cat.upper() not in ("BALL CARRIER", "CARRIER") else "The ball carrier"
 
         prompt = PROMPT_3BEAT_TEMPLATE.format(
             home_team=home,
@@ -306,6 +312,7 @@ class TacticalNarrator:
             backline_info=backline_info,
             triangle_info=triangle_info,
             focal_info=focal_info,
+            catalyst_info=catalyst_info,
         )
 
         parts: list[dict[str, Any]] = []
@@ -404,6 +411,54 @@ class TacticalNarrator:
         if last_exc:
             raise last_exc
         return None
+
+    @staticmethod
+    def _inject_real_names(beats: Dict[str, Any], cause_tel: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Replaces generic placeholder roles (like 'BALL CARRIER') with the actual verified player names
+        so both TTS audio commentary and onscreen captions speak the player's real name out loud.
+        """
+        if not beats or not isinstance(beats, dict) or not cause_tel or not isinstance(cause_tel, dict):
+            return beats
+
+        def _clean_spoken_name(raw: str) -> str:
+            if not raw:
+                return ""
+            s = re.sub(r'[\(\[\/].*?[\)\]\/]', '', raw).strip()
+            return s if s.upper() not in ("BALL CARRIER", "CARRIER", "PLAYER", "CATALYST", "") else ""
+
+        cat_player = cause_tel.get("catalyst_player") or {}
+        cat_spoken = _clean_spoken_name(cat_player.get("name") or cat_player.get("name_pos") or "")
+
+        runner_player = cause_tel.get("runner_player") or {}
+        run_spoken = _clean_spoken_name(runner_player.get("name") or runner_player.get("name_pos") or "")
+
+        def _sub(text: str) -> str:
+            if not text or not isinstance(text, str):
+                return text
+            t = text
+            if cat_spoken:
+                t = re.sub(r'\b(?:the\s+)?ball\s+carrier\b', cat_spoken, t, flags=re.IGNORECASE)
+                t = re.sub(r'\b(?:the\s+)?central\s+playmaker\b', cat_spoken, t, flags=re.IGNORECASE)
+                t = re.sub(r'\b(?:the\s+)?wide\s+playmaker\b', cat_spoken, t, flags=re.IGNORECASE)
+                t = re.sub(r'\b(?:the\s+)?central\s+catalyst\b', cat_spoken, t, flags=re.IGNORECASE)
+            if run_spoken:
+                t = re.sub(r'\b(?:the\s+)?third[- ]man\s+runner\b', run_spoken, t, flags=re.IGNORECASE)
+                t = re.sub(r'\b(?:the\s+)?primary\s+runner\b', run_spoken, t, flags=re.IGNORECASE)
+            return t
+
+        res = copy.deepcopy(beats)
+        for k in ("beat_1_setup", "beat_2_cause", "beat_3_effect"):
+            if k in res and isinstance(res[k], str):
+                res[k] = _sub(res[k])
+            elif k in res and isinstance(res[k], dict) and "text" in res[k]:
+                res[k]["text"] = _sub(res[k]["text"])
+
+        if "beat_2_steps" in res and isinstance(res["beat_2_steps"], dict):
+            for sk in res["beat_2_steps"]:
+                res["beat_2_steps"][sk] = _sub(str(res["beat_2_steps"][sk]))
+
+        return res
 
     def _generate_fallback_3beat_script(
         self,
