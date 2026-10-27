@@ -217,14 +217,14 @@ class TemporalGroundTruthEngine:
             "arc_height_pct": 0.0,
         },
         "clip_03": {
-            "target_pos": [68.5, 58.5],
-            "runner_target_pos": [66.5, 58.5],
-            "preferred_runner_x_range": (68.0, 84.0),
-            "preferred_runner_y_range": (52.0, 74.0),
+            "target_pos": [92.0, 38.0],
+            "runner_target_pos": None,
+            "preferred_runner_x_range": None,
+            "preferred_runner_y_range": None,
             "pass_type": "AERIAL_BALL_ARC",
             "is_aerial": True,
-            "landing_label": "VALVERDE (CM) // MIDFIELD TARGET",
-            "arc_height_pct": 18.0,
+            "landing_label": "VINÍCIUS JR // LONG AERIAL OUTLET",
+            "arc_height_pct": 22.0,
         },
         "clip_04": {
             "target_pos": [34.5, 48.5],
@@ -623,7 +623,7 @@ class TemporalGroundTruthEngine:
                                 runner_id = int(best["track_id"])
                                 break
 
-            if "clip_01" in str(clip_id).lower() or "clip_02" in str(clip_id).lower():
+            if "clip_01" in str(clip_id).lower() or "clip_02" in str(clip_id).lower() or "clip_03" in str(clip_id).lower():
                 runner_id = None
         else:
             flow_res = cls.discover_pass_trajectory_optical_flow(

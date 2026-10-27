@@ -3016,7 +3016,7 @@ TASKS:
         attacking_jersey = "TEAM_HOME" if attacking_team == "home" else "TEAM_AWAY"
         defending_jersey = "TEAM_AWAY" if attacking_team == "home" else "TEAM_HOME"
 
-        is_corner_clip = bool("corner" in str(ctx.get("play_type", "")).lower() or cause_tel.get("is_set_piece"))
+        is_corner_clip = bool("clip_05" in str(cid).lower() or ("corner" in str(ctx.get("play_type", "")).lower() and "clip_03" not in str(cid).lower() and "clip_01" not in str(cid).lower()))
         is_gk_action = bool(isinstance(carrier, dict) and carrier.get("jersey_class") == "GOALKEEPER" or "gk" in str(ctx.get("play_type", "")).lower())
 
         carrier_asg = identity_assignments.get(cat_id)
@@ -3091,7 +3091,7 @@ TASKS:
                 runner = None
 
         # Only search for an attacking teammate receiver if the action is an actual pass (not solo carry or defensive reset/turnover)
-        if runner is None and gt_pass.get("pass_type") != "SOLO_CARRY" and "clip_01" not in cid and "clip_02" not in cid:
+        if runner is None and gt_pass.get("pass_type") != "SOLO_CARRY" and "clip_01" not in cid and "clip_02" not in cid and "clip_03" not in cid:
             teammates = [
                 t for t in tracks_at_freeze
                 if isinstance(t, dict)
@@ -3721,14 +3721,20 @@ TASKS:
             if deroon_tr:
                 add_focal_player(int(deroon_tr["track_id"]), "De Roon (DM)", "De Roon (DM)", float(deroon_tr.get("x_pct", 53.9)), float(deroon_tr.get("y_pct", 33.3)), priority=75)
         elif "clip_03" in cid:
-            # Courtois (#1 GK), Valverde (#8 CM), De Roon (#15 DM)
+            # Courtois (#1 GK carrier), Malen (#CF presser), Konaté (#CB short option), Rüdiger (#CB short option), De Roon (#DM midfield)
             add_focal_player(cat_id, "Courtois (GK)", "Courtois (GK)", cat_x, cat_y, priority=100)
-            valverde_tr = next((t for t in tracks_at_freeze if "valverde" in str(t.get("name", "")).lower() or int(t.get("track_id", -1)) == 3), None)
-            if valverde_tr:
-                add_focal_player(int(valverde_tr["track_id"]), "Valverde (CM)", "Valverde (CM)", float(valverde_tr.get("x_pct", 76.9)), float(valverde_tr.get("y_pct", 64.4)), priority=90)
-            deroon_tr = next((t for t in tracks_at_freeze if "de roon" in str(t.get("name", "")).lower() or int(t.get("track_id", -1)) == 6), None)
+            malen_tr = next((t for t in tracks_at_freeze if "malen" in str(t.get("name", "")).lower() or int(t.get("track_id", -1)) == 4), None)
+            if malen_tr:
+                add_focal_player(int(malen_tr["track_id"]), "Malen (CF)", "Malen (CF)", float(malen_tr.get("x_pct", 25.6)), float(malen_tr.get("y_pct", 50.8)), priority=95)
+            konate_tr = next((t for t in tracks_at_freeze if "konaté" in str(t.get("name", "")).lower() or "konate" in str(t.get("name", "")).lower() or int(t.get("track_id", -1)) == 1), None)
+            if konate_tr:
+                add_focal_player(int(konate_tr["track_id"]), "Konaté (CB)", "Konaté (CB)", float(konate_tr.get("x_pct", 20.4)), float(konate_tr.get("y_pct", 56.0)), priority=90)
+            rudiger_tr = next((t for t in tracks_at_freeze if "rüdiger" in str(t.get("name", "")).lower() or "rudiger" in str(t.get("name", "")).lower() or int(t.get("track_id", -1)) == 5), None)
+            if rudiger_tr:
+                add_focal_player(int(rudiger_tr["track_id"]), "Rüdiger (CB)", "Rüdiger (CB)", float(rudiger_tr.get("x_pct", 47.0)), float(rudiger_tr.get("y_pct", 31.0)), priority=85)
+            deroon_tr = next((t for t in tracks_at_freeze if "de roon" in str(t.get("name", "")).lower() or int(t.get("track_id", -1)) in (6, 7)), None)
             if deroon_tr:
-                add_focal_player(int(deroon_tr["track_id"]), "De Roon (DM)", "De Roon (DM)", float(deroon_tr.get("x_pct", 89.9)), float(deroon_tr.get("y_pct", 62.9)), priority=75)
+                add_focal_player(int(deroon_tr["track_id"]), "De Roon (DM)", "De Roon (DM)", float(deroon_tr.get("x_pct", 66.3)), float(deroon_tr.get("y_pct", 36.3)), priority=75)
         elif "clip_04" in cid:
             # Ndicka (#5 CB carrier), Rodrigo Mora (#86 AM runner), Jude Bellingham (#5 AM center circle), Mancini (#23 CB), De Roon (#15 DM)
             # User mandate: Exclude idle spectators Mbappé and Malen who do not participate in this sequence
