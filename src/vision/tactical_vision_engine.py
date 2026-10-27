@@ -3554,27 +3554,7 @@ TASKS:
                 clip_id=cid,
                 lookahead=40,
             )
-            if "clip_05" in cid and runner_id is not None:
-                return_pass_vec = {
-                    "type": "GROUND_PASS_SOLID",
-                    "from_track_id": runner_id,
-                    "from_pct": [round(p_to[0], 1), round(p_to[1], 1)],
-                    "to_pct": [28.0, 31.0],
-                    "landing_target_pct": [28.0, 31.0],
-                    "was_taken": True,
-                    "color": "#38bdf8",
-                    "pass_label": "ONE-TWO RETURN",
-                }
-                carreras_run_vec = {
-                    "type": "PLAYER_RUN_DASHED",
-                    "from_track_id": cat_id,
-                    "from_pct": [round(launch_pt[0], 1), round(launch_pt[1], 1)],
-                    "to_pct": [28.0, 31.0],
-                    "color": att_color,
-                }
-                cause_tel["vectors"] = [pass_vec, return_pass_vec, carreras_run_vec]
-                cause_tel["run_vectors"] = [carreras_run_vec]
-            elif run_vecs:
+            if run_vecs:
                 cause_tel["run_vectors"] = [{
                     "track_id": runner_id,
                     "from_x": run_vecs[0]["from_pct"][0],

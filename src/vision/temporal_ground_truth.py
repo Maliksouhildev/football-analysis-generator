@@ -243,7 +243,7 @@ class TemporalGroundTruthEngine:
             "preferred_runner_y_range": (32.0, 46.0),
             "pass_type": "GROUND_PASS_SOLID",
             "is_aerial": False,
-            "landing_label": "SHORT CORNER ONE-TWO",
+            "landing_label": "ARDA GÜLER (RW) // SHORT CORNER DELIVERY",
             "arc_height_pct": 0.0,
         },
     }
@@ -824,16 +824,13 @@ class TemporalGroundTruthEngine:
 
         cid_str = str(clip_id).lower()
         if "clip_05" in cid_str and runner_id is not None:
-            # Carreras (kicker) -> Güler (runner at t+15f) -> Carreras (one-two return at t+45f)
+            # Mbappé (kicker at flag) -> Arda Güler (runner at t+15f) who carries and crosses into box
             t_pass1 = t_freeze + 15
-            t_pass2 = t_freeze + 45
             for f in range(total_frames):
                 if f < t_pass1:
                     carrier_timeline[str(f)] = kicker_id
-                elif f < t_pass2:
-                    carrier_timeline[str(f)] = runner_id
                 else:
-                    carrier_timeline[str(f)] = kicker_id
+                    carrier_timeline[str(f)] = runner_id
         elif "clip_01" in cid_str:
             # Ibrahima Konaté (#16) keeps spotlight through frame 140 (20:59),
             # then transfers spotlight to Antonio Rüdiger (#22, track 1, penalty area) from frame 141+ (21:01-21:03)
