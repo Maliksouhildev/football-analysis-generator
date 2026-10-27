@@ -4174,7 +4174,7 @@ TASKS:
         t_x_pct = pass_target[0] if pass_target else bx_pct
         t_y_pct = pass_target[1] if pass_target else by_pct
 
-        return TemporalGroundTruthEngine.compute_temporal_ball_carrier_timeline(
+        timeline = TemporalGroundTruthEngine.compute_temporal_ball_carrier_timeline(
             video_path=video_path,
             tracks_per_frame=tracks_per_frame,
             t_freeze=c_idx,
@@ -4184,6 +4184,19 @@ TASKS:
             clip_id=clip_id,
             runner_id=runner_id,
         )
+
+        # Synchronize tracks_per_frame properties with timeline
+        for f_str, c_tid in timeline.items():
+            f_tracks = tracks_per_frame.get(f_str, [])
+            for tr in f_tracks:
+                if isinstance(tr, dict):
+                    is_c = (int(tr.get("track_id", -1)) == c_tid)
+                    tr["is_ball_carrier"] = is_c
+                    if is_c:
+                        tr["color"] = "#00e5ff"
+                        tr["showRing"] = True
+
+        return timeline
 
     @staticmethod
     def interpolate_and_smooth_tracks(
