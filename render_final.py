@@ -612,8 +612,12 @@ def main():
         print("\n=== VISUAL SELF-AUDIT: Rendering Static Preview Images for all 5 clips ===")
         audit_dir = Path("F:/DockerRenders/audit_previews")
         audit_dir.mkdir(parents=True, exist_ok=True)
-        brain_dir = Path(r"C:\Users\mlkme\.gemini\antigravity\brain\e1705ba5-d518-4d90-8d36-9a1916bf4cd0\audit_previews")
-        brain_dir.mkdir(parents=True, exist_ok=True)
+        audit_brain_dirs = [
+            Path(r"C:\Users\mlkme\.gemini\antigravity\brain\e1705ba5-d518-4d90-8d36-9a1916bf4cd0\audit_previews"),
+            Path(r"C:\Users\mlkme\.gemini\antigravity\brain\b468fec0-54e7-454a-a94d-9da9c62f8215\audit_previews"),
+        ]
+        for abd in audit_brain_dirs:
+            abd.mkdir(parents=True, exist_ok=True)
 
         audit_images = []
         for i, sc in enumerate(synchronized_clips):
@@ -661,10 +665,13 @@ def main():
                     if out_p.exists():
                         dest_p = audit_dir / fname
                         shutil.copy2(str(out_p), str(dest_p))
-                        brain_dest = brain_dir / fname
-                        shutil.copy2(str(out_p), str(brain_dest))
+                        for abd in audit_brain_dirs:
+                            try:
+                                shutil.copy2(str(out_p), str(abd / fname))
+                            except Exception:
+                                pass
                         print(f"  -> Saved {dest_p} ({dest_p.stat().st_size} bytes)")
-                        audit_images.append(str(brain_dest))
+                        audit_images.append(str(dest_p))
 
         print("\n=== AUDIT PREVIEW IMAGES GENERATED ===")
         for img_p in audit_images:
@@ -735,9 +742,11 @@ def main():
         print(f"Also copied to {final_master_mp4} (size: {final_master_mp4.stat().st_size} bytes)")
         print(f"Also copied to {renders_master_mp4} (size: {renders_master_mp4.stat().st_size} bytes)")
         try:
-            brain_mp4 = Path(r"C:\Users\mlkme\.gemini\antigravity\brain\e1705ba5-d518-4d90-8d36-9a1916bf4cd0\roma_vs_real_madrid_masterclass.mp4")
-            shutil.copy2(str(host_output_mp4), str(brain_mp4))
-            print(f"Also copied to {brain_mp4} (size: {brain_mp4.stat().st_size} bytes)")
+            for b_id in ["e1705ba5-d518-4d90-8d36-9a1916bf4cd0", "b468fec0-54e7-454a-a94d-9da9c62f8215"]:
+                brain_mp4 = Path(f"C:/Users/mlkme/.gemini/antigravity/brain/{b_id}/roma_vs_real_madrid_masterclass.mp4")
+                brain_mp4.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(str(host_output_mp4), str(brain_mp4))
+                print(f"Also copied to {brain_mp4} (size: {brain_mp4.stat().st_size} bytes)")
         except Exception as e:
             print(f"Notice: could not copy to brain artifact: {e}")
     else:
@@ -746,8 +755,12 @@ def main():
     print("\n=== STEP 5: Extracting 5 Keyframe PNGs for Verification ===")
     verif_dir = Path("F:/DockerRenders/verification_final")
     verif_dir.mkdir(parents=True, exist_ok=True)
-    verif_brain_dir = Path(r"C:\Users\mlkme\.gemini\antigravity\brain\e1705ba5-d518-4d90-8d36-9a1916bf4cd0\verification_final")
-    verif_brain_dir.mkdir(parents=True, exist_ok=True)
+    verif_brain_dirs = [
+        Path(r"C:\Users\mlkme\.gemini\antigravity\brain\e1705ba5-d518-4d90-8d36-9a1916bf4cd0\verification_final"),
+        Path(r"C:\Users\mlkme\.gemini\antigravity\brain\b468fec0-54e7-454a-a94d-9da9c62f8215\verification_final"),
+    ]
+    for vbd in verif_brain_dirs:
+        vbd.mkdir(parents=True, exist_ok=True)
 
     for i, sc in enumerate(synchronized_clips):
         cid = sc.get("clip_id", f"clip_{i+1:02d}")
@@ -788,10 +801,11 @@ def main():
             print(f"Extracting {fname} at {ts:.2f}s...")
             subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
             if out_img.is_file():
-                try:
-                    shutil.copy2(str(out_img), str(verif_brain_dir / fname))
-                except Exception:
-                    pass
+                for vbd in verif_brain_dirs:
+                    try:
+                        shutil.copy2(str(out_img), str(vbd / fname))
+                    except Exception:
+                        pass
 
     print("\n=== VERIFICATION KEYFRAMES EXTRACTED ===")
     for p in sorted(verif_dir.glob("*.png")):
