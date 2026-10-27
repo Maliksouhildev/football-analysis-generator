@@ -3568,6 +3568,93 @@ TASKS:
                 cause_tel["run_vectors"] = []
                 cause_tel["vectors"] = [pass_vec]
 
+        # Multi-Option Tactical Vectors (Passing Decision Lanes & Opposition Pressing Vectors)
+        # Evaluates candidate passing lanes available to the carrier and opposing pressers closing them down
+        option_vectors: List[Dict[str, Any]] = []
+        pressing_run_vectors: List[Dict[str, Any]] = []
+
+        if not is_corner_clip:
+            # 1. Candidate passing options to open teammates (up to 2-3 passing options)
+            min_turf_val = 20.0
+            candidate_teammates = [
+                t for t in tracks_at_freeze
+                if isinstance(t, dict)
+                and int(t.get("track_id", -1)) not in (cat_id, 22)
+                and (t.get("team") == attacking_team or t.get("jersey_class") == attacking_jersey)
+                and t.get("jersey_class") not in ("REFEREE", defending_jersey)
+                and float(t.get("y_pct", 50.0)) >= min_turf_val
+            ]
+
+            executed_target_x, executed_target_y = landing_pt
+            viable_teammates = []
+            for tm in candidate_teammates:
+                tm_id = int(tm.get("track_id", -1))
+                tm_x = float(tm.get("x_pct", 50.0))
+                tm_y = float(tm.get("y_pct", 50.0))
+                d_to_carrier = math.hypot(tm_x - cat_x, tm_y - cat_y)
+                d_to_target = math.hypot(tm_x - executed_target_x, tm_y - executed_target_y)
+                # Exclude if receiver of executed pass
+                if d_to_target <= 7.0 and runner_id is not None and tm_id == runner_id:
+                    continue
+                if 8.0 <= d_to_carrier <= 65.0:
+                    viable_teammates.append((d_to_carrier, tm))
+
+            viable_teammates.sort(key=lambda item: item[0])
+            for _, tm in viable_teammates[:3]:
+                tm_id = int(tm.get("track_id", -1))
+                tm_x = float(tm.get("x_pct", 50.0))
+                tm_y = float(tm.get("y_pct", 50.0))
+                tm_name = tm.get("name") or tm.get("name_pos") or "OPTION"
+                option_vectors.append({
+                    "type": "PASS_OPTION_DASHED",
+                    "from_track_id": cat_id,
+                    "to_track_id": tm_id,
+                    "from_pct": [round(cat_x, 1), round(cat_y, 1)],
+                    "to_pct": [round(tm_x, 1), round(tm_y, 1)],
+                    "name_pos": tm_name,
+                    "was_taken": False,
+                    "is_option": True,
+                    "color": "rgba(255, 255, 255, 0.65)",
+                })
+
+            # 2. Pressing run vectors from opposition pressers
+            close_defenders = [
+                d for d in def_cands
+                if math.hypot(float(d.get("x_pct", 50.0)) - cat_x, float(d.get("y_pct", 50.0)) - cat_y) <= 28.0
+            ]
+            close_defenders.sort(key=lambda d: math.hypot(float(d.get("x_pct", 50.0)) - cat_x, float(d.get("y_pct", 50.0)) - cat_y))
+
+            active_press_ids = []
+            for p in close_defenders[:3]:
+                pid = int(p.get("track_id", -1))
+                px = float(p.get("x_pct", 50.0))
+                py = float(p.get("y_pct", 50.0))
+                dx = cat_x - px
+                dy = cat_y - py
+                d = math.hypot(dx, dy) or 1.0
+                press_len = min(d * 0.70, 14.0)
+                p_to_x = round(px + (dx / d) * press_len, 1)
+                p_to_y = round(py + (dy / d) * press_len, 1)
+                p_name = p.get("name") or p.get("name_pos") or "PRESSER"
+                pressing_run_vectors.append({
+                    "type": "PRESSING_RUN",
+                    "from_track_id": pid,
+                    "from_pct": [round(px, 1), round(py, 1)],
+                    "to_pct": [p_to_x, p_to_y],
+                    "name_pos": p_name,
+                    "color": def_color,
+                    "is_pressing": True,
+                })
+                active_press_ids.append(pid)
+
+            if active_press_ids:
+                cause_tel["pressing_track_ids"] = list(dict.fromkeys((cause_tel.get("pressing_track_ids") or []) + active_press_ids))
+
+            if option_vectors:
+                cause_tel["vectors"].extend(option_vectors)
+            if pressing_run_vectors:
+                cause_tel["vectors"].extend(pressing_run_vectors)
+
         # 6. Smart Focal Selective Labeling Engine (Broadcast Clarity: Max 5-6 Labeled Actors)
         # Prevents scattering 15-20 labels across the screen while retaining full tactical context
         focal_track_ids: List[int] = []
@@ -3601,17 +3688,23 @@ TASKS:
 
         # Priority 3: Clip-specific Ground-Truth Contesting Protagonists
         if "clip_01" in cid:
-            # Ibrahima Konaté (RCB carrier), Antonio Rüdiger (LCB recipient), Denzel Dumfries (RB flank), De Roon (presser)
+            # Ibrahima Konaté (RCB carrier), Antonio Rüdiger (LCB option), Cucurella (LB option), Dumfries (RB), Malen (presser)
             add_focal_player(cat_id, "Konaté (CB)", "Konaté (CB)", cat_x, cat_y, priority=100)
             rudiger_tr = next((t for t in tracks_at_freeze if "rüdiger" in str(t.get("name", "")).lower() or int(t.get("track_id", -1)) == 1), None)
             if rudiger_tr:
                 add_focal_player(int(rudiger_tr["track_id"]), "Rüdiger (CB)", "Rüdiger (CB)", float(rudiger_tr.get("x_pct", 90.1)), float(rudiger_tr.get("y_pct", 57.4)), priority=90)
+            cucurella_tr = next((t for t in tracks_at_freeze if "cucurella" in str(t.get("name", "")).lower() or int(t.get("track_id", -1)) == 5 or (float(t.get("x_pct", 0)) > 60.0 and float(t.get("y_pct", 0)) > 70.0 and t.get("team") == "away")), None)
+            if cucurella_tr:
+                add_focal_player(int(cucurella_tr["track_id"]), "Cucurella (LB)", "Cucurella (LB)", float(cucurella_tr.get("x_pct", 64.5)), float(cucurella_tr.get("y_pct", 79.6)), priority=85)
             dumfries_tr = next((t for t in tracks_at_freeze if "dumfries" in str(t.get("name", "")).lower() or int(t.get("track_id", -1)) == 6 or (float(t.get("x_pct", 0)) < 32.0 and float(t.get("y_pct", 0)) < 32.0 and t.get("team") == "away")), None)
             if dumfries_tr:
                 add_focal_player(int(dumfries_tr["track_id"]), "Dumfries (RB)", "Dumfries (RB)", float(dumfries_tr.get("x_pct", 29.6)), float(dumfries_tr.get("y_pct", 29.7)), priority=80)
+            malen_tr = next((t for t in tracks_at_freeze if "malen" in str(t.get("name", "")).lower() or int(t.get("track_id", -1)) == 7), None)
+            if malen_tr:
+                add_focal_player(int(malen_tr["track_id"]), "Malen (CF)", "Malen (CF)", float(malen_tr.get("x_pct", 50.4)), float(malen_tr.get("y_pct", 53.2)), priority=75)
             deroon_tr = next((t for t in tracks_at_freeze if "de roon" in str(t.get("name", "")).lower() or int(t.get("track_id", -1)) == 3), None)
             if deroon_tr:
-                add_focal_player(int(deroon_tr["track_id"]), "De Roon (DM)", "De Roon (DM)", float(deroon_tr.get("x_pct", 21.4)), float(deroon_tr.get("y_pct", 38.8)), priority=75)
+                add_focal_player(int(deroon_tr["track_id"]), "De Roon (DM)", "De Roon (DM)", float(deroon_tr.get("x_pct", 21.4)), float(deroon_tr.get("y_pct", 38.8)), priority=70)
         elif "clip_02" in cid:
             # Mbappé (#10 carrier), Dybala (#21 turnover interceptor), Ndicka (#5 CB), Valverde (#8 CM), De Roon (#15 DM)
             add_focal_player(cat_id, "Mbappé (CF)", "Mbappé (CF)", cat_x, cat_y, priority=100)

@@ -197,14 +197,14 @@ class TemporalGroundTruthEngine:
     # with camera-pan homography compensation (H_future_to_freeze)
     EMPIRICAL_CLIP_TRAJECTORIES: Dict[str, Dict[str, Any]] = {
         "clip_01": {
-            "target_pos": [90.1, 57.4],
-            "runner_target_pos": [90.1, 57.4],
-            "preferred_runner_x_range": (85.0, 95.0),
-            "preferred_runner_y_range": (48.0, 65.0),
-            "pass_type": "AERIAL_BALL_ARC",
-            "is_aerial": True,
-            "landing_label": "RÜDIGER (CB) // SAFETY RESET",
-            "arc_height_pct": 20.0,
+            "target_pos": [95.0, 50.0],
+            "runner_target_pos": [95.0, 50.0],
+            "preferred_runner_x_range": (88.0, 99.0),
+            "preferred_runner_y_range": (40.0, 65.0),
+            "pass_type": "GROUND_PASS_SOLID",
+            "is_aerial": False,
+            "landing_label": "COURTOIS (GK) // SAFETY RESET",
+            "arc_height_pct": 0.0,
         },
         "clip_02": {
             "target_pos": [43.4, 39.6],
@@ -833,15 +833,20 @@ class TemporalGroundTruthEngine:
                     carrier_timeline[str(f)] = runner_id
         elif "clip_01" in cid_str:
             # Ibrahima Konaté (#16) keeps spotlight through frame 140 (20:59),
-            # then transfers spotlight to Antonio Rüdiger (#22, track 1, penalty area) from frame 141+ (21:01-21:03)
+            # then transfers spotlight to Thibaut Courtois (#1, penalty/goal area) from frame 141+ (21:01-21:03)
             # NEVER jump onto Roma striker Donyell Malen!
             t_transfer = min(total_frames - 1, t_freeze + 60)
-            rudiger_tid = 1
+            courtois_tid = None
             for f in range(total_frames):
                 if f < t_transfer:
                     carrier_timeline[str(f)] = kicker_id
                 else:
-                    carrier_timeline[str(f)] = rudiger_tid
+                    if courtois_tid is None:
+                        f_tracks = tracks_per_frame.get(str(f), [])
+                        gk_tr = next((t for t in f_tracks if isinstance(t, dict) and (t.get("team") == "gk" or t.get("jersey_class") == "GOALKEEPER" or (float(t.get("x_pct", 0)) > 80.0 and float(t.get("y_pct", 0)) > 35.0 and t.get("team") != "home"))), None)
+                        if gk_tr is not None:
+                            courtois_tid = int(gk_tr.get("track_id", kicker_id))
+                    carrier_timeline[str(f)] = courtois_tid if courtois_tid is not None else kicker_id
         elif "clip_02" in cid_str:
             # Mbappé possesses until frame 105 (23:41), then Paulo Dybala (#21) intercepts turnover
             t_intercept = min(total_frames - 1, t_freeze + 12)
