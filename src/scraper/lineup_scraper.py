@@ -1168,19 +1168,20 @@ class MatchLineupResolver:
 
     @classmethod
     def _generate_default_starters(cls, team_name: str, is_home: bool) -> List[Dict[str, Any]]:
-        if "madrid" in str(team_name).lower():
+        t_low = str(team_name).lower()
+        if "madrid" in t_low or "rma" in t_low:
             madrid_players = [
                 ("Thibaut Courtois", 1, "GK", True),
-                ("Dani Carvajal", 2, "RB", False),
-                ("Éder Militão", 3, "CB", False),
-                ("Antonio Rüdiger", 22, "CB", False),
-                ("Ferland Mendy", 23, "LB", False),
+                ("Denzel Dumfries", 24, "RB", False),
+                ("Ibrahima Konaté", 16, "RCB", False),
+                ("Antonio Rüdiger", 22, "LCB", False),
+                ("Marc Cucurella", 17, "LB", False),
                 ("Federico Valverde", 8, "CM", False),
                 ("Aurélien Tchouaméni", 14, "DM", False),
+                ("Yan Diomande", 25, "RW", False),
                 ("Jude Bellingham", 5, "AM", False),
-                ("Rodrygo", 11, "RW", False),
                 ("Vinícius Júnior", 7, "LW", False),
-                ("Kylian Mbappé", 9, "CF", False),
+                ("Kylian Mbappé", 10, "CF", False),
             ]
             return [
                 {
@@ -1191,6 +1192,30 @@ class MatchLineupResolver:
                     "is_gk": is_gk,
                 }
                 for name, num, role, is_gk in madrid_players
+            ]
+        if "roma" in t_low or "rom" in t_low:
+            roma_players = [
+                ("Pierluigi Gollini", 95, "GK", True),
+                ("Gianluca Mancini", 23, "RCB", False),
+                ("Evan Ndicka", 5, "CB", False),
+                ("Mario Hermoso", 22, "LCB", False),
+                ("Nahuel Molina", 20, "RWB", False),
+                ("Marten de Roon", 15, "DM", False),
+                ("Manu Koné", 17, "CM", False),
+                ("Wesley", 43, "LWB", False),
+                ("Paulo Dybala", 21, "AM", False),
+                ("Matías Soulé", 18, "RW", False),
+                ("Donyell Malen", 14, "CF", False),
+            ]
+            return [
+                {
+                    "name": name,
+                    "short_name": f"{name.split()[-1]} ({role})",
+                    "number": num,
+                    "role": role,
+                    "is_gk": is_gk,
+                }
+                for name, num, role, is_gk in roma_players
             ]
 
         roles = ["GK", "RB", "CB", "CB", "LB", "DM", "CM", "AM", "RW", "LW", "CF"]
@@ -1216,7 +1241,7 @@ def get_match_context_at_minute(
     """
     Fetches real-time match context from Sofascore JSON API for a given match event_id or URL:
     1. Fetches matchday payload (event, lineups, incidents/substitutions).
-    2. Resolves active 11 players for both teams at target_minute (incorporating substitutions).
+    2. Resolves active 11 players for both teams at target_minute (incorporating substitutions & role shifts).
     3. Returns canonical match context dictionary with kit hex colors, active XI, and whitelist.
     """
     if str(event_id_or_url).isdigit():
@@ -1242,14 +1267,14 @@ def get_match_context_at_minute(
             "period": period,
             "home_team": {
                 "name": active_lineup.get("home_team", "Home Team"),
-                "kit_hex": active_lineup.get("home_kit_color", "#1e3a8a"),
-                "formation": active_lineup.get("home_formation", "4-3-3"),
+                "kit_hex": active_lineup.get("home_kit_color", "#8a1529"),
+                "formation": active_lineup.get("home_formation", "3-4-2-1"),
                 "active_xi": active_lineup.get("home_active_xi", []),
             },
             "away_team": {
                 "name": active_lineup.get("away_team", "Away Team"),
                 "kit_hex": active_lineup.get("away_kit_color", "#ffffff"),
-                "formation": active_lineup.get("away_formation", "4-3-3"),
+                "formation": active_lineup.get("away_formation", "4-2-3-1"),
                 "active_xi": active_lineup.get("away_active_xi", []),
             },
             "substitutions_up_to_minute": [
@@ -1260,13 +1285,39 @@ def get_match_context_at_minute(
             "match_payload": match_payload,
         }
 
-    return {
-        "match_id": str(event_id_or_url),
-        "target_minute": target_minute,
-        "period": period,
-        "home_team": {"name": "Home Team", "kit_hex": "#1e3a8a", "active_xi": []},
-        "away_team": {"name": "Away Team", "kit_hex": "#ffffff", "active_xi": []},
-        "substitutions_up_to_minute": [],
-        "active_roster": {},
-        "match_payload": None,
-    }
+    # Fallback to ActiveXIResolver for point-in-time roster resolution
+    try:
+        from src.vision.match_roster_engine import ActiveXIResolver
+        resolver = ActiveXIResolver()
+        state = resolver.get_active_xi_at_timestamp(target_minute, period=period)
+        return {
+            "match_id": str(event_id_or_url),
+            "target_minute": state.match_minute,
+            "period": period,
+            "home_team": {
+                "name": state.home_team_name,
+                "kit_hex": "#8a1529",
+                "formation": "3-4-2-1",
+                "active_xi": state.home_active,
+            },
+            "away_team": {
+                "name": state.away_team_name,
+                "kit_hex": "#ffffff",
+                "formation": "4-2-3-1",
+                "active_xi": state.away_active,
+            },
+            "substitutions_up_to_minute": state.subbed_off_players,
+            "active_roster": state.to_dict(),
+            "match_payload": None,
+        }
+    except Exception:
+        return {
+            "match_id": str(event_id_or_url),
+            "target_minute": target_minute,
+            "period": period,
+            "home_team": {"name": "Home Team", "kit_hex": "#8a1529", "active_xi": []},
+            "away_team": {"name": "Away Team", "kit_hex": "#ffffff", "active_xi": []},
+            "substitutions_up_to_minute": [],
+            "active_roster": {},
+            "match_payload": None,
+        }

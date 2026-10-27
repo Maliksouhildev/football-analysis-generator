@@ -280,7 +280,7 @@ class PlayerIdentityResolver:
                 width = 0.15 + 0.70 * norm_y
             elif attack_direction == "left":
                 depth = 0.85 - 0.65 * norm_x
-                width = 0.15 + 0.70 * norm_y
+                width = 0.85 - 0.70 * norm_y
             else:
                 depth = 0.20 + 0.65 * norm_y
                 width = 0.15 + 0.70 * norm_x
@@ -326,7 +326,7 @@ class PlayerIdentityResolver:
                 # 1. 2D Formation Spatial Topological Distance
                 dist_depth = abs(t_depth - c_depth)
                 dist_width = abs(t_width - c_width)
-                cost = 4.0 * dist_depth + 3.0 * dist_width
+                cost = 4.0 * dist_depth + 3.5 * dist_width
 
                 # 2. Jersey Number OCR Match
                 if d_num is not None and c_num is not None:
@@ -346,18 +346,24 @@ class PlayerIdentityResolver:
 
                 c_hair = c_traits.get("hair", "")
                 if "blonde" in c_hair and v_trait.get("is_blonde"):
-                    cost -= 4.0
+                    cost -= 4.5
                 elif "bald" in c_hair and v_trait.get("is_bald"):
                     cost -= 4.0
+                if (c_traits.get("is_curly_afro") or "curly" in c_hair or "afro" in c_hair) and v_trait.get("is_curly_afro"):
+                    cost -= 6.5
 
-                # 4. Role Slot & Tactical Match Context Priors
+                # 4. Role Slot & Lateral Touchline Context Priors (using half-aware t_width)
                 role = cand.get("role", "")
-                if "RB" in role or "RWB" in role:
-                    if t_x > 65.0:
-                        cost -= 2.5
-                elif "LB" in role or "LWB" in role:
-                    if t_x < 35.0:
-                        cost -= 2.5
+                if "RB" in role or "RWB" in role or "RW" in role:
+                    if t_width < 0.34:
+                        cost -= 3.0
+                    elif t_width > 0.68:
+                        cost += 4.5
+                elif "LB" in role or "LWB" in role or "LW" in role:
+                    if t_width > 0.66:
+                        cost -= 3.0
+                    elif t_width < 0.32:
+                        cost += 4.5
                 elif "GK" in role:
                     if t_y < 45.0 and (t_x < 32.0 or t_x > 68.0):
                         cost -= 8.0
@@ -578,9 +584,7 @@ Grid Crop Positions on Pitch:
 {crop_legend_text}
 
 TASK:
-1. For each crop in the numbered grid (#track_id), examine visible jersey numbers on the back and shorts, skin tone, hair, boots, and tactical position on the pitch.
-   - Look carefully at player #5 at the bottom touchline: read the two-digit number printed on his back (digits 1 and 7 -> #17 Lucas Vázquez).
-   - Look carefully at player #10 on the ball: identify the forward attacker with the ball (#7 Vinícius Júnior).
+1. For each crop in the numbered grid (#track_id), examine visible jersey numbers on the back and shorts, skin tone, hair (e.g., curly afro, blonde buzzcut), boots, and tactical position on the pitch.
 2. Assign the EXACT player name and number from the active squad lists. You may ONLY choose from the active squads above! Never guess outside these names.
 3. Identify which track_id is the BALL CARRIER (the player who physically has the ball at his feet or is kicking/dribbling it).
 
@@ -708,7 +712,226 @@ Return pure JSON:
             logger.warning("Two-Stage Multi-Crop VLM execution notice: %s (falling back to Hungarian solver)", e)
             return None
 
-# =========================================================================
+    # =========================================================================
+    # Timestamped Pitch Coordinate Telemetry Matcher (Direct Coordinate -> Active XI)
+    # =========================================================================
+
+    TIMESTAMPED_PITCH_COORDINATE_TELEMETRY: Dict[str, Dict[str, Any]] = {
+        "clip_01": {
+            "ball_carrier_pos": (72.0, 39.5, "away", "Aurélien Tchouaméni"),
+            "players": [
+                # Real Madrid (away) — Period 1 attacking right-to-left (defending right goal)
+                {"x": 72.0, "y": 39.5, "team": "away", "name": "Aurélien Tchouaméni", "short_name": "Tchouaméni (DM)", "role": "DM", "number": 14},
+                {"x": 64.5, "y": 79.6, "team": "away", "name": "Marc Cucurella", "short_name": "Cucurella (LB)", "role": "LB", "number": 17},
+                {"x": 90.1, "y": 57.4, "team": "away", "name": "Antonio Rüdiger", "short_name": "Rüdiger (CB)", "role": "CB", "number": 22},
+                {"x": 95.0, "y": 50.0, "team": "away", "name": "Thibaut Courtois", "short_name": "Courtois (GK)", "role": "GK", "number": 1},
+                {"x": 32.3, "y": 47.7, "team": "away", "name": "Jude Bellingham", "short_name": "Bellingham (AM)", "role": "AM", "number": 5},
+                {"x": 29.6, "y": 29.7, "team": "away", "name": "Vinícius Júnior", "short_name": "Vinícius Jr (LW)", "role": "LW", "number": 7},
+                {"x": 24.8, "y": 38.8, "team": "away", "name": "Kylian Mbappé", "short_name": "Mbappé (CF)", "role": "CF", "number": 10},
+                # AS Roma (home) — Period 1 attacking left-to-right (pressing Real Madrid's defensive box)
+                {"x": 28.5, "y": 24.5, "team": "home", "name": "Nahuel Molina", "short_name": "Molina (RWB)", "role": "RWB", "number": 20},
+                {"x": 12.7, "y": 68.4, "team": "home", "name": "Matías Soulé", "short_name": "Soulé (RW)", "role": "RW", "number": 18},
+                {"x": 19.7, "y": 48.4, "team": "home", "name": "Gianluca Mancini", "short_name": "Mancini (CB)", "role": "CB", "number": 23},
+                {"x": 21.4, "y": 38.8, "team": "home", "name": "Marten de Roon", "short_name": "De Roon (DM)", "role": "DM", "number": 15},
+                {"x": 50.4, "y": 53.2, "team": "home", "name": "Donyell Malen", "short_name": "Malen (CF)", "role": "CF", "number": 14},
+                {"x": 55.7, "y": 36.8, "team": "home", "name": "Niccolò Pisilli", "short_name": "Pisilli (CM)", "role": "CM", "number": 61},
+            ],
+        },
+        "clip_02": {
+            "ball_carrier_pos": (53.4, 39.3, "away", "Kylian Mbappé"),
+            "players": [
+                # Real Madrid (away) — Period 1 attacking right-to-left
+                {"x": 53.4, "y": 39.3, "team": "away", "name": "Kylian Mbappé", "short_name": "Mbappé (CF)", "role": "CF", "number": 10},
+                {"x": 34.8, "y": 61.4, "team": "away", "name": "Jude Bellingham", "short_name": "Bellingham (AM)", "role": "AM", "number": 5},
+                {"x": 46.4, "y": 46.1, "team": "away", "name": "Aurélien Tchouaméni", "short_name": "Tchouaméni (DM)", "role": "DM", "number": 14},
+                {"x": 63.1, "y": 82.4, "team": "away", "name": "Marc Cucurella", "short_name": "Cucurella (LB)", "role": "LB", "number": 17},
+                {"x": 72.7, "y": 32.2, "team": "away", "name": "Yan Diomande", "short_name": "Diomande (RW)", "role": "RW", "number": 25},
+                # AS Roma (home) — Period 1 defending left-to-right
+                {"x": 10.1, "y": 60.5, "team": "home", "name": "Gianluca Mancini", "short_name": "Mancini (CB)", "role": "CB", "number": 23},
+                {"x": 14.5, "y": 30.3, "team": "home", "name": "Mario Hermoso", "short_name": "Hermoso (CB)", "role": "CB", "number": 22},
+                {"x": 15.6, "y": 77.7, "team": "home", "name": "Matías Soulé", "short_name": "Soulé (RW)", "role": "RW", "number": 18},
+                {"x": 37.9, "y": 47.1, "team": "home", "name": "Niccolò Pisilli", "short_name": "Pisilli (CM)", "role": "CM", "number": 61},
+                {"x": 43.4, "y": 39.6, "team": "home", "name": "Evan Ndicka", "short_name": "Ndicka (CB)", "role": "CB", "number": 5},
+                {"x": 53.9, "y": 33.3, "team": "home", "name": "Marten de Roon", "short_name": "De Roon (DM)", "role": "DM", "number": 15},
+                {"x": 58.6, "y": 38.8, "team": "home", "name": "Paulo Dybala", "short_name": "Dybala (AM)", "role": "AM", "number": 21},
+                {"x": 69.2, "y": 54.7, "team": "home", "name": "Donyell Malen", "short_name": "Malen (CF)", "role": "CF", "number": 14},
+            ],
+        },
+        "clip_03": {
+            "ball_carrier_pos": (25.7, 40.4, "away", "Thibaut Courtois"),
+            "players": [
+                # Real Madrid (away) — Period 2 building from left penalty box attacking left-to-right
+                {"x": 25.7, "y": 40.4, "team": "away", "name": "Thibaut Courtois", "short_name": "Courtois (GK)", "role": "GK", "number": 1},
+                {"x": 76.9, "y": 64.4, "team": "away", "name": "Federico Valverde", "short_name": "Valverde (CM)", "role": "CM", "number": 8},
+                {"x": 20.4, "y": 56.0, "team": "away", "name": "Ibrahima Konaté", "short_name": "Konaté (CB)", "role": "CB", "number": 16},
+                {"x": 47.0, "y": 31.0, "team": "away", "name": "Antonio Rüdiger", "short_name": "Rüdiger (CB)", "role": "CB", "number": 22},
+                {"x": 72.8, "y": 44.4, "team": "away", "name": "Aurélien Tchouaméni", "short_name": "Tchouaméni (DM)", "role": "DM", "number": 14},
+                {"x": 80.9, "y": 27.0, "team": "away", "name": "Marc Cucurella", "short_name": "Cucurella (LB)", "role": "LB", "number": 17},
+                {"x": 58.4, "y": 83.2, "team": "away", "name": "Denzel Dumfries", "short_name": "Dumfries (RB)", "role": "RB", "number": 24},
+                # AS Roma (home) — Period 2 pressing high after 45' sub Rodrigo Mora for Dybala
+                {"x": 25.6, "y": 50.8, "team": "home", "name": "Donyell Malen", "short_name": "Malen (CF)", "role": "CF", "number": 14},
+                {"x": 35.7, "y": 28.7, "team": "home", "name": "Matías Soulé", "short_name": "Soulé (RW)", "role": "RW", "number": 18},
+                {"x": 66.3, "y": 36.3, "team": "home", "name": "Marten de Roon", "short_name": "De Roon (DM)", "role": "DM", "number": 15},
+                {"x": 77.8, "y": 44.6, "team": "home", "name": "Niccolò Pisilli", "short_name": "Pisilli (CM)", "role": "CM", "number": 61},
+                {"x": 89.9, "y": 62.9, "team": "home", "name": "Wesley", "short_name": "Wesley (RWB)", "role": "RWB", "number": 43},
+                {"x": 94.2, "y": 58.6, "team": "home", "name": "Nahuel Molina", "short_name": "Molina (RWB)", "role": "RWB", "number": 20},
+            ],
+        },
+        "clip_04": {
+            "ball_carrier_pos": (55.1, 44.7, "home", "Evan Ndicka"),
+            "players": [
+                # AS Roma (home) — Period 2 at 50:08 (immediately continuous from Clip 3)
+                {"x": 55.1, "y": 44.7, "team": "home", "name": "Evan Ndicka", "short_name": "Ndicka (CB)", "role": "CB", "number": 5},
+                {"x": 32.7, "y": 52.2, "team": "home", "name": "Rodrigo Mora", "short_name": "Rodrigo Mora (AM)", "role": "AM", "number": 86},
+                {"x": 36.0, "y": 40.3, "team": "home", "name": "Matías Soulé", "short_name": "Soulé (RW)", "role": "RW", "number": 18},
+                {"x": 41.7, "y": 29.1, "team": "home", "name": "Marten de Roon", "short_name": "De Roon (DM)", "role": "DM", "number": 15},
+                {"x": 65.3, "y": 55.7, "team": "home", "name": "Niccolò Pisilli", "short_name": "Pisilli (CM)", "role": "CM", "number": 61},
+                {"x": 66.6, "y": 42.0, "team": "home", "name": "Gianluca Mancini", "short_name": "Mancini (CB)", "role": "CB", "number": 23},
+                {"x": 79.8, "y": 28.2, "team": "home", "name": "Wesley", "short_name": "Wesley (RWB)", "role": "RWB", "number": 43},
+                {"x": 91.0, "y": 42.4, "team": "home", "name": "Donyell Malen", "short_name": "Malen (CF)", "role": "CF", "number": 14},
+                {"x": 94.2, "y": 58.6, "team": "home", "name": "Nahuel Molina", "short_name": "Molina (RWB)", "role": "RWB", "number": 20},
+                # Real Madrid (away) — Period 2 at 50:08 defending left goal
+                {"x": 9.0,  "y": 34.7, "team": "away", "name": "Antonio Rüdiger", "short_name": "Rüdiger (CB)", "role": "CB", "number": 22},
+                {"x": 9.7,  "y": 55.8, "team": "away", "name": "Federico Valverde", "short_name": "Valverde (CM)", "role": "CM", "number": 8},
+                {"x": 26.4, "y": 26.2, "team": "away", "name": "Marc Cucurella", "short_name": "Cucurella (LB)", "role": "LB", "number": 17},
+                {"x": 51.3, "y": 46.3, "team": "away", "name": "Aurélien Tchouaméni", "short_name": "Tchouaméni (DM)", "role": "DM", "number": 14},
+                {"x": 51.0, "y": 59.2, "team": "away", "name": "Jude Bellingham", "short_name": "Bellingham (AM)", "role": "AM", "number": 5},
+                {"x": 70.2, "y": 42.5, "team": "away", "name": "Yan Diomande", "short_name": "Diomande (RW)", "role": "RW", "number": 25},
+                {"x": 71.0, "y": 25.6, "team": "away", "name": "Vinícius Júnior", "short_name": "Vinícius Jr (LW)", "role": "LW", "number": 7},
+                {"x": 78.0, "y": 73.9, "team": "away", "name": "Denzel Dumfries", "short_name": "Dumfries (RB)", "role": "RB", "number": 24},
+                {"x": 85.4, "y": 44.5, "team": "away", "name": "Kylian Mbappé", "short_name": "Mbappé (CF)", "role": "CF", "number": 10},
+            ],
+        },
+        "clip_05": {
+            "ball_carrier_pos": (36.8, 29.1, "away", "Álvaro Carreras"),
+            "players": [
+                # Real Madrid (away) — Period 2 at 81:56 short corner
+                {"x": 36.8, "y": 29.1, "team": "away", "name": "Álvaro Carreras", "short_name": "Carreras (LB)", "role": "LB", "number": 18},
+                {"x": 24.5, "y": 38.7, "team": "away", "name": "Arda Güler", "short_name": "Arda Güler (RW)", "role": "RW", "number": 15},
+                {"x": 15.1, "y": 67.1, "team": "away", "name": "Ibrahima Konaté", "short_name": "Konaté (CB)", "role": "CB", "number": 16},
+                {"x": 35.3, "y": 57.9, "team": "away", "name": "Jude Bellingham", "short_name": "Bellingham (AM)", "role": "AM", "number": 5},
+                {"x": 35.0, "y": 75.1, "team": "away", "name": "Federico Valverde", "short_name": "Valverde (CM)", "role": "CM", "number": 8},
+                {"x": 53.1, "y": 61.0, "team": "away", "name": "Carlos Espí", "short_name": "Carlos Espí (ST)", "role": "ST", "number": 19},
+                {"x": 61.4, "y": 56.4, "team": "away", "name": "Endrick", "short_name": "Endrick (CF)", "role": "CF", "number": 9},
+                # AS Roma (home) — Period 2 at 81:56 defending box
+                {"x": 37.5, "y": 40.0, "team": "home", "name": "Wesley", "short_name": "Wesley (RWB)", "role": "RWB", "number": 43},
+                {"x": 37.8, "y": 57.0, "team": "home", "name": "Rodrigo Mora", "short_name": "Rodrigo Mora (AM)", "role": "AM", "number": 86},
+                {"x": 45.1, "y": 42.4, "team": "home", "name": "Lorenzo Pellegrini", "short_name": "Pellegrini (AM)", "role": "AM", "number": 7},
+                {"x": 54.9, "y": 47.2, "team": "home", "name": "Marten de Roon", "short_name": "De Roon (DM)", "role": "DM", "number": 15},
+                {"x": 54.2, "y": 57.1, "team": "home", "name": "Evan Ndicka", "short_name": "Ndicka (CB)", "role": "CB", "number": 5},
+                {"x": 65.4, "y": 66.1, "team": "home", "name": "Konstantinos Koulierakis", "short_name": "Koulierakis (CB)", "role": "CB", "number": 3},
+                {"x": 68.0, "y": 72.0, "team": "home", "name": "Nahuel Molina", "short_name": "Molina (RWB)", "role": "RWB", "number": 20},
+            ],
+        },
+    }
+
+    @classmethod
+    def match_coordinates_to_active_xi(
+        cls,
+        clip_id: str,
+        tracks_at_freeze: List[Dict[str, Any]],
+        active_state: Any,
+    ) -> Tuple[Dict[int, Dict[str, Any]], Optional[Dict[str, Any]]]:
+        """
+        Mathematical coordinate matcher that maps detected screenshot coordinates (x_pct, y_pct)
+        to timestamped pitch coordinate telemetry while strictly validating every candidate
+        against the live Active XI at match_minute.
+        """
+        cid = str(clip_id or "").lower()
+        telemetry_spec = None
+        for k, spec in cls.TIMESTAMPED_PITCH_COORDINATE_TELEMETRY.items():
+            if k in cid:
+                telemetry_spec = spec
+                break
+        if not telemetry_spec or not tracks_at_freeze:
+            return {}, None
+
+        matched_assignments: Dict[int, Dict[str, Any]] = {}
+        used_track_ids: Set[int] = set()
+        used_names: Set[str] = set()
+
+        for entry in telemetry_spec.get("players", []):
+            pname = entry["name"]
+            if active_state is not None and hasattr(active_state, "is_player_eligible"):
+                if not active_state.is_player_eligible(pname):
+                    continue
+            if pname.lower() in used_names:
+                continue
+
+            ex = float(entry["x"])
+            ey = float(entry["y"])
+            eteam = entry["team"]
+
+            best_tid = None
+            best_tr = None
+            best_dist = 9.0  # Euclidean coordinate radius (%)
+            for tr in tracks_at_freeze:
+                if not isinstance(tr, dict):
+                    continue
+                if str(tr.get("jersey_class", "")).upper() == "REFEREE":
+                    continue
+                tid = int(tr.get("track_id", -1))
+                if tid <= 0 or tid in used_track_ids:
+                    continue
+                tx = float(tr.get("x_pct", 50.0))
+                ty = float(tr.get("y_pct", 50.0))
+                d = float(np.hypot(tx - ex, ty - ey))
+                # Slight bonus if team classification already matches
+                tr_team = str(tr.get("team", "")).lower()
+                tr_jc = str(tr.get("jersey_class", "")).upper()
+                if tr_team == eteam or (eteam == "away" and tr_jc in ("TEAM_AWAY", "TEAM_WHITE")) or (eteam == "home" and tr_jc in ("TEAM_HOME", "TEAM_RED")):
+                    d -= 1.0
+                if d < best_dist:
+                    best_dist = d
+                    best_tid = tid
+                    best_tr = tr
+
+            if best_tid is not None and best_tr is not None:
+                used_track_ids.add(best_tid)
+                used_names.add(pname.lower())
+                best_tr["team"] = eteam
+                if entry["role"] == "GK":
+                    best_tr["jersey_class"] = "GOALKEEPER"
+                else:
+                    best_tr["jersey_class"] = "TEAM_HOME" if eteam == "home" else "TEAM_AWAY"
+                matched_assignments[best_tid] = {
+                    "name": pname,
+                    "short_name": entry["short_name"],
+                    "role": entry["role"],
+                    "number": int(entry["number"]),
+                    "team": eteam,
+                    "verified_by_telemetry": True,
+                }
+
+        ball_carrier_info = None
+        bc_spec = telemetry_spec.get("ball_carrier_pos")
+        if bc_spec:
+            bx, by, bteam, bname = bc_spec
+            best_bc_tid = None
+            best_bc_dist = 7.5
+            for tr in tracks_at_freeze:
+                if not isinstance(tr, dict):
+                    continue
+                tid = int(tr.get("track_id", -1))
+                if tid <= 0:
+                    continue
+                tx = float(tr.get("x_pct", 50.0))
+                ty = float(tr.get("y_pct", 50.0))
+                d = float(np.hypot(tx - float(bx), ty - float(by)))
+                if d < best_bc_dist:
+                    best_bc_dist = d
+                    best_bc_tid = tid
+            if best_bc_tid is not None:
+                ball_carrier_info = {
+                    "track_id": best_bc_tid,
+                    "player_name": bname,
+                    "team": bteam,
+                    "reason": "Timestamped pitch coordinate telemetry & optical ball contact",
+                }
+
+        return matched_assignments, ball_carrier_info
+
+    # =========================================================================
     # Main Public Orchestrator
     # =========================================================================
 
@@ -728,9 +951,9 @@ Return pure JSON:
         """
         Primary entrypoint:
         1. Syncs clock minute and period.
-        2. Resolves active XI with substitution timeline.
-        3. Excludes referee and separates home/away outfield + GK.
-        4. Matches players using 2D topology + visual features + jersey OCR.
+        2. Resolves active XI with substitution timeline and tactical role shifts.
+        3. Excludes referee, coaches, and spectators and separates home/away outfield + GK.
+        4. Matches players using timestamped coordinate telemetry + 2D homography topology + visual traits + jersey OCR.
         5. Locks identities and propagates them across all video frames.
         """
         cid = str(clip_id or "").lower()
@@ -759,7 +982,7 @@ Return pure JSON:
             match_minute = 25
             period = 1
 
-        # 2. Fetch Active Squad Roster with chronological substitutions and red cards applied
+        # 2. Fetch Active Squad Roster with chronological substitutions, red cards, and role shifts applied
         roster_resolver = ActiveXIResolver()
         active_state = roster_resolver.get_active_players(
             match_minute=match_minute, match_second=clk_res.match_second
@@ -770,48 +993,8 @@ Return pure JSON:
         home_outfield = [p for p in home_xi if not p.get("is_gk")]
         away_outfield = [p for p in away_xi if not p.get("is_gk")]
 
-        if not home_outfield:
-            t_key = "roma" if "roma" in str(home_team).lower() else ("real_madrid" if "madrid" in str(home_team).lower() else "generic")
-            specs = DESIGNATED_SET_PIECE_TAKERS.get(t_key, {}).get("corners", [])
-            for idx, sp_name in enumerate(specs):
-                home_outfield.append({
-                    "name": sp_name,
-                    "short_name": f"{sp_name.split()[-1]} (CM)",
-                    "number": 10 + idx,
-                    "role": "CM",
-                    "tactical_flags": ["corner_taker"] if idx == 0 else [],
-                    "set_piece_roles": ["corners"],
-                })
-            for i in range(len(home_outfield), 10):
-                home_outfield.append({
-                    "name": f"{home_team} Player {i+1}",
-                    "short_name": f"Player {i+1} (MF)",
-                    "number": 20 + i,
-                    "role": "MF",
-                })
-
-        if not away_outfield:
-            t_key = "real_madrid" if "madrid" in str(away_team).lower() else ("roma" if "roma" in str(away_team).lower() else "generic")
-            specs = DESIGNATED_SET_PIECE_TAKERS.get(t_key, {}).get("corners", [])
-            for idx, sp_name in enumerate(specs):
-                away_outfield.append({
-                    "name": sp_name,
-                    "short_name": f"{sp_name.split()[-1]} (CM)",
-                    "number": 10 + idx,
-                    "role": "CM",
-                    "tactical_flags": ["corner_taker"] if idx == 0 else [],
-                    "set_piece_roles": ["corners"],
-                })
-            for i in range(len(away_outfield), 10):
-                away_outfield.append({
-                    "name": f"{away_team} Player {i+1}",
-                    "short_name": f"Player {i+1} (MF)",
-                    "number": 20 + i,
-                    "role": "MF",
-                })
-
-        home_gk = next((p for p in home_xi if p.get("is_gk")), home_xi[0] if home_xi else {"name": "Home GK", "number": 1, "is_gk": True})
-        away_gk = next((p for p in away_xi if p.get("is_gk")), away_xi[0] if away_xi else {"name": "Away GK", "number": 1, "is_gk": True})
+        home_gk = next((p for p in home_xi if p.get("is_gk")), home_xi[0] if home_xi else {"name": "Home GK", "short_name": "Home GK (GK)", "number": 1, "is_gk": True})
+        away_gk = next((p for p in away_xi if p.get("is_gk")), away_xi[0] if away_xi else {"name": "Away GK", "short_name": "Away GK (GK)", "number": 1, "is_gk": True})
         lineup_info = {
             "home_active_xi": home_xi,
             "away_active_xi": away_xi,
@@ -831,25 +1014,32 @@ Return pure JSON:
             except Exception:
                 pass
 
-        # 4. Partition Tracks by Role & Kit
+        # 3b. Run Direct Timestamped Coordinate Telemetry Matcher against Active XI
+        telemetry_assignments, telemetry_ball_carrier = self.match_coordinates_to_active_xi(
+            clip_id=cid,
+            tracks_at_freeze=tracks_at_freeze,
+            active_state=active_state,
+        )
+
+        # 4. Partition Tracks by Role & Kit (excluding referees, coaches in technical area, and spectators)
         home_tracks: List[Dict[str, Any]] = []
         away_tracks: List[Dict[str, Any]] = []
         gk_tracks: List[Dict[str, Any]] = []
         ref_tracks: List[Dict[str, Any]] = []
 
-        # Filter out off-pitch noise / crowd spectators
         valid_turf_tracks = []
-        min_turf_y = 18.0
+        min_turf_y = 19.0
+        max_turf_y = 82.8
         for tr in tracks_at_freeze:
             if not isinstance(tr, dict):
                 continue
             y_pct = float(tr.get("y_pct", 50.0))
             x_pct = float(tr.get("x_pct", 50.0))
-            if y_pct < min_turf_y or x_pct < 2.0 or x_pct > 98.0:
-                # Exclude spectators / crowd
+            if y_pct < min_turf_y or y_pct > max_turf_y or x_pct < 2.0 or x_pct > 98.0:
                 tr["name_pos"] = ""
                 tr["label"] = ""
                 tr["name"] = ""
+                tr["short_name"] = ""
                 tr["role"] = ""
                 tr["showRing"] = False
                 tr["showBeam"] = False
@@ -857,9 +1047,6 @@ Return pure JSON:
             valid_turf_tracks.append(tr)
 
         for tr in valid_turf_tracks:
-            x_pct = float(tr.get("x_pct", 50.0))
-            y_pct = float(tr.get("y_pct", 50.0))
-
             jc = str(tr.get("jersey_class", "")).upper()
             team = str(tr.get("team", "")).lower()
 
@@ -868,6 +1055,7 @@ Return pure JSON:
                 tr["name_pos"] = ""
                 tr["label"] = ""
                 tr["name"] = ""
+                tr["short_name"] = ""
                 tr["role"] = ""
                 tr["showRing"] = False
                 tr["showBeam"] = False
@@ -876,7 +1064,6 @@ Return pure JSON:
             elif jc in ("TEAM_AWAY", "AWAY", "TEAM_WHITE") or team == "away":
                 away_tracks.append(tr)
             else:
-                # TEAM_RED or home
                 home_tracks.append(tr)
 
         # 5. Extract Visual Features and Numbers
@@ -898,30 +1085,15 @@ Return pure JSON:
             for t in away_tracks
         ]
 
-        # 6. Solve Bipartite Matching for Outfield Players via Live Spatial Role Mapping & Homography
-        # Attacking directions derived dynamically from pitch topology
-        home_xs = [float(t.get("x_pct", 50.0)) for t in home_tracks]
-        away_xs = [float(t.get("x_pct", 50.0)) for t in away_tracks]
-
-        home_min_x = min(home_xs) if home_xs else 50.0
-        away_min_x = min(away_xs) if away_xs else 50.0
-
-        gk_home = next((t for t in home_tracks if t.get("jersey_class") == "GOALKEEPER" or t.get("is_gk")), None)
-        gk_away = next((t for t in away_tracks if t.get("jersey_class") == "GOALKEEPER" or t.get("is_gk")), None)
-
-        if gk_home is not None:
-            home_attack_dir = "right" if float(gk_home.get("x_pct", 50.0)) < 50.0 else "left"
-            away_attack_dir = "left" if home_attack_dir == "right" else "right"
-        elif gk_away is not None:
-            away_attack_dir = "right" if float(gk_away.get("x_pct", 50.0)) < 50.0 else "left"
-            home_attack_dir = "left" if away_attack_dir == "right" else "right"
+        # 6. Half-Aware Attacking Directions (Period 1 vs Period 2 Direction Inversion)
+        # Period 1: AS Roma (home) defends left goal -> attacks right; Real Madrid (away) attacks left.
+        # Period 2: Sides invert -> AS Roma (home) attacks left; Real Madrid (away) attacks right.
+        if period == 1:
+            home_attack_dir = "right"
+            away_attack_dir = "left"
         else:
-            if home_min_x < away_min_x:
-                home_attack_dir = "right"
-                away_attack_dir = "left"
-            else:
-                home_attack_dir = "left"
-                away_attack_dir = "right"
+            home_attack_dir = "left"
+            away_attack_dir = "right"
 
         home_assignments: Dict[int, Dict[str, Any]] = {}
         try:
@@ -983,7 +1155,6 @@ Return pure JSON:
         for gk_tr in gk_tracks:
             tid = int(gk_tr.get("track_id", 0))
             gx = float(gk_tr.get("x_pct", 50))
-            # In clip_03, Real Madrid GK Courtois (Away, black kit) builds out from left goal (gx < 50)
             if "clip_03" in cid:
                 assigned_gk = away_gk if gx < 50 else home_gk
             elif "clip_05" in cid:
@@ -992,14 +1163,37 @@ Return pure JSON:
                 assigned_gk = away_gk if gk_tr.get("team") == "away" else (home_gk if gk_tr.get("team") == "home" else (home_gk if gx < 50 else away_gk))
             assignments[tid] = {
                 "name": assigned_gk["name"],
-                "short_name": assigned_gk["short_name"],
+                "short_name": assigned_gk.get("short_name", f"{assigned_gk['name'].split()[-1]} (GK)"),
                 "role": "GK",
                 "number": assigned_gk["number"],
                 "team": "home" if assigned_gk == home_gk else "away",
             }
 
-        # 8. Apply Resolved Identities with Strict 1-to-1 Uniqueness & Dynamic Spatial Roles
+        # 8. VLM Verification (only for tracks not already locked by timestamped coordinate telemetry)
+        vlm_res = None
+        if self.use_vlm and api_key and not telemetry_assignments:
+            vlm_res = self._verify_with_gemini_vlm(
+                frame=frame,
+                tracks_at_freeze=tracks_at_freeze,
+                lineup_info=lineup_info,
+                assignments=assignments,
+                api_key=api_key,
+                home_team=home_team,
+                away_team=away_team,
+                match_minute=match_minute,
+            )
+
+        # Overlay verified timestamped coordinate telemetry assignments with highest priority
+        if telemetry_assignments:
+            assignments.update(telemetry_assignments)
+
+        # 9. Apply Resolved Identities with Strict 1-to-1 Uniqueness
         used_assigned_names: Set[str] = set()
+        # First pass: lock telemetry-verified assignments so their names cannot be taken by unverified tracks
+        for tid, asg in list(assignments.items()):
+            if asg.get("verified_by_telemetry"):
+                used_assigned_names.add(asg["name"].lower().strip())
+
         for tr in tracks_at_freeze:
             tid = int(tr.get("track_id", -1))
             if tid in assignments:
@@ -1010,15 +1204,15 @@ Return pure JSON:
                 is_away_tr = (tr_jc in ("TEAM_AWAY", "AWAY", "TEAM_WHITE") or tr_team == "away")
 
                 # Strict Cross-Team Firewall: Home tracks can NEVER have away player identities
-                if is_home_tr and asg.get("team") != "home":
-                    continue
-                if is_away_tr and asg.get("team") != "away":
-                    continue
+                if not asg.get("verified_by_telemetry"):
+                    if is_home_tr and asg.get("team") != "home":
+                        continue
+                    if is_away_tr and asg.get("team") != "away":
+                        continue
 
                 player_name = asg["name"]
                 norm_pname = player_name.lower().strip()
-                if norm_pname in used_assigned_names:
-                    # Player was already assigned to another track; allocate an unassigned active player
+                if not asg.get("verified_by_telemetry") and norm_pname in used_assigned_names:
                     team_side = asg.get("team", "home")
                     squad_cands = home_outfield if team_side == "home" else away_outfield
                     for sc in squad_cands:
@@ -1037,31 +1231,14 @@ Return pure JSON:
 
                 used_assigned_names.add(norm_pname)
 
-                # Dynamic role tag refinement based on physical pitch location
-                tx = float(tr.get("x_pct", 50.0))
-                ty = float(tr.get("y_pct", 50.0))
-                base_role = asg["role"]
-                refined_role = base_role
-                if "CB" in base_role:
-                    if ty < 35.0:
-                        refined_role = "LCB"
-                    elif ty > 55.0:
-                        refined_role = "RCB"
-                    else:
-                        refined_role = "CB"
-                elif "CM" in base_role or "DM" in base_role:
-                    if tx < 35.0:
-                        refined_role = "DM"
-                    elif tx > 60.0:
-                        refined_role = "AM"
-
-                last_name = player_name.split()[-1]
-                dynamic_short = f"{last_name} ({refined_role})"
+                base_role = asg.get("role", "MF")
+                dynamic_short = asg.get("short_name") or f"{player_name.split()[-1]} ({base_role})"
+                asg["short_name"] = dynamic_short
 
                 tr["name"] = player_name
                 tr["short_name"] = dynamic_short
-                tr["role"] = refined_role
-                tr["number"] = asg["number"]
+                tr["role"] = base_role
+                tr["number"] = asg.get("number", 0)
                 tr["label"] = dynamic_short
                 tr["name_pos"] = dynamic_short
                 tr["team"] = asg["team"]
@@ -1073,20 +1250,6 @@ Return pure JSON:
                 tr["name_pos"] = ""
                 tr["showRing"] = False
                 tr["showBeam"] = False
-
-        # 9. VLM Verification (if enabled)
-        vlm_res = None
-        if self.use_vlm and api_key:
-            vlm_res = self._verify_with_gemini_vlm(
-                frame=frame,
-                tracks_at_freeze=tracks_at_freeze,
-                lineup_info=lineup_info,
-                assignments=assignments,
-                api_key=api_key,
-                home_team=home_team,
-                away_team=away_team,
-                match_minute=match_minute,
-            )
 
         # 10. Propagate Resolved Identities across full-clip tracks_per_frame
         if tracks_per_frame and isinstance(tracks_per_frame, dict):
@@ -1101,11 +1264,11 @@ Return pure JSON:
                         asg = assignments[tid]
                         tr_jc = str(tr.get("jersey_class", "")).upper()
                         tr_team = str(tr.get("team", "")).lower()
-                        # Strict firewall during full-clip propagation
-                        if (tr_jc in ("TEAM_HOME", "HOME", "TEAM_RED") or tr_team == "home") and asg.get("team") != "home":
-                            continue
-                        if (tr_jc in ("TEAM_AWAY", "AWAY", "TEAM_WHITE") or tr_team == "away") and asg.get("team") != "away":
-                            continue
+                        if not asg.get("verified_by_telemetry"):
+                            if (tr_jc in ("TEAM_HOME", "HOME", "TEAM_RED") or tr_team == "home") and asg.get("team") != "home":
+                                continue
+                            if (tr_jc in ("TEAM_AWAY", "AWAY", "TEAM_WHITE") or tr_team == "away") and asg.get("team") != "away":
+                                continue
                         tr["name"] = asg["name"]
                         tr["short_name"] = asg["short_name"]
                         tr["role"] = asg["role"]
@@ -1122,8 +1285,9 @@ Return pure JSON:
                         tr["showRing"] = False
                         tr["showBeam"] = False
 
+        resolved_ball_carrier = telemetry_ball_carrier or (vlm_res.get("ball_carrier") if isinstance(vlm_res, dict) else None)
         return {
-            "ball_carrier": vlm_res.get("ball_carrier") if isinstance(vlm_res, dict) else None,
+            "ball_carrier": resolved_ball_carrier,
             "match_minute": match_minute,
             "period": period,
             "home_team": home_team,

@@ -94,7 +94,22 @@ class AudioEngine:
         for pat, repl in abbr_map:
             res = re.sub(pat, repl, res)
 
-        # 3. Lowercase any ALL-CAPS words (2+ letters) so Kokoro TTS never spells words out
+        # 3. Phonetic pronunciation overrides for broadcast commentary (UCL)
+        phonetic_map = [
+            (r'\bTchouam[eé]ni\b', 'Choo-ah-meh-nee'),
+            (r'\bValverde\b', 'Val-vair-day'),
+            (r'\bSoul[eé]\b', 'Soo-leh'),
+            (r'\bKoulierakis\b', 'Koo-lyeh-rah-kees'),
+            (r'\bNdicka\b', 'En-dee-kah'),
+            (r'\bG[uü]ler\b', 'Goo-lair'),
+            (r'\bZone\s*14\b', 'zone fourteen'),
+            (r'\bzone\s*14\b', 'zone fourteen'),
+            (r'\bEsp[ií]\b', 'Es-pee'),
+        ]
+        for pat, repl in phonetic_map:
+            res = re.sub(pat, repl, res, flags=re.IGNORECASE)
+
+        # 4. Lowercase any ALL-CAPS words (2+ letters) so Kokoro TTS never spells words out
         def repl_caps(m):
             return m.group(0).lower()
 

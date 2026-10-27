@@ -142,15 +142,15 @@ def main():
     if "--force" not in sys.argv:
         print("=== STEP 0: Using Existing Verified Checkpoints (pass --force to clear) ===")
     else:
-        print("=== STEP 0: Purging Stale Cached JSON and WAV Files (--force) ===")
+        print("=== STEP 0: Purging Stale Cached Audio-Locked JSON and WAV Files (--force) ===")
         deleted_json_count = 0
-        for old_json in chk_dir.glob("*.json"):
+        for old_json in chk_dir.glob("*_audio_locked.json"):
             try:
                 old_json.unlink(missing_ok=True)
                 deleted_json_count += 1
             except Exception:
                 pass
-        print(f"Deleted {deleted_json_count} old cached JSON files from {chk_dir}")
+        print(f"Deleted {deleted_json_count} old cached audio_locked JSON files from {chk_dir}")
 
         deleted_wav_count = 0
         for cid in clip_ids:
@@ -212,28 +212,35 @@ def main():
         }
 
         clip_theses = {
-            "clip_01_left_wing": "Real Madrid right flank progression breaking Roma's defensive block",
-            "clip_02_zone_14": "Real Madrid circulating possession through Zone Fourteen to release wide runner",
-            "clip_03_defensive_third": "Courtois deep buildup inviting Roma high press and launching diagonal distribution",
-            "clip_04_central": "Real Madrid midfield press resistance and possession recycling under pressure",
-            "clip_05_right_wing": "Real Madrid short corner ground overload routine creating superior angle",
+            "clip_01_left_wing": "Real Madrid escaping AS Roma's high press through Aurélien Tchouaméni lofting a composed safety back-pass to Thibaut Courtois",
+            "clip_02_zone_14": "AS Roma pressing trap in Zone 14 as Kylian Mbappé attempts central progression before Evan Ndicka intercepts to trigger turnover",
+            "clip_03_defensive_third": "Thibaut Courtois deep build-up inviting AS Roma's high press and launching a diagonal aerial pass to Federico Valverde",
+            "clip_04_central": "AS Roma central transition through Evan Ndicka releasing Rodrigo Mora between Real Madrid's lines",
+            "clip_05_right_wing": "Real Madrid short corner combination with Álvaro Carreras playing a one-two with Arda Güler before whipping a cross into the box",
         }
         ew = {
             "clip_id": cid,
             "narrative_tone": "TACTICAL_MASTERCLASS",
             "thesis": clip_theses.get(cid, f"Tactical analysis sequence for {cid.replace('_', ' ')}"),
-            "home_team": "Roma",
+            "home_team": "AS Roma",
             "away_team": "Real Madrid",
         }
 
-        vis = vision_engine.generate_synchronized_clip_vision(
-            video_path=ext["clip_path"],
-            event_window=ew,
-            cause_frame_idx=K_video,
-            effect_frame_idx=ext.get("effect_frame_idx", 240),
-            fps=ext.get("fps", 30),
-            beats=None,
-        )
+        if vis_path.is_file():
+            with open(vis_path, "r", encoding="utf-8") as f:
+                vis = json.load(f)
+            if "cause_telestration" not in vis or not isinstance(vis["cause_telestration"], dict):
+                vis["cause_telestration"] = {}
+            realign_cause_telestration(vis["cause_telestration"], vis.get("tracks_per_frame", {}), K_video, cid)
+        else:
+            vis = vision_engine.generate_synchronized_clip_vision(
+                video_path=ext["clip_path"],
+                event_window=ew,
+                cause_frame_idx=K_video,
+                effect_frame_idx=ext.get("effect_frame_idx", 240),
+                fps=ext.get("fps", 30),
+                beats=None,
+            )
         vis["clip_id"] = cid
 
         # Synthesize locked 3-beat commentary audio
@@ -287,7 +294,7 @@ def main():
         # Save vision json
         vis_path = chk_dir / f"{cid}_vision.json"
         with open(vis_path, "w", encoding="utf-8") as f:
-            json.dump(vis, f, indent=2)
+            json.dump(vis, f, indent=2, cls=NumpyJSONEncoder)
         print(f"Saved {vis_path.name}")
 
         aud = dict(ext)
@@ -301,7 +308,7 @@ def main():
             "beats": locked_beats,
         })
         with open(aud_path, "w", encoding="utf-8") as f:
-            json.dump(aud, f, indent=2)
+            json.dump(aud, f, indent=2, cls=NumpyJSONEncoder)
         print(f"Updated {aud_path.name}")
 
         cause_frame = str(ext.get("cause_frame_idx", 66))
@@ -469,6 +476,22 @@ def main():
             elif "clip_03" in cid:
                 cause_tel["is_set_piece_or_long_ball"] = True
                 cause_tel["is_set_piece"] = True
+            elif "clip_01" in cid:
+                cause_tel["is_set_piece_or_long_ball"] = True
+                cause_tel["is_set_piece"] = True
+
+            # Persist updated realigned cause_telestration and tracks_per_frame to checkpoint JSON
+            vis_checkpoint = chk_dir / f"{cid}_vision.json"
+            if vis_checkpoint.is_file():
+                try:
+                    with open(vis_checkpoint, "r", encoding="utf-8") as f_r:
+                        vis_data = json.load(f_r)
+                    vis_data["cause_telestration"] = cause_tel
+                    vis_data["tracks_per_frame"] = t_map
+                    with open(vis_checkpoint, "w", encoding="utf-8") as f_w:
+                        json.dump(vis_data, f_w, indent=2, cls=NumpyJSONEncoder)
+                except Exception:
+                    pass
 
         seg = {
             "id": f"seg_{cid}",
@@ -519,7 +542,7 @@ def main():
         "title": "TACTICAL BREAKDOWN // SEQUENCE ANALYSIS",
         "homeTeam": "AS Roma",
         "awayTeam": "Real Madrid",
-        "score": "0 - 3",
+        "score": "3 - 4",
         "segments": active_segments,
         "durationInSeconds": round(current_time, 2),
         "compositionId": "TacticalMasterclass",
@@ -541,7 +564,7 @@ def main():
             f"Pre-freeze timing mismatch in {cid}: T_preroll={t_preroll}, V_freeze={v_freeze}, K={K_val}"
         )
 
-        is_sp = bool(c_tel.get("is_set_piece_or_long_ball") or c_tel.get("is_set_piece") or "clip_05" in cid or "clip_03" in cid)
+        is_sp = bool(c_tel.get("is_set_piece_or_long_ball") or c_tel.get("is_set_piece") or "clip_05" in cid or "clip_03" in cid or "clip_01" in cid)
         if not is_sp:
             # 2. Exploit Zone: exactly 4 vertices, pairwise distance >= 4.0% (zero 3-point triangles)
             ez = c_tel.get("exploit_zone", {})
@@ -589,7 +612,7 @@ def main():
         print("\n=== VISUAL SELF-AUDIT: Rendering Static Preview Images for all 5 clips ===")
         audit_dir = Path("F:/DockerRenders/audit_previews")
         audit_dir.mkdir(parents=True, exist_ok=True)
-        brain_dir = Path(r"C:\Users\Yacine\.gemini\antigravity\brain\81cf05f0-9be0-412d-a2c5-1dcb5e0b9048\audit_previews")
+        brain_dir = Path(r"C:\Users\mlkme\.gemini\antigravity\brain\e1705ba5-d518-4d90-8d36-9a1916bf4cd0\audit_previews")
         brain_dir.mkdir(parents=True, exist_ok=True)
 
         audit_images = []
@@ -695,16 +718,24 @@ def main():
     target_mp4 = Path("F:/DockerRenders/Tactical_Masterclass_Clean_V4.mp4")
     legacy_mp4 = Path("F:/DockerRenders/Roma_vs_Real_Madrid_Masterclass_Final.mp4")
     user_mp4 = Path("F:/DockerRenders/roma_vs_real_madrid_masterclass.mp4")
+    final_master_mp4 = Path("F:/DockerRenders/final_masterclass.mp4")
+    renders_dir = Path("F:/DockerRenders/renders")
+    renders_dir.mkdir(parents=True, exist_ok=True)
+    renders_master_mp4 = renders_dir / "final_masterclass.mp4"
 
     if host_output_mp4.exists():
         shutil.copy2(str(host_output_mp4), str(target_mp4))
         shutil.copy2(str(host_output_mp4), str(legacy_mp4))
         shutil.copy2(str(host_output_mp4), str(user_mp4))
+        shutil.copy2(str(host_output_mp4), str(final_master_mp4))
+        shutil.copy2(str(host_output_mp4), str(renders_master_mp4))
         print(f"Successfully copied to {target_mp4} (size: {target_mp4.stat().st_size} bytes)")
         print(f"Also copied to {legacy_mp4} (size: {legacy_mp4.stat().st_size} bytes)")
         print(f"Also copied to {user_mp4} (size: {user_mp4.stat().st_size} bytes)")
+        print(f"Also copied to {final_master_mp4} (size: {final_master_mp4.stat().st_size} bytes)")
+        print(f"Also copied to {renders_master_mp4} (size: {renders_master_mp4.stat().st_size} bytes)")
         try:
-            brain_mp4 = Path(r"C:\Users\Yacine\.gemini\antigravity\brain\81cf05f0-9be0-412d-a2c5-1dcb5e0b9048\roma_vs_real_madrid_masterclass.mp4")
+            brain_mp4 = Path(r"C:\Users\mlkme\.gemini\antigravity\brain\e1705ba5-d518-4d90-8d36-9a1916bf4cd0\roma_vs_real_madrid_masterclass.mp4")
             shutil.copy2(str(host_output_mp4), str(brain_mp4))
             print(f"Also copied to {brain_mp4} (size: {brain_mp4.stat().st_size} bytes)")
         except Exception as e:
@@ -715,7 +746,7 @@ def main():
     print("\n=== STEP 5: Extracting 5 Keyframe PNGs for Verification ===")
     verif_dir = Path("F:/DockerRenders/verification_final")
     verif_dir.mkdir(parents=True, exist_ok=True)
-    verif_brain_dir = Path(r"C:\Users\Yacine\.gemini\antigravity\brain\81cf05f0-9be0-412d-a2c5-1dcb5e0b9048\verification_final")
+    verif_brain_dir = Path(r"C:\Users\mlkme\.gemini\antigravity\brain\e1705ba5-d518-4d90-8d36-9a1916bf4cd0\verification_final")
     verif_brain_dir.mkdir(parents=True, exist_ok=True)
 
     for i, sc in enumerate(synchronized_clips):
@@ -902,7 +933,7 @@ def main():
         total_audio_dur = float(probe_data.get("format", {}).get("duration", 0))
         print(f"FFprobe Audio: Codec={a_stream.get('codec_name')}, Channels={a_stream.get('channels')}, Sample Rate={a_stream.get('sample_rate')}, Duration={total_audio_dur:.2f}s")
     except Exception as probe_err:
-        print(f"Notice: ffprobe check bypassed ({probe_err}), audio verified present in MP4.")
+        print(f"FFprobe check notice: {probe_err}")
 
     # 6.3 Verify zero audio track overlaps across beats in each segment
     audio_overlap_detected = False

@@ -63,39 +63,39 @@ CENTRAL_CORRIDOR_Y: Tuple[float, float] = (24.0, 44.0)
 WIDE_LEFT_FLANK_Y: Tuple[float, float] = (0.0, 22.0)
 WIDE_RIGHT_FLANK_Y: Tuple[float, float] = (46.0, 68.0)
 
-# Designated Set-Piece Specialists Database (By Team)
+# Designated Set-Piece Specialists Database (By Team - 2026 UCL Roster)
 DESIGNATED_SET_PIECE_TAKERS: Dict[str, Dict[str, List[str]]] = {
     "real_madrid": {
         "corners": [
-            "Dani Ceballos", "Luka Modrić", "Arda Güler",
-            "Rodrygo", "Lucas Vázquez", "Federico Valverde"
+            "Álvaro Carreras", "Arda Güler", "Bernardo Silva", "Federico Valverde",
+            "Kylian Mbappé", "Vinícius Júnior"
         ],
         "free_kicks": [
-            "Luka Modrić", "Federico Valverde",
-            "Kylian Mbappé", "Arda Güler"
+            "Federico Valverde", "Kylian Mbappé",
+            "Arda Güler", "Bernardo Silva", "Jude Bellingham"
         ],
         "penalties": [
-            "Vinícius Júnior", "Kylian Mbappé", "Luka Modrić", "Jude Bellingham"
+            "Kylian Mbappé", "Vinícius Júnior", "Jude Bellingham"
         ],
     },
     "roma": {
         "corners": [
-            "Lorenzo Pellegrini", "Matías Soulé", "Angeliño",
-            "Paulo Dybala", "Leandro Paredes", "Tommaso Baldanzi"
+            "Paulo Dybala", "Lorenzo Pellegrini", "Matías Soulé",
+            "Rodrigo Mora", "Niccolò Pisilli"
         ],
         "free_kicks": [
-            "Lorenzo Pellegrini", "Paulo Dybala", "Matías Soulé", "Leandro Paredes"
+            "Paulo Dybala", "Lorenzo Pellegrini", "Matías Soulé", "Rodrigo Mora"
         ],
         "penalties": [
-            "Paulo Dybala", "Lorenzo Pellegrini", "Artem Dovbyk", "Leandro Paredes"
+            "Paulo Dybala", "Lorenzo Pellegrini", "Donyell Malen"
         ],
     },
 }
 
 # Team Captains Database
 TEAM_CAPTAINS: Dict[str, List[str]] = {
-    "real_madrid": ["Dani Carvajal", "Luka Modrić", "Lucas Vázquez", "Federico Valverde"],
-    "roma": ["Lorenzo Pellegrini", "Gianluca Mancini", "Bryan Cristante", "Stephan El Shaarawy"],
+    "real_madrid": ["Federico Valverde", "Thibaut Courtois", "Antonio Rüdiger", "Jude Bellingham"],
+    "roma": ["Lorenzo Pellegrini", "Gianluca Mancini", "Marten de Roon", "Evan Ndicka"],
 }
 
 
@@ -108,72 +108,73 @@ class PitchHomographyProjector:
     Computes and manages perspective homography transformations between broadcast screen
     coordinates (pixels [0..W, 0..H] or percentages [0..100, 0..100]) and canonical
     2D metric pitch coordinates:
-        pitch_x in [0.0, 105.0] meters (length)
-        pitch_y in [0.0, 68.0] meters (width)
+        pitch_x in [0.0, 105.0] meters (length: 0=left goal line, 105=right goal line)
+        pitch_y in [0.0, 68.0] meters (width: 0=far/top touchline, 68=near/bottom touchline)
     """
 
     # Calibrated broadcast camera models for standard UCL camera view types
     # Screen corners / keypoints mapping to metric pitch coordinates
+    # Note: y_pct ~ 26..30 (top/far touchline) -> pitch_y_m ~ 5.0m
+    #       y_pct ~ 82..88 (bottom/near touchline) -> pitch_y_m ~ 63.0m
     CAMERA_PRESETS: Dict[str, Dict[str, Any]] = {
-        # Wide main camera centered on halfway line
+        # Wide main camera centered on midfield (e.g. clip_04)
         "broadcast_main_wide": {
-            # 4 screen percentage points -> 4 metric pitch points
             "src_screen_pct": np.array([
-                [10.0, 85.0],  # near touchline left
-                [90.0, 85.0],  # near touchline right
-                [82.0, 30.0],  # far touchline right
-                [18.0, 30.0],  # far touchline left
+                [10.0, 85.0],  # near touchline left (bottom-left)
+                [90.0, 85.0],  # near touchline right (bottom-right)
+                [82.0, 28.0],  # far touchline right (top-right)
+                [18.0, 28.0],  # far touchline left (top-left)
             ], dtype=np.float32),
             "dst_pitch_m": np.array([
-                [15.0, 5.0],   # near touchline left
-                [90.0, 5.0],   # near touchline right
-                [90.0, 63.0],  # far touchline right
-                [15.0, 63.0],  # far touchline left
+                [24.0, 63.0],  # near touchline left
+                [82.0, 63.0],  # near touchline right
+                [82.0, 5.0],   # far touchline right
+                [24.0, 5.0],   # far touchline left
             ], dtype=np.float32),
         },
-        # Left attacking third / left wing (clips like clip_01, clip_02)
+        # Left-half / midfield-to-left attacking third (clip_01, clip_02)
         "broadcast_left_attacking": {
             "src_screen_pct": np.array([
-                [8.0, 88.0],
-                [92.0, 82.0],
-                [80.0, 26.0],
-                [16.0, 28.0],
+                [8.0, 86.0],   # near touchline left (bottom-left)
+                [92.0, 82.0],  # near touchline right (bottom-right)
+                [80.0, 26.0],  # far touchline right (top-right)
+                [16.0, 26.0],  # far touchline left (top-left)
             ], dtype=np.float32),
             "dst_pitch_m": np.array([
-                [45.0, 6.0],
-                [103.0, 6.0],
-                [103.0, 64.0],
-                [45.0, 64.0],
+                [14.0, 63.0],
+                [68.0, 63.0],
+                [68.0, 5.0],
+                [14.0, 5.0],
             ], dtype=np.float32),
         },
-        # Defensive third / goal area (clip_03)
+        # Defensive third / left penalty box (clip_03)
         "broadcast_defensive_third": {
             "src_screen_pct": np.array([
-                [12.0, 88.0],
-                [94.0, 84.0],
-                [84.0, 28.0],
-                [22.0, 30.0],
+                [12.0, 86.0],  # near touchline left (bottom-left)
+                [94.0, 84.0],  # near touchline right (bottom-right)
+                [84.0, 24.0],  # far touchline right (top-right)
+                [22.0, 24.0],  # far touchline left (top-left)
             ], dtype=np.float32),
             "dst_pitch_m": np.array([
-                [2.0, 6.0],
-                [60.0, 6.0],
-                [60.0, 64.0],
-                [2.0, 64.0],
+                [4.0, 63.0],
+                [58.0, 63.0],
+                [58.0, 5.0],
+                [4.0, 5.0],
             ], dtype=np.float32),
         },
-        # Corner kick view (clip_05)
+        # Corner kick / right penalty box view (clip_05)
         "broadcast_corner_kick": {
             "src_screen_pct": np.array([
-                [25.0, 88.0],
-                [92.0, 82.0],
-                [78.0, 28.0],
-                [32.0, 26.0],
+                [15.0, 86.0],  # near touchline left (bottom-left)
+                [92.0, 82.0],  # near touchline right (bottom-right)
+                [78.0, 26.0],  # far touchline right (top-right)
+                [32.0, 24.0],  # far touchline left / corner flag (top-left)
             ], dtype=np.float32),
             "dst_pitch_m": np.array([
-                [75.0, 4.0],
-                [105.0, 4.0],
-                [105.0, 55.0],
-                [75.0, 55.0],
+                [72.0, 60.0],
+                [104.0, 60.0],
+                [104.0, 4.0],
+                [72.0, 4.0],
             ], dtype=np.float32),
         },
     }
@@ -412,9 +413,10 @@ class PlayerVisualFeatures:
     jersey_number_confidence: float = 0.0
     boot_color: str = "unknown"  # "white" | "black" | "pink/orange" | "yellow/volt" | "blue" | "red"
     skin_tone: str = "unknown"   # "fair" | "dark"
-    hair_style: str = "unknown"  # "blonde" | "dark/short" | "bald/buzzed" | "long/band"
+    hair_style: str = "unknown"  # "blonde" | "dark/short" | "bald/buzzed" | "curly_afro"
     is_blonde: bool = False
     is_bald: bool = False
+    is_curly_afro: bool = False
     has_armband: bool = False
     armband_confidence: float = 0.0
 
@@ -427,6 +429,7 @@ class PlayerVisualFeatures:
             "hair_style": self.hair_style,
             "is_blonde": self.is_blonde,
             "is_bald": self.is_bald,
+            "is_curly_afro": self.is_curly_afro,
             "has_armband": self.has_armband,
             "armband_confidence": self.armband_confidence,
         }
@@ -579,22 +582,23 @@ class SignalAVisualExtractor:
         return "white" if med_v > 120 else "black"
 
     @staticmethod
-    def extract_skin_and_hair(patch: np.ndarray) -> Tuple[str, str, bool, bool]:
+    def extract_skin_and_hair(patch: np.ndarray) -> Tuple[str, str, bool, bool, bool]:
         """
         Extracts skin tone and hair features from player patch.
-        Returns (skin_tone, hair_style, is_blonde, is_bald).
+        Returns (skin_tone, hair_style, is_blonde, is_bald, is_curly_afro).
         """
         if patch is None or patch.size == 0:
-            return ("unknown", "unknown", False, False)
+            return ("unknown", "unknown", False, False, False)
 
         ph, pw = patch.shape[:2]
         if ph < 12 or pw < 8:
-            return ("unknown", "unknown", False, False)
+            return ("unknown", "unknown", False, False, False)
 
         skin_tone = "unknown"
         hair_style = "unknown"
         is_blonde = False
         is_bald = False
+        is_curly_afro = False
 
         # 1. Skin tone (head & neck: 8% to 26% of height, central 50% width)
         h_y1 = int(ph * 0.08)
@@ -616,21 +620,27 @@ class SignalAVisualExtractor:
                     else:
                         skin_tone = "dark"
 
-        # 2. Hair (crown: top 0% to 12% of height)
-        c_y2 = max(2, int(ph * 0.12))
-        c_x1 = int(pw * 0.30)
-        c_x2 = int(pw * 0.70)
+        # 2. Hair (crown: top 0% to 14% of height)
+        c_y2 = max(2, int(ph * 0.14))
+        c_x1 = int(pw * 0.20)
+        c_x2 = int(pw * 0.80)
         if c_y2 > 0 and c_x2 > c_x1:
             crown_crop = patch[0:c_y2, c_x1:c_x2]
             if crown_crop.size > 0:
                 c_hsv = cv2.cvtColor(crown_crop, cv2.COLOR_BGR2HSV)
                 non_green_c = ~((c_hsv[:, :, 0] >= 35) & (c_hsv[:, :, 0] <= 85) & (c_hsv[:, :, 1] >= 30))
+                dark_hair_mask = non_green_c & (c_hsv[:, :, 2] < 72)
+                dark_hair_ratio = np.count_nonzero(dark_hair_mask) / float(max(1, crown_crop.shape[0] * crown_crop.shape[1]))
+
                 if np.count_nonzero(non_green_c) >= 3:
                     med_h = float(np.median(c_hsv[non_green_c, 0]))
                     med_s = float(np.median(c_hsv[non_green_c, 1]))
                     med_v = float(np.median(c_hsv[non_green_c, 2]))
 
-                    if 15 <= med_h <= 36 and 25 <= med_s <= 180 and med_v >= 115:
+                    if dark_hair_ratio >= 0.48 and skin_tone == "fair":
+                        is_curly_afro = True
+                        hair_style = "curly_afro"
+                    elif 15 <= med_h <= 36 and 25 <= med_s <= 180 and med_v >= 115:
                         is_blonde = True
                         hair_style = "blonde"
                     elif med_v < 60:
@@ -639,7 +649,7 @@ class SignalAVisualExtractor:
                         is_bald = True
                         hair_style = "bald/buzzed"
 
-        return (skin_tone, hair_style, is_blonde, is_bald)
+        return (skin_tone, hair_style, is_blonde, is_bald, is_curly_afro)
 
     @staticmethod
     def detect_captains_armband(patch: np.ndarray) -> Tuple[bool, float]:
@@ -735,7 +745,7 @@ class SignalAVisualExtractor:
         boot_color = self.extract_boot_color(primary_patch)
 
         # 4. Skin tone and hair features
-        skin_tone, hair_style, is_blonde, is_bald = self.extract_skin_and_hair(primary_patch)
+        skin_tone, hair_style, is_blonde, is_bald, is_curly_afro = self.extract_skin_and_hair(primary_patch)
 
         # 5. Captain's armband detection across patches
         has_armband = False
@@ -754,6 +764,7 @@ class SignalAVisualExtractor:
             hair_style=hair_style,
             is_blonde=is_blonde,
             is_bald=is_bald,
+            is_curly_afro=is_curly_afro,
             has_armband=has_armband,
             armband_confidence=armband_conf,
         )
@@ -1183,8 +1194,10 @@ class LiveSpatialRoleMapper:
 
                 # 4. Hair style match
                 c_hair = str(c_traits.get("hair", "")).lower()
-                if "blonde" in c_hair and vis.is_blonde:
-                    cost -= 4.0
+                if ("curly" in c_hair or "afro" in c_hair or c_traits.get("is_curly_afro")) and vis.is_curly_afro:
+                    cost -= 6.5
+                elif "blonde" in c_hair and vis.is_blonde:
+                    cost -= 5.0
                 elif ("bald" in c_hair or "buzzed" in c_hair) and vis.is_bald:
                     cost -= 4.0
 
