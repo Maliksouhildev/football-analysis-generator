@@ -718,21 +718,20 @@ Return pure JSON:
 
     TIMESTAMPED_PITCH_COORDINATE_TELEMETRY: Dict[str, Dict[str, Any]] = {
         "clip_01": {
-            "ball_carrier_pos": (72.0, 39.5, "away", "Aurélien Tchouaméni"),
+            "ball_carrier_pos": (72.0, 39.5, "away", "Ibrahima Konaté"),
             "players": [
                 # Real Madrid (away) — Period 1 attacking right-to-left (defending right goal)
-                {"x": 72.0, "y": 39.5, "team": "away", "name": "Aurélien Tchouaméni", "short_name": "Tchouaméni (DM)", "role": "DM", "number": 14},
+                {"x": 72.0, "y": 39.5, "team": "away", "name": "Ibrahima Konaté", "short_name": "Konaté (CB)", "role": "CB", "number": 16},
                 {"x": 64.5, "y": 79.6, "team": "away", "name": "Marc Cucurella", "short_name": "Cucurella (LB)", "role": "LB", "number": 17},
                 {"x": 90.1, "y": 57.4, "team": "away", "name": "Antonio Rüdiger", "short_name": "Rüdiger (CB)", "role": "CB", "number": 22},
                 {"x": 95.0, "y": 50.0, "team": "away", "name": "Thibaut Courtois", "short_name": "Courtois (GK)", "role": "GK", "number": 1},
+                {"x": 29.6, "y": 29.7, "team": "away", "name": "Denzel Dumfries", "short_name": "Dumfries (RB)", "role": "RB", "number": 24},
                 {"x": 32.3, "y": 47.7, "team": "away", "name": "Jude Bellingham", "short_name": "Bellingham (AM)", "role": "AM", "number": 5},
-                {"x": 29.6, "y": 29.7, "team": "away", "name": "Vinícius Júnior", "short_name": "Vinícius Jr (LW)", "role": "LW", "number": 7},
                 {"x": 24.8, "y": 38.8, "team": "away", "name": "Kylian Mbappé", "short_name": "Mbappé (CF)", "role": "CF", "number": 10},
                 # AS Roma (home) — Period 1 attacking left-to-right (pressing Real Madrid's defensive box)
-                {"x": 28.5, "y": 24.5, "team": "home", "name": "Nahuel Molina", "short_name": "Molina (RWB)", "role": "RWB", "number": 20},
-                {"x": 12.7, "y": 68.4, "team": "home", "name": "Matías Soulé", "short_name": "Soulé (RW)", "role": "RW", "number": 18},
-                {"x": 19.7, "y": 48.4, "team": "home", "name": "Gianluca Mancini", "short_name": "Mancini (CB)", "role": "CB", "number": 23},
                 {"x": 21.4, "y": 38.8, "team": "home", "name": "Marten de Roon", "short_name": "De Roon (DM)", "role": "DM", "number": 15},
+                {"x": 19.7, "y": 48.4, "team": "home", "name": "Gianluca Mancini", "short_name": "Mancini (CB)", "role": "CB", "number": 23},
+                {"x": 12.7, "y": 68.4, "team": "home", "name": "Matías Soulé", "short_name": "Soulé (RW)", "role": "RW", "number": 18},
                 {"x": 50.4, "y": 53.2, "team": "home", "name": "Donyell Malen", "short_name": "Malen (CF)", "role": "CF", "number": 14},
                 {"x": 55.7, "y": 36.8, "team": "home", "name": "Niccolò Pisilli", "short_name": "Pisilli (CM)", "role": "CM", "number": 61},
             ],
@@ -742,18 +741,18 @@ Return pure JSON:
             "players": [
                 # Real Madrid (away) — Period 1 attacking right-to-left
                 {"x": 53.4, "y": 39.3, "team": "away", "name": "Kylian Mbappé", "short_name": "Mbappé (CF)", "role": "CF", "number": 10},
+                {"x": 72.7, "y": 32.2, "team": "away", "name": "Federico Valverde", "short_name": "Valverde (CM)", "role": "CM", "number": 8},
                 {"x": 34.8, "y": 61.4, "team": "away", "name": "Jude Bellingham", "short_name": "Bellingham (AM)", "role": "AM", "number": 5},
                 {"x": 46.4, "y": 46.1, "team": "away", "name": "Aurélien Tchouaméni", "short_name": "Tchouaméni (DM)", "role": "DM", "number": 14},
                 {"x": 63.1, "y": 82.4, "team": "away", "name": "Marc Cucurella", "short_name": "Cucurella (LB)", "role": "LB", "number": 17},
-                {"x": 72.7, "y": 32.2, "team": "away", "name": "Yan Diomande", "short_name": "Diomande (RW)", "role": "RW", "number": 25},
                 # AS Roma (home) — Period 1 defending left-to-right
+                {"x": 58.6, "y": 38.8, "team": "home", "name": "Paulo Dybala", "short_name": "Dybala (AM)", "role": "AM", "number": 21},
+                {"x": 43.4, "y": 39.6, "team": "home", "name": "Evan Ndicka", "short_name": "Ndicka (CB)", "role": "CB", "number": 5},
+                {"x": 53.9, "y": 33.3, "team": "home", "name": "Marten de Roon", "short_name": "De Roon (DM)", "role": "DM", "number": 15},
                 {"x": 10.1, "y": 60.5, "team": "home", "name": "Gianluca Mancini", "short_name": "Mancini (CB)", "role": "CB", "number": 23},
                 {"x": 14.5, "y": 30.3, "team": "home", "name": "Mario Hermoso", "short_name": "Hermoso (CB)", "role": "CB", "number": 22},
                 {"x": 15.6, "y": 77.7, "team": "home", "name": "Matías Soulé", "short_name": "Soulé (RW)", "role": "RW", "number": 18},
                 {"x": 37.9, "y": 47.1, "team": "home", "name": "Niccolò Pisilli", "short_name": "Pisilli (CM)", "role": "CM", "number": 61},
-                {"x": 43.4, "y": 39.6, "team": "home", "name": "Evan Ndicka", "short_name": "Ndicka (CB)", "role": "CB", "number": 5},
-                {"x": 53.9, "y": 33.3, "team": "home", "name": "Marten de Roon", "short_name": "De Roon (DM)", "role": "DM", "number": 15},
-                {"x": 58.6, "y": 38.8, "team": "home", "name": "Paulo Dybala", "short_name": "Dybala (AM)", "role": "AM", "number": 21},
                 {"x": 69.2, "y": 54.7, "team": "home", "name": "Donyell Malen", "short_name": "Malen (CF)", "role": "CF", "number": 14},
             ],
         },
@@ -768,13 +767,12 @@ Return pure JSON:
                 {"x": 72.8, "y": 44.4, "team": "away", "name": "Aurélien Tchouaméni", "short_name": "Tchouaméni (DM)", "role": "DM", "number": 14},
                 {"x": 80.9, "y": 27.0, "team": "away", "name": "Marc Cucurella", "short_name": "Cucurella (LB)", "role": "LB", "number": 17},
                 {"x": 58.4, "y": 83.2, "team": "away", "name": "Denzel Dumfries", "short_name": "Dumfries (RB)", "role": "RB", "number": 24},
-                # AS Roma (home) — Period 2 pressing high after 45' sub Rodrigo Mora for Dybala
+                # AS Roma (home) — Period 2 pressing high
                 {"x": 25.6, "y": 50.8, "team": "home", "name": "Donyell Malen", "short_name": "Malen (CF)", "role": "CF", "number": 14},
                 {"x": 35.7, "y": 28.7, "team": "home", "name": "Matías Soulé", "short_name": "Soulé (RW)", "role": "RW", "number": 18},
                 {"x": 66.3, "y": 36.3, "team": "home", "name": "Marten de Roon", "short_name": "De Roon (DM)", "role": "DM", "number": 15},
                 {"x": 77.8, "y": 44.6, "team": "home", "name": "Niccolò Pisilli", "short_name": "Pisilli (CM)", "role": "CM", "number": 61},
                 {"x": 89.9, "y": 62.9, "team": "home", "name": "Wesley", "short_name": "Wesley (RWB)", "role": "RWB", "number": 43},
-                {"x": 94.2, "y": 58.6, "team": "home", "name": "Nahuel Molina", "short_name": "Molina (RWB)", "role": "RWB", "number": 20},
             ],
         },
         "clip_04": {
@@ -783,44 +781,39 @@ Return pure JSON:
                 # AS Roma (home) — Period 2 at 50:08 (immediately continuous from Clip 3)
                 {"x": 55.1, "y": 44.7, "team": "home", "name": "Evan Ndicka", "short_name": "Ndicka (CB)", "role": "CB", "number": 5},
                 {"x": 32.7, "y": 52.2, "team": "home", "name": "Rodrigo Mora", "short_name": "Rodrigo Mora (AM)", "role": "AM", "number": 86},
-                {"x": 36.0, "y": 40.3, "team": "home", "name": "Matías Soulé", "short_name": "Soulé (RW)", "role": "RW", "number": 18},
-                {"x": 41.7, "y": 29.1, "team": "home", "name": "Marten de Roon", "short_name": "De Roon (DM)", "role": "DM", "number": 15},
-                {"x": 65.3, "y": 55.7, "team": "home", "name": "Niccolò Pisilli", "short_name": "Pisilli (CM)", "role": "CM", "number": 61},
                 {"x": 66.6, "y": 42.0, "team": "home", "name": "Gianluca Mancini", "short_name": "Mancini (CB)", "role": "CB", "number": 23},
+                {"x": 41.7, "y": 29.1, "team": "home", "name": "Marten de Roon", "short_name": "De Roon (DM)", "role": "DM", "number": 15},
+                {"x": 36.0, "y": 40.3, "team": "home", "name": "Matías Soulé", "short_name": "Soulé (RW)", "role": "RW", "number": 18},
+                {"x": 65.3, "y": 55.7, "team": "home", "name": "Niccolò Pisilli", "short_name": "Pisilli (CM)", "role": "CM", "number": 61},
                 {"x": 79.8, "y": 28.2, "team": "home", "name": "Wesley", "short_name": "Wesley (RWB)", "role": "RWB", "number": 43},
                 {"x": 91.0, "y": 42.4, "team": "home", "name": "Donyell Malen", "short_name": "Malen (CF)", "role": "CF", "number": 14},
-                {"x": 94.2, "y": 58.6, "team": "home", "name": "Nahuel Molina", "short_name": "Molina (RWB)", "role": "RWB", "number": 20},
                 # Real Madrid (away) — Period 2 at 50:08 defending left goal
+                {"x": 70.2, "y": 42.5, "team": "away", "name": "Jude Bellingham", "short_name": "Bellingham (AM)", "role": "AM", "number": 5},
+                {"x": 71.0, "y": 25.6, "team": "away", "name": "Yan Diomande", "short_name": "Diomande (RW)", "role": "RW", "number": 25},
                 {"x": 9.0,  "y": 34.7, "team": "away", "name": "Antonio Rüdiger", "short_name": "Rüdiger (CB)", "role": "CB", "number": 22},
                 {"x": 9.7,  "y": 55.8, "team": "away", "name": "Federico Valverde", "short_name": "Valverde (CM)", "role": "CM", "number": 8},
                 {"x": 26.4, "y": 26.2, "team": "away", "name": "Marc Cucurella", "short_name": "Cucurella (LB)", "role": "LB", "number": 17},
                 {"x": 51.3, "y": 46.3, "team": "away", "name": "Aurélien Tchouaméni", "short_name": "Tchouaméni (DM)", "role": "DM", "number": 14},
-                {"x": 51.0, "y": 59.2, "team": "away", "name": "Jude Bellingham", "short_name": "Bellingham (AM)", "role": "AM", "number": 5},
-                {"x": 70.2, "y": 42.5, "team": "away", "name": "Yan Diomande", "short_name": "Diomande (RW)", "role": "RW", "number": 25},
-                {"x": 71.0, "y": 25.6, "team": "away", "name": "Vinícius Júnior", "short_name": "Vinícius Jr (LW)", "role": "LW", "number": 7},
-                {"x": 78.0, "y": 73.9, "team": "away", "name": "Denzel Dumfries", "short_name": "Dumfries (RB)", "role": "RB", "number": 24},
                 {"x": 85.4, "y": 44.5, "team": "away", "name": "Kylian Mbappé", "short_name": "Mbappé (CF)", "role": "CF", "number": 10},
             ],
         },
         "clip_05": {
-            "ball_carrier_pos": (36.8, 29.1, "away", "Álvaro Carreras"),
+            "ball_carrier_pos": (36.8, 29.1, "away", "Kylian Mbappé"),
             "players": [
                 # Real Madrid (away) — Period 2 at 81:56 short corner
-                {"x": 36.8, "y": 29.1, "team": "away", "name": "Álvaro Carreras", "short_name": "Carreras (LB)", "role": "LB", "number": 18},
+                {"x": 36.8, "y": 29.1, "team": "away", "name": "Kylian Mbappé", "short_name": "Mbappé (CF)", "role": "CF", "number": 10},
                 {"x": 24.5, "y": 38.7, "team": "away", "name": "Arda Güler", "short_name": "Arda Güler (RW)", "role": "RW", "number": 15},
-                {"x": 15.1, "y": 67.1, "team": "away", "name": "Ibrahima Konaté", "short_name": "Konaté (CB)", "role": "CB", "number": 16},
+                {"x": 15.1, "y": 67.1, "team": "away", "name": "Antonio Rüdiger", "short_name": "Rüdiger (CB)", "role": "CB", "number": 22},
+                {"x": 53.1, "y": 61.0, "team": "away", "name": "Carlos Espí", "short_name": "Carlos Espí (ST)", "role": "ST", "number": 19},
                 {"x": 35.3, "y": 57.9, "team": "away", "name": "Jude Bellingham", "short_name": "Bellingham (AM)", "role": "AM", "number": 5},
                 {"x": 35.0, "y": 75.1, "team": "away", "name": "Federico Valverde", "short_name": "Valverde (CM)", "role": "CM", "number": 8},
-                {"x": 53.1, "y": 61.0, "team": "away", "name": "Carlos Espí", "short_name": "Carlos Espí (ST)", "role": "ST", "number": 19},
                 {"x": 61.4, "y": 56.4, "team": "away", "name": "Endrick", "short_name": "Endrick (CF)", "role": "CF", "number": 9},
                 # AS Roma (home) — Period 2 at 81:56 defending box
-                {"x": 37.5, "y": 40.0, "team": "home", "name": "Wesley", "short_name": "Wesley (RWB)", "role": "RWB", "number": 43},
+                {"x": 65.4, "y": 66.1, "team": "home", "name": "Konstantinos Koulierakis", "short_name": "Koulierakis (CB)", "role": "CB", "number": 3},
+                {"x": 54.2, "y": 57.1, "team": "home", "name": "Evan Ndicka", "short_name": "Ndicka (CB)", "role": "CB", "number": 5},
+                {"x": 54.9, "y": 47.2, "team": "home", "name": "Marten de Roon", "short_name": "De Roon (DM)", "role": "DM", "number": 15},
                 {"x": 37.8, "y": 57.0, "team": "home", "name": "Rodrigo Mora", "short_name": "Rodrigo Mora (AM)", "role": "AM", "number": 86},
                 {"x": 45.1, "y": 42.4, "team": "home", "name": "Lorenzo Pellegrini", "short_name": "Pellegrini (AM)", "role": "AM", "number": 7},
-                {"x": 54.9, "y": 47.2, "team": "home", "name": "Marten de Roon", "short_name": "De Roon (DM)", "role": "DM", "number": 15},
-                {"x": 54.2, "y": 57.1, "team": "home", "name": "Evan Ndicka", "short_name": "Ndicka (CB)", "role": "CB", "number": 5},
-                {"x": 65.4, "y": 66.1, "team": "home", "name": "Konstantinos Koulierakis", "short_name": "Koulierakis (CB)", "role": "CB", "number": 3},
-                {"x": 68.0, "y": 72.0, "team": "home", "name": "Nahuel Molina", "short_name": "Molina (RWB)", "role": "RWB", "number": 20},
             ],
         },
     }
@@ -879,6 +872,13 @@ Return pure JSON:
                 # Slight bonus if team classification already matches
                 tr_team = str(tr.get("team", "")).lower()
                 tr_jc = str(tr.get("jersey_class", "")).upper()
+                # Strict Kit Firewall: Never cross-match home/away teams
+                if tr_team and tr_team != eteam:
+                    continue
+                if eteam == "away" and tr_jc in ("TEAM_HOME", "TEAM_RED"):
+                    continue
+                if eteam == "home" and tr_jc in ("TEAM_AWAY", "TEAM_WHITE"):
+                    continue
                 if tr_team == eteam or (eteam == "away" and tr_jc in ("TEAM_AWAY", "TEAM_WHITE")) or (eteam == "home" and tr_jc in ("TEAM_HOME", "TEAM_RED")):
                     d -= 1.0
                 if d < best_dist:

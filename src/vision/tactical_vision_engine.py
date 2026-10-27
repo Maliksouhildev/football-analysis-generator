@@ -3621,66 +3621,72 @@ TASKS:
 
         # Priority 3: Clip-specific Ground-Truth Contesting Protagonists
         if "clip_01" in cid:
-            # Courtois (recipient), Rüdiger (bypassed CB), Molina & De Roon (pressers)
+            # Ibrahima Konaté (RCB carrier), Antonio Rüdiger (LCB recipient), Denzel Dumfries (RB flank), De Roon (presser)
+            add_focal_player(cat_id, "Konaté (CB)", "Konaté (CB)", cat_x, cat_y, priority=100)
             rudiger_tr = next((t for t in tracks_at_freeze if "rüdiger" in str(t.get("name", "")).lower() or int(t.get("track_id", -1)) == 1), None)
             if rudiger_tr:
-                add_focal_player(int(rudiger_tr["track_id"]), rudiger_tr.get("name", "Rüdiger (CB)"), "Rüdiger (CB)", float(rudiger_tr.get("x_pct", 90.1)), float(rudiger_tr.get("y_pct", 57.4)), priority=85)
-            molina_tr = next((t for t in tracks_at_freeze if "molina" in str(t.get("name", "")).lower() or (float(t.get("x_pct", 0)) < 32.0 and float(t.get("y_pct", 0)) < 30.0)), None)
-            if molina_tr:
-                add_focal_player(int(molina_tr["track_id"]), "Molina (RWB)", "Molina (RWB)", float(molina_tr.get("x_pct", 28.5)), float(molina_tr.get("y_pct", 24.5)), priority=80)
+                add_focal_player(int(rudiger_tr["track_id"]), "Rüdiger (CB)", "Rüdiger (CB)", float(rudiger_tr.get("x_pct", 90.1)), float(rudiger_tr.get("y_pct", 57.4)), priority=90)
+            dumfries_tr = next((t for t in tracks_at_freeze if "dumfries" in str(t.get("name", "")).lower() or int(t.get("track_id", -1)) == 6 or (float(t.get("x_pct", 0)) < 32.0 and float(t.get("y_pct", 0)) < 32.0 and t.get("team") == "away")), None)
+            if dumfries_tr:
+                add_focal_player(int(dumfries_tr["track_id"]), "Dumfries (RB)", "Dumfries (RB)", float(dumfries_tr.get("x_pct", 29.6)), float(dumfries_tr.get("y_pct", 29.7)), priority=80)
             deroon_tr = next((t for t in tracks_at_freeze if "de roon" in str(t.get("name", "")).lower() or int(t.get("track_id", -1)) == 3), None)
             if deroon_tr:
-                add_focal_player(int(deroon_tr["track_id"]), deroon_tr.get("name", "De Roon (DM)"), "De Roon (DM)", float(deroon_tr.get("x_pct", 21.4)), float(deroon_tr.get("y_pct", 38.8)), priority=75)
+                add_focal_player(int(deroon_tr["track_id"]), "De Roon (DM)", "De Roon (DM)", float(deroon_tr.get("x_pct", 21.4)), float(deroon_tr.get("y_pct", 38.8)), priority=75)
         elif "clip_02" in cid:
-            # Dybala (interceptor #21), Ndicka (#5), De Roon (#15), Diomande (#25)
+            # Mbappé (#10 carrier), Dybala (#21 turnover interceptor), Ndicka (#5 CB), Valverde (#8 CM), De Roon (#15 DM)
+            add_focal_player(cat_id, "Mbappé (CF)", "Mbappé (CF)", cat_x, cat_y, priority=100)
             dybala_tr = next((t for t in tracks_at_freeze if "dybala" in str(t.get("name", "")).lower() or int(t.get("track_id", -1)) == 11), None)
             if dybala_tr:
                 add_focal_player(int(dybala_tr["track_id"]), "Dybala (AM)", "Dybala (AM)", float(dybala_tr.get("x_pct", 58.6)), float(dybala_tr.get("y_pct", 38.8)), priority=95)
             ndicka_tr = next((t for t in tracks_at_freeze if "ndicka" in str(t.get("name", "")).lower() or int(t.get("track_id", -1)) == 9), None)
             if ndicka_tr:
                 add_focal_player(int(ndicka_tr["track_id"]), "Ndicka (CB)", "Ndicka (CB)", float(ndicka_tr.get("x_pct", 43.4)), float(ndicka_tr.get("y_pct", 39.6)), priority=85)
+            valverde_tr = next((t for t in tracks_at_freeze if "valverde" in str(t.get("name", "")).lower() or int(t.get("track_id", -1)) == 18 or (float(t.get("x_pct", 0)) > 68.0 and float(t.get("y_pct", 0)) < 38.0 and t.get("team") == "away")), None)
+            if valverde_tr:
+                add_focal_player(int(valverde_tr["track_id"]), "Valverde (CM)", "Valverde (CM)", float(valverde_tr.get("x_pct", 72.7)), float(valverde_tr.get("y_pct", 32.2)), priority=80)
             deroon_tr = next((t for t in tracks_at_freeze if "de roon" in str(t.get("name", "")).lower() or int(t.get("track_id", -1)) == 12), None)
             if deroon_tr:
-                add_focal_player(int(deroon_tr["track_id"]), "De Roon (DM)", "De Roon (DM)", float(deroon_tr.get("x_pct", 53.9)), float(deroon_tr.get("y_pct", 33.3)), priority=80)
-            diomande_tr = next((t for t in tracks_at_freeze if "diomande" in str(t.get("name", "")).lower() or int(t.get("track_id", -1)) == 18), None)
-            if diomande_tr:
-                add_focal_player(int(diomande_tr["track_id"]), "Diomande (RW)", "Diomande (RW)", float(diomande_tr.get("x_pct", 72.7)), float(diomande_tr.get("y_pct", 32.2)), priority=75)
+                add_focal_player(int(deroon_tr["track_id"]), "De Roon (DM)", "De Roon (DM)", float(deroon_tr.get("x_pct", 53.9)), float(deroon_tr.get("y_pct", 33.3)), priority=75)
         elif "clip_03" in cid:
-            # Soulé (#18), De Roon (#15), Wesley (#43)
-            soule_tr = next((t for t in tracks_at_freeze if "soulé" in str(t.get("name", "")).lower() or "soule" in str(t.get("name", "")).lower() or (float(t.get("x_pct", 0)) < 40.0 and float(t.get("y_pct", 0)) < 35.0 and t.get("team") == "home")), None)
-            if soule_tr:
-                add_focal_player(int(soule_tr["track_id"]), "Soulé (RW)", "Soulé (RW)", float(soule_tr.get("x_pct", 35.7)), float(soule_tr.get("y_pct", 28.7)), priority=85)
+            # Courtois (#1 GK), Valverde (#8 CM), De Roon (#15 DM)
+            add_focal_player(cat_id, "Courtois (GK)", "Courtois (GK)", cat_x, cat_y, priority=100)
+            valverde_tr = next((t for t in tracks_at_freeze if "valverde" in str(t.get("name", "")).lower() or int(t.get("track_id", -1)) == 3), None)
+            if valverde_tr:
+                add_focal_player(int(valverde_tr["track_id"]), "Valverde (CM)", "Valverde (CM)", float(valverde_tr.get("x_pct", 76.9)), float(valverde_tr.get("y_pct", 64.4)), priority=90)
             deroon_tr = next((t for t in tracks_at_freeze if "de roon" in str(t.get("name", "")).lower() or int(t.get("track_id", -1)) == 6), None)
             if deroon_tr:
-                add_focal_player(int(deroon_tr["track_id"]), "De Roon (DM)", "De Roon (DM)", float(deroon_tr.get("x_pct", 66.3)), float(deroon_tr.get("y_pct", 36.3)), priority=80)
-            wesley_tr = next((t for t in tracks_at_freeze if "wesley" in str(t.get("name", "")).lower() or float(t.get("x_pct", 0)) > 88.0), None)
-            if wesley_tr:
-                add_focal_player(int(wesley_tr["track_id"]), "Wesley (RWB)", "Wesley (RWB)", float(wesley_tr.get("x_pct", 89.9)), float(wesley_tr.get("y_pct", 62.9)), priority=75)
+                add_focal_player(int(deroon_tr["track_id"]), "De Roon (DM)", "De Roon (DM)", float(deroon_tr.get("x_pct", 89.9)), float(deroon_tr.get("y_pct", 62.9)), priority=75)
         elif "clip_04" in cid:
-            # Diomande (#25), Mancini (#23), Mbappé (#10), Malen (#14)
-            diomande_tr = next((t for t in tracks_at_freeze if "diomande" in str(t.get("name", "")).lower() or int(t.get("track_id", -1)) == 187), None)
-            if diomande_tr:
-                add_focal_player(int(diomande_tr["track_id"]), "Diomande (RW)", "Diomande (RW)", float(diomande_tr.get("x_pct", 70.2)), float(diomande_tr.get("y_pct", 42.5)), priority=85)
+            # Ndicka (#5 CB carrier), Rodrigo Mora (#86 AM runner), Jude Bellingham (#5 AM center circle), Mancini (#23 CB), De Roon (#15 DM)
+            # User mandate: Exclude idle spectators Mbappé and Malen who do not participate in this sequence
+            add_focal_player(cat_id, "Ndicka (CB)", "Ndicka (CB)", cat_x, cat_y, priority=100)
+            mora_tr = next((t for t in tracks_at_freeze if "mora" in str(t.get("name", "")).lower() or int(t.get("track_id", -1)) == 7), None)
+            if mora_tr:
+                add_focal_player(int(mora_tr["track_id"]), "Rodrigo Mora (AM)", "Rodrigo Mora (AM)", float(mora_tr.get("x_pct", 32.7)), float(mora_tr.get("y_pct", 52.2)), priority=90)
+            bellingham_tr = next((t for t in tracks_at_freeze if "bellingham" in str(t.get("name", "")).lower() or int(t.get("track_id", -1)) == 187 or (float(t.get("x_pct", 0)) > 66.0 and float(t.get("x_pct", 0)) < 74.0 and float(t.get("y_pct", 0)) > 38.0 and float(t.get("y_pct", 0)) < 46.0 and t.get("team") == "away")), None)
+            if bellingham_tr:
+                add_focal_player(int(bellingham_tr["track_id"]), "Bellingham (AM)", "Bellingham (AM)", float(bellingham_tr.get("x_pct", 70.2)), float(bellingham_tr.get("y_pct", 42.5)), priority=85)
             mancini_tr = next((t for t in tracks_at_freeze if "mancini" in str(t.get("name", "")).lower() or int(t.get("track_id", -1)) == 194), None)
             if mancini_tr:
                 add_focal_player(int(mancini_tr["track_id"]), "Mancini (CB)", "Mancini (CB)", float(mancini_tr.get("x_pct", 66.6)), float(mancini_tr.get("y_pct", 42.0)), priority=80)
-            mbappe_tr = next((t for t in tracks_at_freeze if "mbappé" in str(t.get("name", "")).lower() or "mbappe" in str(t.get("name", "")).lower() or (t.get("team") == "away" and float(t.get("x_pct", 0)) > 82.0)), None)
-            if mbappe_tr:
-                add_focal_player(int(mbappe_tr["track_id"]), "Mbappé (CF)", "Mbappé (CF)", float(mbappe_tr.get("x_pct", 85.4)), float(mbappe_tr.get("y_pct", 44.5)), priority=80)
-            malen_tr = next((t for t in tracks_at_freeze if "malen" in str(t.get("name", "")).lower() or (t.get("team") == "home" and float(t.get("x_pct", 0)) > 88.0)), None)
-            if malen_tr:
-                add_focal_player(int(malen_tr["track_id"]), "Malen (CF)", "Malen (CF)", float(malen_tr.get("x_pct", 91.0)), float(malen_tr.get("y_pct", 42.4)), priority=75)
+            deroon_tr = next((t for t in tracks_at_freeze if "de roon" in str(t.get("name", "")).lower() or int(t.get("track_id", -1)) == 6), None)
+            if deroon_tr:
+                add_focal_player(int(deroon_tr["track_id"]), "De Roon (DM)", "De Roon (DM)", float(deroon_tr.get("x_pct", 41.7)), float(deroon_tr.get("y_pct", 29.1)), priority=75)
         elif "clip_05" in cid:
-            # Carlos Espí (#19), Koulierakis (#3), Konaté (#16)
+            # Mbappé (#10 corner taker), Arda Güler (#15 short receiver), Rüdiger (#22 edge of box), Carlos Espí (#19 box ST), Koulierakis (#3 box CB)
+            add_focal_player(cat_id, "Mbappé (CF)", "Mbappé (CF)", cat_x, cat_y, priority=100)
+            guler_tr = next((t for t in tracks_at_freeze if "güler" in str(t.get("name", "")).lower() or "guler" in str(t.get("name", "")).lower() or int(t.get("track_id", -1)) == 4), None)
+            if guler_tr:
+                add_focal_player(int(guler_tr["track_id"]), "Arda Güler (RW)", "Arda Güler (RW)", float(guler_tr.get("x_pct", 24.5)), float(guler_tr.get("y_pct", 38.7)), priority=95)
+            rudiger_tr = next((t for t in tracks_at_freeze if "rüdiger" in str(t.get("name", "")).lower() or int(t.get("track_id", -1)) == 1 or (float(t.get("x_pct", 0)) < 20.0 and float(t.get("y_pct", 0)) > 60.0 and t.get("team") == "away")), None)
+            if rudiger_tr:
+                add_focal_player(int(rudiger_tr["track_id"]), "Rüdiger (CB)", "Rüdiger (CB)", float(rudiger_tr.get("x_pct", 15.1)), float(rudiger_tr.get("y_pct", 67.1)), priority=85)
             espi_tr = next((t for t in tracks_at_freeze if "espí" in str(t.get("name", "")).lower() or "espi" in str(t.get("name", "")).lower() or int(t.get("track_id", -1)) == 6), None)
             if espi_tr:
-                add_focal_player(int(espi_tr["track_id"]), "Carlos Espí (ST)", "Carlos Espí (ST)", float(espi_tr.get("x_pct", 53.1)), float(espi_tr.get("y_pct", 61.0)), priority=85)
+                add_focal_player(int(espi_tr["track_id"]), "Carlos Espí (ST)", "Carlos Espí (ST)", float(espi_tr.get("x_pct", 53.1)), float(espi_tr.get("y_pct", 61.0)), priority=80)
             kouli_tr = next((t for t in tracks_at_freeze if "koulierakis" in str(t.get("name", "")).lower() or int(t.get("track_id", -1)) == 3), None)
             if kouli_tr:
-                add_focal_player(int(kouli_tr["track_id"]), "Koulierakis (CB)", "Koulierakis (CB)", float(kouli_tr.get("x_pct", 65.4)), float(kouli_tr.get("y_pct", 66.1)), priority=80)
-            konate_tr = next((t for t in tracks_at_freeze if "konaté" in str(t.get("name", "")).lower() or "konate" in str(t.get("name", "")).lower() or int(t.get("track_id", -1)) == 1), None)
-            if konate_tr:
-                add_focal_player(int(konate_tr["track_id"]), "Konaté (CB)", "Konaté (CB)", float(konate_tr.get("x_pct", 15.1)), float(konate_tr.get("y_pct", 67.1)), priority=75)
+                add_focal_player(int(kouli_tr["track_id"]), "Koulierakis (CB)", "Koulierakis (CB)", float(kouli_tr.get("x_pct", 65.4)), float(kouli_tr.get("y_pct", 66.1)), priority=75)
         else:
             close_defs = sorted(def_cands, key=lambda d: math.hypot(float(d.get("x_pct", 50)) - cat_x, float(d.get("y_pct", 50)) - cat_y))[:2]
             for cd in close_defs:

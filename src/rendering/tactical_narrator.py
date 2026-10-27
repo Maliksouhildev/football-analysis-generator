@@ -659,17 +659,17 @@ class TacticalNarrator:
                 },
                 "beat_3_effect": f"{cat_name} and {target_spoken} work the short corner to manufacture a superior crossing angle.",
             }
-        elif "clip_01" in cid_clean or ("courtois" in thesis_lower and "tchouaméni" in thesis_lower):
+        elif "clip_01" in cid_clean or "konaté" in thesis_lower or ("courtois" in thesis_lower and "tchouaméni" in thesis_lower):
             return {
                 "beat_1_setup": f"{att_team} face intense high pressing inside their defensive third.",
-                "beat_2_cause": f"{cat_name} draws {def_team}'s forward press before lifting a composed aerial back-pass to Thibaut Courtois to reset possession safely.",
+                "beat_2_cause": f"{cat_name} draws {def_team}'s forward press before lifting a composed aerial back-pass to Antonio Rüdiger to reset possession safely.",
                 "beat_2_steps": {
                     "step_1": f"{cat_name} controls under heavy pressure.",
                     "step_2": f"{def_team} commits numbers forward to press.",
-                    "step_3": "The safety passing lane to the keeper opens.",
-                    "step_4": f"{cat_name} lofts the safety back-pass to Courtois.",
+                    "step_3": "The safety passing lane to Rüdiger opens.",
+                    "step_4": f"{cat_name} lofts the safety back-pass to Rüdiger.",
                 },
-                "beat_3_effect": "Courtois catches cleanly inside his own penalty box, completely diffusing the high press.",
+                "beat_3_effect": "Rüdiger collects cleanly inside his own penalty box, completely diffusing the high press.",
             }
         elif "clip_02" in cid_clean or ("ndicka" in thesis_lower and "mbappé" in thesis_lower):
             return {

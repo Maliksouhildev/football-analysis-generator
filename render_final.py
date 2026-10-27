@@ -212,11 +212,11 @@ def main():
         }
 
         clip_theses = {
-            "clip_01_left_wing": "Real Madrid escaping AS Roma's high press through Aurélien Tchouaméni lofting a composed safety back-pass to Thibaut Courtois",
-            "clip_02_zone_14": "AS Roma pressing trap in Zone 14 as Kylian Mbappé attempts central progression before Evan Ndicka intercepts to trigger turnover",
+            "clip_01_left_wing": "Real Madrid escaping AS Roma's high press through Ibrahima Konaté lofting a composed safety back-pass to Antonio Rüdiger",
+            "clip_02_zone_14": "AS Roma pressing trap in Zone 14 as Kylian Mbappé attempts central progression before Evan Ndicka and Paulo Dybala intercept to trigger turnover",
             "clip_03_defensive_third": "Thibaut Courtois deep build-up inviting AS Roma's high press and launching a diagonal aerial pass to Federico Valverde",
-            "clip_04_central": "AS Roma central transition through Evan Ndicka releasing Rodrigo Mora between Real Madrid's lines",
-            "clip_05_right_wing": "Real Madrid short corner combination with Álvaro Carreras playing a one-two with Arda Güler before whipping a cross into the box",
+            "clip_04_central": "AS Roma central transition through Evan Ndicka releasing Rodrigo Mora between Real Madrid's lines while Jude Bellingham contests in midfield",
+            "clip_05_right_wing": "Real Madrid short corner combination with Kylian Mbappé playing a one-two with Arda Güler before whipping a cross into the box for Carlos Espí",
         }
         ew = {
             "clip_id": cid,
