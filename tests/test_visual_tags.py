@@ -119,5 +119,79 @@ class TestVisualCueTagsAndHUD(unittest.TestCase):
         self.assertEqual(len(deserialized), len(tags))
 
 
+    def test_extract_cue_tags_no_duplicate_name_at_end(self):
+        raw = "Watch Tchouaméni as he steps up [highlight:Tchouaméni]."
+        clean, tags = TacticalNarrator.extract_cue_tags(raw)
+        self.assertEqual(clean, "Watch Tchouaméni as he steps up.")
+        self.assertEqual(clean.count("Tchouaméni"), 1)
+        self.assertEqual(len(tags), 1)
+        self.assertEqual(tags[0]["type"], "highlight")
+
+    def test_extract_cue_tags_no_duplicate_name_at_start(self):
+        raw = "[highlight:Mbappé] Mbappé attacks the channel with lethal speed."
+        clean, tags = TacticalNarrator.extract_cue_tags(raw)
+        self.assertEqual(clean, "Mbappé attacks the channel with lethal speed.")
+        self.assertEqual(clean.count("Mbappé"), 1)
+        self.assertEqual(len(tags), 1)
+
+    def test_extract_cue_tags_noun_preservation(self):
+        raw = "Watch [highlight:Konaté] as he turns in the pocket."
+        clean, tags = TacticalNarrator.extract_cue_tags(raw)
+        self.assertEqual(clean, "Watch Konaté as he turns in the pocket.")
+        self.assertEqual(len(tags), 1)
+        self.assertEqual(tags[0]["target"], "Konaté")
+
+    def test_extract_cue_tags_number_and_role_suppression(self):
+        raw = "Watch the progression [highlight:#16] into midfield."
+        clean, tags = TacticalNarrator.extract_cue_tags(raw)
+        self.assertNotIn("#16", clean)
+        self.assertNotIn("[", clean)
+        self.assertEqual(len(tags), 1)
+        self.assertEqual(tags[0]["target"], "#16")
+
+    def test_match_stats_provider_role_resolution(self):
+        cdm_stats = self.stats_provider.get_player_stats("cdm", team_hint="Real Madrid")
+        self.assertIsNotNone(cdm_stats)
+        self.assertEqual(cdm_stats["playerName"], "Aurélien Tchouaméni")
+
+        gk_stats = self.stats_provider.get_player_stats("goalkeeper", team_hint="Real Madrid")
+        self.assertIsNotNone(gk_stats)
+        self.assertEqual(gk_stats["playerName"], "Thibaut Courtois")
+
+    def test_match_stats_provider_online_fetch(self):
+        modric_stats = self.stats_provider.get_player_stats("Luka Modrić")
+        self.assertIsNotNone(modric_stats)
+        self.assertIn("Modri", modric_stats["playerName"])
+        self.assertEqual(modric_stats["position"], "MID")
+        self.assertIn("heatmap", modric_stats)
+
+    def test_ensure_clip_visual_cue_tags_populates_all_cues(self):
+        from render_final import ensure_clip_visual_cue_tags
+        mock_sc = {
+            "clip_id": "clip_01_left_wing",
+            "cause_frame_idx": 80,
+            "cause_telestration": {
+                "catalyst_player": {"name": "Ibrahima Konaté"},
+                "runner_player": {"name": "Thibaut Courtois"},
+                "vectors": [{"type": "PASS_OPTION_DASHED"}],
+            },
+            "beats": {
+                "beat_1_setup": {"text": "Moving buildup"},
+                "beat_2_cause": {"text": "Composed pass", "freeze_frames": 150},
+                "beat_3_effect": {"text": "Play restarts"},
+            },
+        }
+        tags = ensure_clip_visual_cue_tags(mock_sc, mock_sc, "clip_01_left_wing")
+        self.assertTrue(len(tags) >= 2)
+        types = [t["type"] for t in tags]
+        self.assertIn("highlight", types)
+        self.assertIn("stat_card", types)
+        # Verify player stats are attached
+        stat_tag = next(t for t in tags if t["type"] == "stat_card")
+        self.assertIsNotNone(stat_tag.get("player_stats"))
+        self.assertEqual(stat_tag["player_stats"]["playerName"], "Ibrahima Konaté")
+
+
 if __name__ == "__main__":
     unittest.main()
+

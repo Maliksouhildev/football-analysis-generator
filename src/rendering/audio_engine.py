@@ -400,10 +400,10 @@ class AudioEngine:
             t["offset_ms"] = int(round(frac * dur_2_ms))
             local_f = int(round(frac * beat_2_duration_sec * actual_fps))
             t["start_frame"] = cause_frame_idx + local_f
-            if t["type"] in ("candidate_passes", "pass_options", "run_vectors", "vectors"):
+            if t["type"] in ("candidate_passes", "pass_options", "run_vectors", "vectors", "player_runs"):
                 t["duration_frames"] = max(30, (cause_frame_idx + freeze_frames) - t["start_frame"])
                 t["end_frame"] = cause_frame_idx + freeze_frames
-            elif "stat" in t["type"] or "sofascore" in t["type"]:
+            elif any(k in t["type"] for k in ("stat", "sofascore", "heatmap", "average_position", "position")):
                 t["duration_frames"] = 90
                 t["end_frame"] = min(cause_frame_idx + freeze_frames, t["start_frame"] + t["duration_frames"])
             else:

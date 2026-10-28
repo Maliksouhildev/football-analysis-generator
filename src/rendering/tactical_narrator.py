@@ -40,6 +40,8 @@ Event Telemetry Context:
   * Attacking Shape / Overload: {triangle_info}
   * Key Players In Spotlight: {focal_info}
   * Ball Carrier / Catalyst In Focus: {catalyst_info}
+- Available Match Telemetry & SofaScore Stats:
+{player_telemetry_context}
 
 TASK:
 Write exactly 3 distinct spoken voiceover commentary beats in valid JSON format.
@@ -74,12 +76,12 @@ CRITICAL BROADCAST RULES:
 6. Output ONLY the valid JSON object.
 7. When referring to the ball carrier or tactical actors, use their verified name ({catalyst_info}, etc.) rather than generic placeholder words ('BALL CARRIER'). Never invent or hallucinate players outside the verified roster.
 8. For corner kicks (CORNER_SET_PIECE) and deep buildup (DEEP_BUILDUP_PROGRESSION), focus on box marking/delivery zone or passing structure vs first pressing line, and NEVER claim a shot or goal conversion when none occurred.
-9. VISUAL CUE TAGS (CRITICAL):
+9. VISUAL CUE TAGS & TELEMETRY CUES (CRITICAL):
    You MUST inject inline visual cue tags at the precise moments visual elements should appear:
    - [candidate_passes]: Insert when discussing possible passing directions or alternative avenues (e.g. "options open out wide [candidate_passes]"). By default, pass options are hidden and will only appear when this tag is spoken!
    - [run_vectors]: Insert when describing off-ball runs or pressing movements (e.g. "watch the pressing run [run_vectors] behind the defense").
-   - [highlight:<PlayerName>]: Insert whenever naming or analyzing a player (e.g. "[highlight:Konaté] holds possession"). They will be spotlighted with an animated glowing beam and elevated badge.
-   - [stat_card:<PlayerName>] or [sofascore:<PlayerName>]: Insert when analyzing a player's match rating, passing percentage, duels, or performance (e.g. "[stat_card:Konaté] completing 93% of his passes today"). This triggers their authentic SofaScore HUD and heatmap at the bottom of the screen.
+   - [highlight:<PlayerName|#Number|Role>]: Insert whenever naming or analyzing a player (e.g. "[highlight:Konaté] holds possession" or "[highlight:#16]" or "[highlight:CDM]"). They will be spotlighted with an animated glowing beam and elevated badge.
+   - [stat_card:<PlayerName>], [sofascore:<PlayerName>], [heatmap:<PlayerName>], or [average_position:<PlayerName>]: Insert when analyzing a player's match rating, passing percentage, duels, heatmap, or average position (e.g. "[stat_card:Konaté] completing 93% of his passes today"). This triggers their authentic SofaScore HUD and pitch heatmap at the bottom of the screen.
 """
 
 CANONICAL_PROMPT_TEMPLATE = """You are a World-Class UEFA Champions League Tactical Video Analyst for live television broadcast (in the style of Jamie Carragher and Thierry Henry on CBS Sports).
@@ -119,8 +121,9 @@ class TacticalNarrator:
         """
         Extracts tactical visual cue tags like [candidate_passes], [highlight:Konaté], [stat_card:Konaté].
         Returns (cleaned_spoken_text, cue_tags_list).
-        For [highlight:Player], if the player name is not already spoken immediately before or after,
-        it is preserved in the spoken text so voiceover commentary remains grammatically complete.
+        For [highlight:Player], if the player name is used directly as the grammatical noun in place of
+        the tag (i.e. not already spoken in the surrounding sentence or upcoming clause), it is preserved
+        so voiceover commentary remains grammatically complete without stuttering or name duplication.
         """
         if not raw_text or not isinstance(raw_text, str):
             return "", []
@@ -132,8 +135,11 @@ class TacticalNarrator:
         clean_parts: List[str] = []
         current_char_offset = 0
 
-        for match in tag_pattern.finditer(raw_text):
+        raw_matches = list(tag_pattern.finditer(raw_text))
+
+        for idx, match in enumerate(raw_matches):
             preceding_text = raw_text[last_end:match.start()]
+            following_text = raw_text[match.end():(raw_matches[idx + 1].start() if idx + 1 < len(raw_matches) else len(raw_text))]
             clean_parts.append(preceding_text)
             current_char_offset += len(preceding_text)
 
@@ -150,15 +156,25 @@ class TacticalNarrator:
                 "raw": match.group(0),
             })
 
-            # For [highlight:Player], preserve player name in spoken text if not already present
+            # For [highlight:Player], preserve player name ONLY if not already present in surrounding context
             if tag_type in ("highlight", "player") and tag_param:
-                clean_prev = preceding_text.strip().lower()
-                clean_target = tag_param.strip().lower()
-                target_words = [w for w in re.split(r'\s+', clean_target) if len(w) > 2]
-                already_spoken = any(tw in clean_prev.split()[-2:] for tw in target_words) if clean_prev else False
-                if not already_spoken:
-                    clean_parts.append(tag_param)
-                    current_char_offset += len(tag_param)
+                # Do not insert pure numbers (#16) or role abbreviations (CB) as spoken nouns
+                is_number_or_role = bool(re.match(r'^#?\d+$', tag_param)) or (len(tag_param) <= 3 and tag_param.upper() in ("CB", "LB", "RB", "GK", "CDM", "CM", "CAM", "RW", "LW", "ST", "CF"))
+                if not is_number_or_role:
+                    clean_target = re.sub(r'[^a-zA-Z0-9\s]', '', tag_param.lower())
+                    target_words = [w for w in clean_target.split() if len(w) >= 3]
+
+                    # Check preceding 10 words
+                    prev_words = [re.sub(r'[^a-zA-Z0-9]', '', w.lower()) for w in preceding_text.split()[-10:]]
+                    already_in_prev = any(tw in prev_words for tw in target_words) if target_words else False
+
+                    # Check following 6 words
+                    foll_words = [re.sub(r'[^a-zA-Z0-9]', '', w.lower()) for w in following_text.split()[:6]]
+                    already_in_foll = any(tw in foll_words for tw in target_words) if target_words else False
+
+                    if not already_in_prev and not already_in_foll:
+                        clean_parts.append(tag_param)
+                        current_char_offset += len(tag_param)
 
             last_end = match.end()
 
@@ -372,6 +388,35 @@ class TacticalNarrator:
         cleaned_cat = re.sub(r'[\(\[\/].*?[\)\]\/]', '', raw_cat).strip()
         catalyst_info = cleaned_cat if cleaned_cat and cleaned_cat.upper() not in ("BALL CARRIER", "CARRIER") else "The ball carrier"
 
+        from src.rendering.match_stats_provider import MatchStatsProvider
+        stats_provider = MatchStatsProvider()
+
+        telemetry_lines: List[str] = []
+        if catalyst_info and catalyst_info.upper() not in ("THE BALL CARRIER", "BALL CARRIER"):
+            cat_stats = stats_provider.get_player_stats(catalyst_info)
+            if cat_stats:
+                stats_str = ", ".join(f"{k}: {v}" for k, v in list(cat_stats.get("stats", {}).items())[:3])
+                hm = cat_stats.get("heatmap", {})
+                telemetry_lines.append(
+                    f"  * {cat_stats.get('playerName')} (#{cat_stats.get('number')}, {cat_stats.get('role')}): "
+                    f"SofaScore Rating {cat_stats.get('rating')}, Key Stats: [{stats_str}], Heatmap: {hm.get('zone', 'Central Zone')} (avg pos: x={hm.get('avg_x')}%, y={hm.get('avg_y')}%)"
+                )
+
+        runner_p = cause_telestration.get("runner_player") or {}
+        raw_runner = str(runner_p.get("name") or runner_p.get("name_pos") or "").strip()
+        runner_info = re.sub(r'[\(\[\/].*?[\)\]\/]', '', raw_runner).strip()
+        if runner_info and runner_info.upper() not in ("RUNNER", "THIRD-MAN RUNNER"):
+            run_stats = stats_provider.get_player_stats(runner_info)
+            if run_stats:
+                stats_str = ", ".join(f"{k}: {v}" for k, v in list(run_stats.get("stats", {}).items())[:3])
+                hm = run_stats.get("heatmap", {})
+                telemetry_lines.append(
+                    f"  * {run_stats.get('playerName')} (#{run_stats.get('number')}, {run_stats.get('role')}): "
+                    f"SofaScore Rating {run_stats.get('rating')}, Key Stats: [{stats_str}], Heatmap: {hm.get('zone', 'Attacking Corridor')} (avg pos: x={hm.get('avg_x')}%, y={hm.get('avg_y')}%)"
+                )
+
+        player_telemetry_context = "\n".join(telemetry_lines) if telemetry_lines else "  * Dynamic match statistics and SofaScore ratings available via [stat_card:<Player>] or [heatmap:<Player>]."
+
         prompt = PROMPT_3BEAT_TEMPLATE.format(
             home_team=home,
             away_team=away,
@@ -386,6 +431,7 @@ class TacticalNarrator:
             triangle_info=triangle_info,
             focal_info=focal_info,
             catalyst_info=catalyst_info,
+            player_telemetry_context=player_telemetry_context,
         )
 
         parts: list[dict[str, Any]] = []

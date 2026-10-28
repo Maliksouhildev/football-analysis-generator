@@ -11,6 +11,7 @@ import subprocess
 import time
 import urllib.request
 import sys
+import re
 import numpy as np
 
 
@@ -123,6 +124,167 @@ def realign_cause_telestration(cause_tel: dict, tracks_per_frame: dict, freeze_f
         homographies=homographies,
     )
     tracks_per_frame[f_key] = tracks_at_freeze
+
+
+def ensure_clip_visual_cue_tags(sc: dict, vis: dict, cid: str) -> list:
+    """
+    Guarantees that every clip segment has authentic, enriched visual cue tags
+    (candidate passes, run vectors, player highlights, and SofaScore HUD cards).
+    """
+    from src.rendering.match_stats_provider import MatchStatsProvider
+    from src.rendering.tactical_narrator import TacticalNarrator
+    stats_provider = MatchStatsProvider()
+
+    beats = sc.get("beats") or {}
+    raw_tags = beats.get("visual_cue_tags") or sc.get("visual_cue_tags")
+    if isinstance(raw_tags, list) and len(raw_tags) > 0:
+        for t in raw_tags:
+            tgt = t.get("target") or t.get("player_name")
+            if tgt and not t.get("player_stats"):
+                t["player_stats"] = stats_provider.get_player_stats(tgt)
+        return raw_tags
+
+    narrator = TacticalNarrator()
+    extracted_tags = []
+    fps = 30
+    K = sc.get("cause_frame_idx", 66)
+    f_frames = beats.get("beat_2_cause", {}).get("freeze_frames", 150) if isinstance(beats, dict) else 150
+
+    b1_text = beats.get("beat_1_setup", {}).get("raw_text") or beats.get("beat_1_setup", {}).get("text", "") if isinstance(beats, dict) else ""
+    b2_text = beats.get("beat_2_cause", {}).get("raw_text") or beats.get("beat_2_cause", {}).get("text", "") if isinstance(beats, dict) else ""
+    b3_text = beats.get("beat_3_effect", {}).get("raw_text") or beats.get("beat_3_effect", {}).get("text", "") if isinstance(beats, dict) else ""
+
+    _, t1 = narrator.extract_cue_tags(b1_text)
+    _, t2 = narrator.extract_cue_tags(b2_text)
+    _, t3 = narrator.extract_cue_tags(b3_text)
+
+    dur1 = beats.get("beat_1_setup", {}).get("duration_sec", 2.0) if isinstance(beats, dict) else 2.0
+    dur2 = beats.get("beat_2_cause", {}).get("duration_sec", 6.0) if isinstance(beats, dict) else 6.0
+    dur3 = beats.get("beat_3_effect", {}).get("duration_sec", 3.0) if isinstance(beats, dict) else 3.0
+
+    for t in t1:
+        frac = (t["word_index"] / max(1, t.get("total_words", 1)))
+        t["start_frame"] = int(round(frac * dur1 * fps))
+        t["duration_frames"] = 75
+        t["end_frame"] = t["start_frame"] + t["duration_frames"]
+        t["beat"] = "beat_1_setup"
+        extracted_tags.append(t)
+
+    for t in t2:
+        frac = (t["word_index"] / max(1, t.get("total_words", 1)))
+        local_f = int(round(frac * dur2 * fps))
+        t["start_frame"] = K + local_f
+        if t["type"] in ("candidate_passes", "pass_options", "run_vectors", "vectors", "player_runs"):
+            t["duration_frames"] = max(30, (K + f_frames) - t["start_frame"])
+            t["end_frame"] = K + f_frames
+        elif any(k in t["type"] for k in ("stat", "sofascore", "heatmap", "average_position")):
+            t["duration_frames"] = 90
+            t["end_frame"] = min(K + f_frames, t["start_frame"] + t["duration_frames"])
+        else:
+            t["duration_frames"] = 75
+            t["end_frame"] = min(K + f_frames, t["start_frame"] + t["duration_frames"])
+        t["beat"] = "beat_2_cause"
+        extracted_tags.append(t)
+
+    b3_start = K + f_frames
+    for t in t3:
+        frac = (t["word_index"] / max(1, t.get("total_words", 1)))
+        local_f = int(round(frac * dur3 * fps))
+        t["start_frame"] = b3_start + local_f
+        t["duration_frames"] = 75
+        t["end_frame"] = t["start_frame"] + t["duration_frames"]
+        t["beat"] = "beat_3_effect"
+        extracted_tags.append(t)
+
+    if extracted_tags:
+        for t in extracted_tags:
+            tgt = t.get("target") or t.get("player_name")
+            if tgt:
+                p_stats = stats_provider.get_player_stats(tgt)
+                if p_stats:
+                    t["player_stats"] = p_stats
+                    t["player_name"] = p_stats.get("playerName")
+                    t["player_number"] = p_stats.get("number")
+                    t["player_role"] = p_stats.get("role")
+        return extracted_tags
+
+    # Fallback to generating authentic visual cue tags for the tactical scenario
+    c_tel = vis.get("cause_telestration") or sc.get("cause_telestration") or {}
+    cat_player = c_tel.get("catalyst_player") or {}
+    cat_name = cat_player.get("name") or "The ball carrier"
+    cat_clean = re.sub(r'[\(\[\/].*?[\)\]\/]', '', cat_name).strip()
+
+    run_player = c_tel.get("runner_player") or {}
+    run_name = run_player.get("name") or ""
+    run_clean = re.sub(r'[\(\[\/].*?[\)\]\/]', '', run_name).strip()
+
+    default_tags = []
+    if cat_clean and cat_clean.upper() not in ("BALL CARRIER", "CARRIER"):
+        default_tags.append({
+            "type": "highlight",
+            "target": cat_clean,
+            "start_frame": max(0, K - 15),
+            "duration_frames": 75,
+            "end_frame": K + 60,
+            "player_name": cat_clean,
+            "beat": "beat_1_setup",
+        })
+
+    vecs = c_tel.get("vectors") or []
+    has_pass_opts = any(v.get("type") == "PASS_OPTION_DASHED" for v in vecs) or c_tel.get("pass_vector")
+    if has_pass_opts:
+        default_tags.append({
+            "type": "candidate_passes",
+            "target": "pass_options",
+            "start_frame": K + 15,
+            "duration_frames": max(45, f_frames - 15),
+            "end_frame": K + f_frames,
+            "beat": "beat_2_cause",
+        })
+
+    has_runs = any(v.get("type") in ("PRESSING_RUN", "PRESSING_ARROW", "PLAYER_RUN_DASHED") for v in vecs)
+    if has_runs:
+        default_tags.append({
+            "type": "run_vectors",
+            "target": "run_vectors",
+            "start_frame": K + 20,
+            "duration_frames": max(45, f_frames - 20),
+            "end_frame": K + f_frames,
+            "beat": "beat_2_cause",
+        })
+
+    target_stats_name = cat_clean if cat_clean and cat_clean.upper() not in ("BALL CARRIER", "CARRIER") else (run_clean or "Konaté")
+    p_stats = stats_provider.get_player_stats(target_stats_name)
+    if p_stats:
+        default_tags.append({
+            "type": "stat_card",
+            "target": target_stats_name,
+            "start_frame": K + 25,
+            "duration_frames": 90,
+            "end_frame": min(K + f_frames, K + 115),
+            "player_stats": p_stats,
+            "player_name": p_stats.get("playerName"),
+            "player_number": p_stats.get("number"),
+            "player_role": p_stats.get("role"),
+            "beat": "beat_2_cause",
+        })
+
+    if run_clean and run_clean.upper() not in ("RUNNER", "THIRD-MAN RUNNER"):
+        default_tags.append({
+            "type": "highlight",
+            "target": run_clean,
+            "start_frame": K + 40,
+            "duration_frames": 70,
+            "end_frame": K + 110,
+            "player_name": run_clean,
+            "beat": "beat_2_cause",
+        })
+
+    for t in default_tags:
+        if not t.get("player_stats") and t.get("target"):
+            t["player_stats"] = stats_provider.get_player_stats(t["target"])
+
+    return default_tags
 
 
 def main():
@@ -335,6 +497,12 @@ def main():
         cid = sc.get("clip_id", f"clip_{s_idx+1:02d}")
         beats = sc.get("beats", {})
 
+        # Ensure visual cue tags are enriched with match telemetry
+        cue_tags = ensure_clip_visual_cue_tags(sc, sc, cid)
+        sc["visual_cue_tags"] = cue_tags
+        if isinstance(beats, dict):
+            beats["visual_cue_tags"] = cue_tags
+
         # Ensure beat audio URLs are populated with HTTP endpoints for Remotion container
         if beats:
             for b_name in ("beat_1_setup", "beat_2_cause", "beat_3_effect"):
@@ -535,8 +703,8 @@ def main():
             "ball_carrier_per_frame": cause_tel.get("ball_carrier_per_frame", {}),
             "team_colors": sc.get("team_colors", {"home_hex": "#8a1529", "away_hex": "#ffffff"}),
             "beats": beats,
-            "visual_cue_tags": beats.get("visual_cue_tags", []) if isinstance(beats, dict) else [],
-            "visualCueTags": beats.get("visual_cue_tags", []) if isinstance(beats, dict) else [],
+            "visual_cue_tags": cue_tags,
+            "visualCueTags": cue_tags,
         }
         active_segments.append(seg)
         current_time += seg_dur
