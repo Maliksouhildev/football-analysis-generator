@@ -1499,8 +1499,8 @@ TASKS:
                 is_c = (int(t.get("track_id", -1)) == best_carrier_id)
                 t["is_ball_carrier"] = is_c
                 if is_c:
-                    t["color"] = "#00e5ff"  # Primary blue spotlight
-                    t["showBeam"] = True
+                    t["color"] = "#ffffff"  # Clean broadcast white
+                    t["showBeam"] = False
                     t["showRing"] = True
 
         logger.info(
@@ -3038,9 +3038,9 @@ TASKS:
         carrier["name_pos"] = carrier_name
         carrier["label"] = carrier_name
         carrier["name"] = carrier_name
-        carrier["showBeam"] = True
+        carrier["showBeam"] = False
         carrier["showRing"] = True
-        carrier["color"] = "#00e5ff"  # Primary blue spotlight on active physical ball carrier
+        carrier["color"] = "#ffffff"  # Broadcast white ground ring
 
         cause_tel["catalyst_player"] = {
             "track_id": cat_id,
@@ -3593,8 +3593,8 @@ TASKS:
                 tm_y = float(tm.get("y_pct", 50.0))
                 d_to_carrier = math.hypot(tm_x - cat_x, tm_y - cat_y)
                 d_to_target = math.hypot(tm_x - executed_target_x, tm_y - executed_target_y)
-                # Exclude if receiver of executed pass
-                if d_to_target <= 7.0 and runner_id is not None and tm_id == runner_id:
+                # Exclude if receiver of executed pass (by distance to landing target or matching runner_id)
+                if d_to_target <= 8.5 or (runner_id is not None and tm_id == runner_id):
                     continue
                 if 8.0 <= d_to_carrier <= 65.0:
                     viable_teammates.append((d_to_carrier, tm))
@@ -3647,25 +3647,22 @@ TASKS:
                 dx = cat_x - px
                 dy = cat_y - py
                 d = math.hypot(dx, dy) or 1.0
-                press_len = min(d * 0.70, 14.0)
-                p_to_x = px + (dx / d) * press_len
-                p_to_y = py + (dy / d) * press_len
 
-                # Collinear offset against pass vector to prevent overlapping stacking
+                # Suppress head-on collinear opposing pressing runs that clash with the pass vector
                 if has_pass_v and p_plen > 1e-3:
                     pux, puy = p_pdx / p_plen, p_pdy / p_plen
                     vux, vuy = dx / d, dy / d
-                    align = abs(pux * vux + puy * vuy)
-                    if align >= 0.82:
-                        pnx, pny = -puy, pux
-                        dist_perp = abs((px - p_fx) * pnx + (py - p_fy) * pny)
-                        if dist_perp < 3.5:
-                            sign = 1.0 if ((px - p_fx) * pnx + (py - p_fy) * pny) >= 0 else -1.0
-                            shift_mag = 2.6
-                            px += pnx * shift_mag * sign
-                            py += pny * shift_mag * sign * 0.35
-                            p_to_x += pnx * shift_mag * sign
-                            p_to_y += pny * shift_mag * sign * 0.35
+                    dot = pux * vux + puy * vuy
+                    dist_to_target = math.hypot(px - p_tx, py - p_ty)
+                    pnx, pny = -puy, pux
+                    dist_perp = abs((px - p_fx) * pnx + (py - p_fy) * pny)
+
+                    if dist_to_target <= 7.5 or (dot <= -0.65 and dist_perp < 4.0):
+                        continue
+
+                press_len = min(d * 0.70, 14.0)
+                p_to_x = px + (dx / d) * press_len
+                p_to_y = py + (dy / d) * press_len
 
                 p_name = p.get("name") or p.get("name_pos") or "PRESSER"
                 pressing_run_vectors.append({
@@ -4231,7 +4228,7 @@ TASKS:
                     is_c = (int(tr.get("track_id", -1)) == c_tid)
                     tr["is_ball_carrier"] = is_c
                     if is_c:
-                        tr["color"] = "#00e5ff"
+                        tr["color"] = "#ffffff"
                         tr["showRing"] = True
 
         return timeline
@@ -4902,13 +4899,13 @@ TASKS:
                     tr["number"] = ""
                     is_corner_session = "corner" in str(clip_id).lower() or bool(cause_telestration.get("is_set_piece")) or str(cause_telestration.get("sequence_type")) == "CORNER_KICK"
                     if tid == cat_id:
-                        tr["showBeam"] = True
+                        tr["showBeam"] = False
                         tr["showRing"] = True
-                        tr["color"] = "#00e5ff"  # Primary blue spotlight for carrier / corner taker
+                        tr["color"] = "#ffffff"  # Broadcast white spotlight for carrier / corner taker
                     elif is_corner_session and tid == run_pid:
                         tr["showBeam"] = False
                         tr["showRing"] = True
-                        tr["color"] = "#00e5ff"
+                        tr["color"] = "#ffffff"
                     else:
                         tr["showBeam"] = False
                 else:
