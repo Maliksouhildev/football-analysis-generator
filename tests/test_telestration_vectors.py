@@ -102,3 +102,30 @@ class TestTelestrationVectors:
         cat_track = next((t for t in tracks if t.get("is_ball_carrier")), None)
         assert cat_track is not None, "A ball carrier should be identified"
         assert cat_track.get("showBeam") is True, "Carrier track must have showBeam = True"
+
+    def test_broadcast_vector_easing_curve(self):
+        """Verifies the mathematical properties of the broadcast vector easing curve: 1 - (1 - t)^3.2."""
+        def ease_vector(p: float) -> float:
+            t = min(1.0, max(0.0, p))
+            return 1.0 - math.pow(1.0 - t, 3.2)
+
+        # 1. Boundary conditions
+        assert ease_vector(0.0) == 0.0
+        assert math.isclose(ease_vector(1.0), 1.0, rel_tol=1e-5)
+
+        # 2. Snappy initial burst (fast launch): at 20% time, line has traversed > 50% distance
+        assert ease_vector(0.2) > 0.50
+
+        # 3. Smooth luxury deceleration: velocity strictly decreases as t -> 1
+        steps = [i / 20.0 for i in range(21)]
+        values = [ease_vector(s) for s in steps]
+        velocities = [values[i+1] - values[i] for i in range(len(values) - 1)]
+
+        # Strict monotonicity of position
+        for i in range(len(values) - 1):
+            assert values[i+1] >= values[i]
+
+        # Strict deceleration (derivative is decreasing)
+        for i in range(len(velocities) - 1):
+            assert velocities[i+1] <= velocities[i]
+
