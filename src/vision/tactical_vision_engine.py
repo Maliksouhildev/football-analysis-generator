@@ -3533,7 +3533,7 @@ TASKS:
                 "landing_target_pct": [round(p_to[0], 1), round(p_to[1], 1)],
                 "arc_height_pct": 20.0,
                 "was_taken": True,
-                "color": "#00e5ff",
+                "color": "#ffffff",
             }
             cause_tel["pass_vector"] = {
                 "type": "GROUND_PASS_SOLID",
@@ -3542,7 +3542,7 @@ TASKS:
                 "from_y": round(launch_pt[1], 1),
                 "to_x": round(p_to[0], 1),
                 "to_y": round(p_to[1], 1),
-                "color": "#00e5ff",
+                "color": "#ffffff",
             }
 
             # Derive runner run vector from actual future frames compensated for camera pan
@@ -3624,23 +3624,55 @@ TASKS:
             ]
             close_defenders.sort(key=lambda d: math.hypot(float(d.get("x_pct", 50.0)) - cat_x, float(d.get("y_pct", 50.0)) - cat_y))
 
+            existing_press_arrow_ids = {int(a.get("from_track_id", -999)) for a in cause_tel.get("pressing_arrows", []) if isinstance(a, dict)}
             active_press_ids = []
+            pass_v = cause_tel.get("pass_vector") or {}
+            has_pass_v = pass_v.get("from_x") is not None and pass_v.get("to_x") is not None
+            p_fx = float(pass_v.get("from_x", 0)) if has_pass_v else 0.0
+            p_fy = float(pass_v.get("from_y", 0)) if has_pass_v else 0.0
+            p_tx = float(pass_v.get("to_x", 0)) if has_pass_v else 0.0
+            p_ty = float(pass_v.get("to_y", 0)) if has_pass_v else 0.0
+            p_pdx = p_tx - p_fx
+            p_pdy = p_ty - p_fy
+            p_plen = math.hypot(p_pdx, p_pdy)
+
             for p in close_defenders[:3]:
                 pid = int(p.get("track_id", -1))
+                if pid in existing_press_arrow_ids:
+                    # Deduplicate: Avoid generating both PRESSING_ARROW and PRESSING_RUN for the same defender
+                    continue
+
                 px = float(p.get("x_pct", 50.0))
                 py = float(p.get("y_pct", 50.0))
                 dx = cat_x - px
                 dy = cat_y - py
                 d = math.hypot(dx, dy) or 1.0
                 press_len = min(d * 0.70, 14.0)
-                p_to_x = round(px + (dx / d) * press_len, 1)
-                p_to_y = round(py + (dy / d) * press_len, 1)
+                p_to_x = px + (dx / d) * press_len
+                p_to_y = py + (dy / d) * press_len
+
+                # Collinear offset against pass vector to prevent overlapping stacking
+                if has_pass_v and p_plen > 1e-3:
+                    pux, puy = p_pdx / p_plen, p_pdy / p_plen
+                    vux, vuy = dx / d, dy / d
+                    align = abs(pux * vux + puy * vuy)
+                    if align >= 0.82:
+                        pnx, pny = -puy, pux
+                        dist_perp = abs((px - p_fx) * pnx + (py - p_fy) * pny)
+                        if dist_perp < 3.5:
+                            sign = 1.0 if ((px - p_fx) * pnx + (py - p_fy) * pny) >= 0 else -1.0
+                            shift_mag = 2.6
+                            px += pnx * shift_mag * sign
+                            py += pny * shift_mag * sign * 0.35
+                            p_to_x += pnx * shift_mag * sign
+                            p_to_y += pny * shift_mag * sign * 0.35
+
                 p_name = p.get("name") or p.get("name_pos") or "PRESSER"
                 pressing_run_vectors.append({
                     "type": "PRESSING_RUN",
                     "from_track_id": pid,
                     "from_pct": [round(px, 1), round(py, 1)],
-                    "to_pct": [p_to_x, p_to_y],
+                    "to_pct": [round(p_to_x, 1), round(p_to_y, 1)],
                     "name_pos": p_name,
                     "color": def_color,
                     "is_pressing": True,
