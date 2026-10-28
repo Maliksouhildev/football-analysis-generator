@@ -85,3 +85,20 @@ class TestTelestrationVectors:
             if v.get("type") == "PRESSING_RUN" and int(v.get("from_track_id", -1)) == 12:
                 assert abs(v["from_pct"][0] - 53.9) < 0.1, f"Expected from_pct X 53.9, got {v['from_pct'][0]}"
                 assert abs(v["from_pct"][1] - 33.3) < 0.1, f"Expected from_pct Y 33.3, got {v['from_pct'][1]}"
+
+    def test_carrier_beacon_enabled_for_still_images(self):
+        """Verifies that the catalyst/carrier has showBeam enabled for still-image beacon rendering."""
+        cause_tel = {}
+        tracks = [
+            {"track_id": 10, "x_pct": 72.0, "y_pct": 39.5, "team": "away"},
+        ]
+        ctx = {"clip_id": "clip_01_left_wing"}
+        TacticalVisionEngine.sanitize_v3_telestration(
+            cause_tel=cause_tel,
+            tracks_at_freeze=tracks,
+            clip_id="clip_01_left_wing",
+            event_context=ctx,
+        )
+        cat_track = next((t for t in tracks if t.get("is_ball_carrier")), None)
+        assert cat_track is not None, "A ball carrier should be identified"
+        assert cat_track.get("showBeam") is True, "Carrier track must have showBeam = True"

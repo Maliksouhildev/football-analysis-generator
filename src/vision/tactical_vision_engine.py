@@ -1500,7 +1500,7 @@ TASKS:
                 t["is_ball_carrier"] = is_c
                 if is_c:
                     t["color"] = "#ffffff"  # Clean broadcast white
-                    t["showBeam"] = False
+                    t["showBeam"] = True  # Animated beacon on still images
                     t["showRing"] = True
 
         logger.info(
@@ -3038,7 +3038,7 @@ TASKS:
         carrier["name_pos"] = carrier_name
         carrier["label"] = carrier_name
         carrier["name"] = carrier_name
-        carrier["showBeam"] = False
+        carrier["showBeam"] = True
         carrier["showRing"] = True
         carrier["color"] = "#ffffff"  # Broadcast white ground ring
 
@@ -4899,7 +4899,7 @@ TASKS:
                     tr["number"] = ""
                     is_corner_session = "corner" in str(clip_id).lower() or bool(cause_telestration.get("is_set_piece")) or str(cause_telestration.get("sequence_type")) == "CORNER_KICK"
                     if tid == cat_id:
-                        tr["showBeam"] = False
+                        tr["showBeam"] = True
                         tr["showRing"] = True
                         tr["color"] = "#ffffff"  # Broadcast white spotlight for carrier / corner taker
                     elif is_corner_session and tid == run_pid:
