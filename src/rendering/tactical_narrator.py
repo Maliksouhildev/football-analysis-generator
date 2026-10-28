@@ -21,7 +21,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("rendering.tactical_narrator")
 
@@ -74,6 +74,12 @@ CRITICAL BROADCAST RULES:
 6. Output ONLY the valid JSON object.
 7. When referring to the ball carrier or tactical actors, use their verified name ({catalyst_info}, etc.) rather than generic placeholder words ('BALL CARRIER'). Never invent or hallucinate players outside the verified roster.
 8. For corner kicks (CORNER_SET_PIECE) and deep buildup (DEEP_BUILDUP_PROGRESSION), focus on box marking/delivery zone or passing structure vs first pressing line, and NEVER claim a shot or goal conversion when none occurred.
+9. VISUAL CUE TAGS (CRITICAL):
+   You MUST inject inline visual cue tags at the precise moments visual elements should appear:
+   - [candidate_passes]: Insert when discussing possible passing directions or alternative avenues (e.g. "options open out wide [candidate_passes]"). By default, pass options are hidden and will only appear when this tag is spoken!
+   - [run_vectors]: Insert when describing off-ball runs or pressing movements (e.g. "watch the pressing run [run_vectors] behind the defense").
+   - [highlight:<PlayerName>]: Insert whenever naming or analyzing a player (e.g. "[highlight:Konaté] holds possession"). They will be spotlighted with an animated glowing beam and elevated badge.
+   - [stat_card:<PlayerName>] or [sofascore:<PlayerName>]: Insert when analyzing a player's match rating, passing percentage, duels, or performance (e.g. "[stat_card:Konaté] completing 93% of his passes today"). This triggers their authentic SofaScore HUD and heatmap at the bottom of the screen.
 """
 
 CANONICAL_PROMPT_TEMPLATE = """You are a World-Class UEFA Champions League Tactical Video Analyst for live television broadcast (in the style of Jamie Carragher and Thierry Henry on CBS Sports).
@@ -107,6 +113,66 @@ class TacticalNarrator:
         self._circuit_open = False
         self._circuit_opened_at = 0.0
         self._cooldown = 120.0
+
+    @staticmethod
+    def extract_cue_tags(raw_text: str) -> Tuple[str, List[Dict[str, Any]]]:
+        """
+        Extracts tactical visual cue tags like [candidate_passes], [highlight:Konaté], [stat_card:Konaté].
+        Returns (cleaned_spoken_text, cue_tags_list).
+        For [highlight:Player], if the player name is not already spoken immediately before or after,
+        it is preserved in the spoken text so voiceover commentary remains grammatically complete.
+        """
+        if not raw_text or not isinstance(raw_text, str):
+            return "", []
+
+        tag_pattern = re.compile(r'\[([a-zA-Z0-9_]+)(?::([^\]]+))?\]')
+        tags: List[Dict[str, Any]] = []
+
+        last_end = 0
+        clean_parts: List[str] = []
+        current_char_offset = 0
+
+        for match in tag_pattern.finditer(raw_text):
+            preceding_text = raw_text[last_end:match.start()]
+            clean_parts.append(preceding_text)
+            current_char_offset += len(preceding_text)
+
+            tag_type = match.group(1).lower().strip()
+            tag_param = match.group(2).strip() if match.group(2) else ""
+
+            words_before = len("".join(clean_parts).split())
+
+            tags.append({
+                "type": tag_type,
+                "target": tag_param,
+                "char_offset": current_char_offset,
+                "word_index": words_before,
+                "raw": match.group(0),
+            })
+
+            # For [highlight:Player], preserve player name in spoken text if not already present
+            if tag_type in ("highlight", "player") and tag_param:
+                clean_prev = preceding_text.strip().lower()
+                clean_target = tag_param.strip().lower()
+                target_words = [w for w in re.split(r'\s+', clean_target) if len(w) > 2]
+                already_spoken = any(tw in clean_prev.split()[-2:] for tw in target_words) if clean_prev else False
+                if not already_spoken:
+                    clean_parts.append(tag_param)
+                    current_char_offset += len(tag_param)
+
+            last_end = match.end()
+
+        clean_parts.append(raw_text[last_end:])
+        cleaned = re.sub(r'\s+([.,!?;:])', r'\1', "".join(clean_parts))
+        cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+
+        final_words = cleaned.split()
+        total_words = len(final_words)
+        for t in tags:
+            t["total_words"] = total_words
+            t["word_index"] = min(t["word_index"], total_words)
+
+        return cleaned, tags
 
     def generate_3beat_script(
         self,
@@ -190,6 +256,12 @@ class TacticalNarrator:
                 )
                 if beats and all(k in beats for k in ("beat_1_setup", "beat_2_cause", "beat_3_effect")):
                     logger.info("Successfully generated 3-beat script via Gemini 3.8 Flash.")
+                    all_text = f"{beats.get('beat_1_setup', '')} {beats.get('beat_2_cause', '')} {beats.get('beat_3_effect', '')}"
+                    if "[" not in all_text or "]" not in all_text:
+                        cat_info = tel.get("catalyst_player") or {}
+                        cat_n = cat_info.get("name") or cat_info.get("name_pos") or "The ball carrier"
+                        cat_clean = re.sub(r"\s*\([^)]*\)", "", str(cat_n)).strip()
+                        beats["beat_2_cause"] = f"[highlight:{cat_clean}] {beats['beat_2_cause']} [candidate_passes] [run_vectors] [stat_card:{cat_clean}]"
                     return self._inject_real_names(beats, tel)
             except Exception as e:
                 logger.warning(f"Live Gemini 3-beat generation failed: {e}. Tripping circuit breaker.")
@@ -649,76 +721,89 @@ class TacticalNarrator:
         if is_corner:
             target_spoken = run_name or "Arda Güler"
             return {
-                "beat_1_setup": f"{att_team} set up a short corner routine with {cat_name}.",
-                "beat_2_cause": f"Instead of crossing aerially, {cat_name} plays short along the ground to {target_spoken} to create a two-versus-one overload near the flag.",
+                "beat_1_setup": f"{att_team} work a sharp short corner routine with [highlight:{cat_name}].",
+                "beat_2_cause": f"[highlight:{cat_name}] plays short along the ground to [highlight:{target_spoken}]. [candidate_passes] [run_vectors] Space opens for the whipped cross targeting [highlight:Carlos Espí] inside the box.",
                 "beat_2_steps": {
-                    "step_1": f"{cat_name} addresses the corner kick.",
+                    "step_1": f"[highlight:{cat_name}] addresses the corner kick.",
                     "step_2": f"{def_team} defends the six-yard box.",
-                    "step_3": f"{target_spoken} drops into the short pocket.",
-                    "step_4": f"{cat_name} plays short pass to {target_spoken}.",
+                    "step_3": f"[candidate_passes] [highlight:{target_spoken}] drops into the short pocket.",
+                    "step_4": f"[stat_card:{cat_name}] Short pass executed to create superior crossing angle.",
                 },
-                "beat_3_effect": f"{cat_name} and {target_spoken} work the short corner to manufacture a superior crossing angle.",
+                "beat_3_effect": f"[highlight:{cat_name}] and [highlight:{target_spoken}] manufacture a dangerous crossing opportunity.",
             }
         elif "clip_01" in cid_clean or "konaté" in thesis_lower or ("courtois" in thesis_lower and "tchouaméni" in thesis_lower):
             return {
-                "beat_1_setup": f"{att_team} face intense high pressing inside their defensive third.",
-                "beat_2_cause": f"{cat_name} draws {def_team}'s forward press which suffocates forward passing lanes, before executing a composed safety back-pass to Thibaut Courtois to reset possession safely.",
+                "beat_1_setup": f"{att_team} under heavy pressure as [highlight:{cat_name}] controls deep.",
+                "beat_2_cause": f"[highlight:{cat_name}] draws {def_team}'s forward press. With central lanes blocked, [candidate_passes] safe options appear. [stat_card:{cat_name}] Konaté plays a composed back-pass to [highlight:Thibaut Courtois].",
                 "beat_2_steps": {
-                    "step_1": f"{cat_name} controls under heavy pressure.",
+                    "step_1": f"[highlight:{cat_name}] controls under heavy pressure.",
                     "step_2": f"{def_team} commits numbers forward to press and close passing lanes.",
-                    "step_3": "The safety passing lane to Courtois opens.",
-                    "step_4": f"{cat_name} plays the safety back-pass to Courtois.",
+                    "step_3": f"[candidate_passes] The safety passing lane to Courtois opens.",
+                    "step_4": f"[stat_card:{cat_name}] Konaté plays the safety back-pass to [highlight:Thibaut Courtois].",
                 },
-                "beat_3_effect": "Courtois collects cleanly inside his own penalty box, completely diffusing the high press.",
+                "beat_3_effect": f"[highlight:Thibaut Courtois] collects cleanly inside his own penalty box, completely diffusing the high press.",
             }
         elif "clip_02" in cid_clean or ("ndicka" in thesis_lower and "mbappé" in thesis_lower):
             return {
-                "beat_1_setup": f"{att_team} drive centrally toward Zone 14.",
-                "beat_2_cause": f"{cat_name} attacks the central corridor looking to poke a pass through, but Evan Ndicka steps in decisively to intercept.",
+                "beat_1_setup": f"[highlight:{cat_name}] drives centrally toward Zone 14.",
+                "beat_2_cause": f"[highlight:{cat_name}] probes the corridor as [candidate_passes] passing angles tighten. [run_vectors] [highlight:Evan Ndicka] steps in decisively to clamp the turnover.",
                 "beat_2_steps": {
-                    "step_1": f"{cat_name} receives in the final third.",
+                    "step_1": f"[highlight:{cat_name}] receives in the final third.",
                     "step_2": f"{def_team} central block holds firm.",
-                    "step_3": "Evan Ndicka reads the passing vector.",
-                    "step_4": "Ndicka intercepts cleanly to win possession.",
+                    "step_3": f"[candidate_passes] [run_vectors] Evan Ndicka reads the passing vector.",
+                    "step_4": f"[stat_card:Evan Ndicka] Ndicka intercepts cleanly to win possession.",
                 },
-                "beat_3_effect": f"{def_team} recover possession through Ndicka's intervention to launch an immediate counter.",
+                "beat_3_effect": f"[highlight:Evan Ndicka] recovers possession through his intervention to launch an immediate counter.",
             }
         elif is_gk_buildup or is_aerial:
-            target_spoken = run_name or "Valverde"
+            target_spoken = run_name or "Vinícius Júnior"
             return {
-                "beat_1_setup": f"{cat_name} initiates deep build up under pressure.",
-                "beat_2_cause": f"{cat_name} calmly invites {def_team}'s high press before clipping a measured diagonal delivery toward {target_spoken}.",
+                "beat_1_setup": f"[highlight:{cat_name}] surveys the pitch from deep under pressure.",
+                "beat_2_cause": f"Roma's high press suffocates the backline. [stat_card:{cat_name}] [highlight:{cat_name}] bypasses the trap, launching a measured aerial delivery [run_vectors] toward [highlight:{target_spoken}].",
                 "beat_2_steps": {
-                    "step_1": f"{cat_name} calmly invites {def_team}'s press.",
+                    "step_1": f"[highlight:{cat_name}] calmly invites {def_team}'s press.",
                     "step_2": f"{def_team} front line presses aggressively.",
-                    "step_3": f"{target_spoken} finds space on the far side.",
-                    "step_4": f"{cat_name} lifts diagonal aerial pass.",
+                    "step_3": f"[run_vectors] {target_spoken} finds space on the far side.",
+                    "step_4": f"[stat_card:{cat_name}] Courtois lifts diagonal aerial pass.",
                 },
-                "beat_3_effect": f"The lofted delivery finds {target_spoken} in the middle third to launch the attack.",
+                "beat_3_effect": f"The lofted delivery finds [highlight:{target_spoken}] seventy yards upfield to launch the attack.",
             }
         elif run_name:
             return {
-                "beat_1_setup": f"{att_team} circulate possession through {cat_name}.",
-                "beat_2_cause": f"{cat_name} draws {def_team}'s midfield press before releasing {run_name} into open space.",
+                "beat_1_setup": f"{att_team} circulate possession through [highlight:{cat_name}].",
+                "beat_2_cause": f"[highlight:{cat_name}] spots the opening. [candidate_passes] [run_vectors] Passing lanes open as [highlight:{run_name}] receives between the lines while [highlight:Jude Bellingham] contests.",
                 "beat_2_steps": {
-                    "step_1": f"{cat_name} controls on the ball.",
+                    "step_1": f"[highlight:{cat_name}] controls on the ball.",
                     "step_2": f"{def_team} defensive unit shifts across.",
-                    "step_3": f"{run_name} attacks the open progression lane.",
-                    "step_4": f"{cat_name} slides the release pass to {run_name}.",
+                    "step_3": f"[candidate_passes] [run_vectors] {run_name} attacks the open progression lane.",
+                    "step_4": f"[stat_card:Evan Ndicka] Ndicka slides the release pass to {run_name}.",
                 },
-                "beat_3_effect": f"The pass finds {run_name} in stride to sustain {att_team}'s attacking progression.",
+                "beat_3_effect": f"The pass finds [highlight:{run_name}] in stride to sustain {att_team}'s attacking progression.",
+            }
+        elif "clip_03" in cid_clean or "flank" in thesis_lower:
+            target_spoken = run_name or "Vinícius Júnior"
+            return {
+                "beat_1_setup": f"{att_team} attack the wide flank through [highlight:{cat_name}].",
+                "beat_2_cause": f"[highlight:{cat_name}] isolates his marker out wide. [candidate_passes] Passing lanes open as [run_vectors] [highlight:{target_spoken}] sprints into the channel. [stat_card:{cat_name}] Composed attacking release.",
+                "beat_2_steps": {
+                    "step_1": f"[highlight:{cat_name}] isolates defender in wide corridor.",
+                    "step_2": f"{def_team} backline stretches across.",
+                    "step_3": f"[candidate_passes] [run_vectors] {target_spoken} attacks the channel.",
+                    "step_4": f"[stat_card:{cat_name}] Progressive ball released into space.",
+                },
+                "beat_3_effect": f"[highlight:{target_spoken}] accelerates in behind the defense to deliver a dangerous ball.",
             }
         else:
             return {
-                "beat_1_setup": f"{att_team} probe the wide flank corridor.",
-                "beat_2_cause": f"{cat_name} attacks the flank while {def_team}'s defensive chain shifts, opening an inside progression channel.",
+                "beat_1_setup": f"{att_team} probe the wide flank corridor with [highlight:{cat_name}].",
+                "beat_2_cause": f"[highlight:{cat_name}] attacks the flank [candidate_passes] [run_vectors] while {def_team}'s defensive chain shifts, opening an inside progression channel. [stat_card:{cat_name}] Precision progressive execution.",
                 "beat_2_steps": {
-                    "step_1": f"{cat_name} drives forward into open space.",
+                    "step_1": f"[highlight:{cat_name}] drives forward into open space.",
                     "step_2": f"{def_team} defensive chain maintains depth.",
-                    "step_3": "Inside progression channel opens cleanly.",
-                    "step_4": f"{cat_name} advances with intent.",
+                    "step_3": "[candidate_passes] [run_vectors] Inside progression channel opens cleanly.",
+                    "step_4": f"[stat_card:{cat_name}] {cat_name} advances with intent.",
                 },
-                "beat_3_effect": f"Unfreezing into motion, {att_team} advance to sustain attacking pressure.",
+                "beat_3_effect": f"Unfreezing into motion, {att_team} advance through [highlight:{cat_name}] to sustain attacking pressure.",
             }
 
         if is_corner:

@@ -306,6 +306,7 @@ def main():
             "fg_mask_path": vis.get("fg_mask_path", ""),
             "fg_mask_url": vis.get("fg_mask_url", ""),
             "beats": locked_beats,
+            "visual_cue_tags": locked_beats.get("visual_cue_tags", []),
         })
         with open(aud_path, "w", encoding="utf-8") as f:
             json.dump(aud, f, indent=2, cls=NumpyJSONEncoder)
@@ -534,6 +535,8 @@ def main():
             "ball_carrier_per_frame": cause_tel.get("ball_carrier_per_frame", {}),
             "team_colors": sc.get("team_colors", {"home_hex": "#8a1529", "away_hex": "#ffffff"}),
             "beats": beats,
+            "visual_cue_tags": beats.get("visual_cue_tags", []) if isinstance(beats, dict) else [],
+            "visualCueTags": beats.get("visual_cue_tags", []) if isinstance(beats, dict) else [],
         }
         active_segments.append(seg)
         current_time += seg_dur

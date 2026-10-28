@@ -122,7 +122,9 @@ class AudioEngine:
         Formats text for natural Kokoro vocal cadence.
         Ensures continuous, stutter-free narration without awkward mid-sentence pauses or ellipses.
         """
-        norm = AudioEngine.normalize_for_tts(raw_text)
+        from src.rendering.tactical_narrator import TacticalNarrator
+        raw_clean, _ = TacticalNarrator.extract_cue_tags(raw_text)
+        norm = AudioEngine.normalize_for_tts(raw_clean)
         # Strip ellipses, dashes, or multi-dots that cause awkward 0.5s pauses/stutters mid-sentence
         text = re.sub(r'\.{2,}', '.', norm)
         text = re.sub(r'…', '.', text)
@@ -131,6 +133,7 @@ class AudioEngine:
         text = re.sub(r'\s*;\s*', ', ', text)
         text = re.sub(r'[\r\n]+', ' ', text)
         text = re.sub(r'\.\s*\.', '.', text)
+        text = re.sub(r'\s+([.,!?;:])', r'\1', text)
         text = re.sub(r'\s{2,}', ' ', text).strip()
         return text
 
@@ -341,9 +344,16 @@ class AudioEngine:
                 return str(val.get("text", "")).strip()
             return ""
 
-        text_1 = extract_text(beats.get("beat_1_setup"))
-        text_2 = extract_text(beats.get("beat_2_cause"))
-        text_3 = extract_text(beats.get("beat_3_effect"))
+        raw_text_1 = extract_text(beats.get("beat_1_setup"))
+        raw_text_2 = extract_text(beats.get("beat_2_cause"))
+        raw_text_3 = extract_text(beats.get("beat_3_effect"))
+
+        from src.rendering.tactical_narrator import TacticalNarrator
+        from src.rendering.match_stats_provider import MatchStatsProvider
+
+        text_1, tags_1 = TacticalNarrator.extract_cue_tags(raw_text_1)
+        text_2, tags_2 = TacticalNarrator.extract_cue_tags(raw_text_2)
+        text_3, tags_3 = TacticalNarrator.extract_cue_tags(raw_text_3)
 
         beat_1_path = out_dir / "beat_1.wav"
         beat_2_path = out_dir / "beat_2.wav"
@@ -373,6 +383,57 @@ class AudioEngine:
         # Fix 1 & 2: Start beat_3_effect immediately when freeze ends (cause_frame_idx + freeze_frames)
         beat_3_frames = math.ceil(beat_3_duration_sec * actual_fps) + 6
         start_frame_b3 = (adjusted_cause_frame_idx + freeze_frames) if adjusted_cause_frame_idx is not None else None
+
+        # Compute exact word-level timestamp offsets & frames for visual cue tags
+        for t in tags_1:
+            frac = (t["word_index"] / max(1, t["total_words"])) if t.get("total_words") else 0.0
+            t["offset_sec"] = round(frac * beat_1_duration_sec, 3)
+            t["offset_ms"] = int(round(frac * dur_1_ms))
+            t["start_frame"] = int(round(frac * beat_1_duration_sec * actual_fps))
+            t["duration_frames"] = 75
+            t["end_frame"] = t["start_frame"] + t["duration_frames"]
+            t["beat"] = "beat_1_setup"
+
+        for t in tags_2:
+            frac = (t["word_index"] / max(1, t["total_words"])) if t.get("total_words") else 0.0
+            t["offset_sec"] = round(frac * beat_2_duration_sec, 3)
+            t["offset_ms"] = int(round(frac * dur_2_ms))
+            local_f = int(round(frac * beat_2_duration_sec * actual_fps))
+            t["start_frame"] = cause_frame_idx + local_f
+            if t["type"] in ("candidate_passes", "pass_options", "run_vectors", "vectors"):
+                t["duration_frames"] = max(30, (cause_frame_idx + freeze_frames) - t["start_frame"])
+                t["end_frame"] = cause_frame_idx + freeze_frames
+            elif "stat" in t["type"] or "sofascore" in t["type"]:
+                t["duration_frames"] = 90
+                t["end_frame"] = min(cause_frame_idx + freeze_frames, t["start_frame"] + t["duration_frames"])
+            else:
+                t["duration_frames"] = 75
+                t["end_frame"] = min(cause_frame_idx + freeze_frames, t["start_frame"] + t["duration_frames"])
+            t["beat"] = "beat_2_cause"
+
+        b3_start_f = (adjusted_cause_frame_idx + freeze_frames) if adjusted_cause_frame_idx is not None else 0
+        for t in tags_3:
+            frac = (t["word_index"] / max(1, t["total_words"])) if t.get("total_words") else 0.0
+            t["offset_sec"] = round(frac * beat_3_duration_sec, 3)
+            t["offset_ms"] = int(round(frac * dur_3_ms))
+            local_f = int(round(frac * beat_3_duration_sec * actual_fps))
+            t["start_frame"] = b3_start_f + local_f
+            t["duration_frames"] = 75
+            t["end_frame"] = t["start_frame"] + t["duration_frames"]
+            t["beat"] = "beat_3_effect"
+
+        # Enrich tags with authentic match statistics and player profiles
+        stats_provider = MatchStatsProvider()
+        all_cue_tags = tags_1 + tags_2 + tags_3
+        for t in all_cue_tags:
+            tgt = t.get("target")
+            if tgt:
+                p_stats = stats_provider.get_player_stats(tgt)
+                if p_stats:
+                    t["player_stats"] = p_stats
+                    t["player_name"] = p_stats.get("playerName")
+                    t["player_number"] = p_stats.get("number")
+                    t["player_role"] = p_stats.get("role")
 
         post_roll_frames = None
         total_composition_frames = None
@@ -459,8 +520,11 @@ class AudioEngine:
             return str(wav_p)
 
         ret: Dict[str, Any] = {
+            "visual_cue_tags": all_cue_tags,
             "beat_1_setup": {
                 "text": text_1,
+                "raw_text": raw_text_1,
+                "visual_cue_tags": tags_1,
                 "wav_path": str(beat_1_path),
                 "url": to_url(beat_1_path),
                 "duration_ms": dur_1_ms,
@@ -469,6 +533,8 @@ class AudioEngine:
             },
             "beat_2_cause": {
                 "text": text_2,
+                "raw_text": raw_text_2,
+                "visual_cue_tags": tags_2,
                 "wav_path": str(beat_2_path),
                 "url": to_url(beat_2_path),
                 "duration_ms": dur_2_ms,
@@ -497,6 +563,8 @@ class AudioEngine:
             },
             "beat_3_effect": {
                 "text": text_3,
+                "raw_text": raw_text_3,
+                "visual_cue_tags": tags_3,
                 "wav_path": str(beat_3_path),
                 "url": to_url(beat_3_path),
                 "duration_ms": dur_3_ms,
