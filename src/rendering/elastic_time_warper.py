@@ -86,12 +86,12 @@ class ElasticTimeWarper:
         d_audio_2 = max(1.5, float(b2_ms) / 1000.0)
         d_audio_3 = max(0.8, float(b3_ms) / 1000.0)
 
-        # Exact total target audio frames partitioned per beat
-        total_audio_sec = d_audio_1 + d_audio_2 + d_audio_3
-        total_target_frames = int(round(total_audio_sec * self.fps))
-        f1_frames = int(round(d_audio_1 * self.fps))
-        f2_frames = int(round(d_audio_2 * self.fps))
-        f3_frames = max(15, total_target_frames - f1_frames - f2_frames)
+        # Exact total target audio frames partitioned per beat with breathing buffers
+        f1_frames = int(math.ceil(d_audio_1 * self.fps))
+        b2_frames_exact = int(math.ceil(d_audio_2 * self.fps))
+        f2_frames = b2_frames_exact + 12  # Guarantees Beat 2 lead-in (+6f) and post-speech buffer (+6f)
+        b3_frames_exact = int(math.ceil(d_audio_3 * self.fps))
+        f3_frames = max(15, b3_frames_exact + 6)  # Guarantees post-roll breathing buffer (+6f)
         total_target_frames = f1_frames + f2_frames + f3_frames
 
         # 2. Source video landmarks

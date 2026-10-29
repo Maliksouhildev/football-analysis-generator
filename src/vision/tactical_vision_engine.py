@@ -3017,39 +3017,61 @@ TASKS:
         tracks_at_freeze.extend(deduped_tracks)
 
         # Multi-cue player identity resolution engine
-        identity_assignments: Dict[int, Dict[str, Any]] = {}
-        try:
-            from src.vision.player_identity_resolver import PlayerIdentityResolver
-            resolver = PlayerIdentityResolver()
-            res_info = resolver.resolve_player_identities(
-                frame=freeze_frame_img,
-                tracks_at_freeze=tracks_at_freeze,
-                home_team=ctx.get("home_team") or cause_tel.get("home_team") or "Home Team",
-                away_team=ctx.get("away_team") or cause_tel.get("away_team") or "Away Team",
-                match_minute=int(ctx.get("match_minute") or cause_tel.get("match_minute") or 0),
-                period=int(ctx.get("period") or cause_tel.get("period") or 1),
-                tracks_per_frame=tracks_per_frame,
-                clip_id=cid,
-                api_key=os.environ.get("GEMINI_API_KEY"),
-                temporal_burst_frames=temporal_burst_frames,
-            )
-            identity_assignments = res_info.get("assignments", {})
-            cause_tel["player_identities"] = identity_assignments
-            cause_tel["match_minute"] = res_info.get("match_minute", 0)
-            cause_tel["period"] = res_info.get("period", 1)
-        except Exception as e:
-            logger.warning("PlayerIdentityResolver notice for %s: %s", cid, e)
+        identity_assignments: Dict[int, Dict[str, Any]] = cause_tel.get("player_identities") or {}
+        has_identities = sum(1 for t in tracks_at_freeze if isinstance(t, dict) and bool(t.get("name_pos") or t.get("name"))) >= 4
+        res_info: Dict[str, Any] = {"assignments": identity_assignments, "ball_carrier": cause_tel.get("catalyst_player")}
+        if not has_identities:
+            try:
+                from src.vision.player_identity_resolver import PlayerIdentityResolver
+                resolver = PlayerIdentityResolver()
+                res_info = resolver.resolve_player_identities(
+                    frame=freeze_frame_img,
+                    tracks_at_freeze=tracks_at_freeze,
+                    home_team=ctx.get("home_team") or cause_tel.get("home_team") or "Home Team",
+                    away_team=ctx.get("away_team") or cause_tel.get("away_team") or "Away Team",
+                    match_minute=int(ctx.get("match_minute") or cause_tel.get("match_minute") or 0),
+                    period=int(ctx.get("period") or cause_tel.get("period") or 1),
+                    tracks_per_frame=tracks_per_frame,
+                    clip_id=cid,
+                    api_key=os.environ.get("GEMINI_API_KEY"),
+                    temporal_burst_frames=temporal_burst_frames,
+                )
+                identity_assignments = res_info.get("assignments", {})
+                cause_tel["player_identities"] = identity_assignments
+                cause_tel["match_minute"] = res_info.get("match_minute", 0)
+                cause_tel["period"] = res_info.get("period", 1)
+            except Exception as e:
+                logger.warning("PlayerIdentityResolver notice for %s: %s", cid, e)
+
+        if not res_info.get("ball_carrier"):
+            try:
+                from src.vision.player_identity_resolver import PlayerIdentityResolver
+                resolver = PlayerIdentityResolver()
+                _, telem_carrier = resolver.match_coordinates_to_active_xi(
+                    clip_id=cid,
+                    tracks_at_freeze=tracks_at_freeze,
+                    active_state=None,
+                )
+                if telem_carrier:
+                    res_info["ball_carrier"] = telem_carrier
+            except Exception:
+                pass
 
         # 1. Universal Dynamic Ball & Carrier Detection (Item 2)
-        best_ball, best_carrier_id = TacticalVisionEngine.detect_ball_and_carrier(
-            frame=freeze_frame_img,
-            tracks=tracks_at_freeze,
-            w=w_f,
-            h=h_f,
-            video_path=cause_tel.get("video_path"),
-            frame_idx=int(freeze_frame),
-            clip_id=cid,
-        )
+        existing_cat = cause_tel.get("catalyst_player")
+        if isinstance(existing_cat, dict) and existing_cat.get("track_id") is not None:
+            best_carrier_id = int(existing_cat["track_id"])
+            best_ball = cause_tel.get("ball")
+        else:
+            best_ball, best_carrier_id = TacticalVisionEngine.detect_ball_and_carrier(
+                frame=freeze_frame_img,
+                tracks=tracks_at_freeze,
+                w=w_f,
+                h=h_f,
+                video_path=cause_tel.get("video_path"),
+                frame_idx=int(freeze_frame),
+                clip_id=cid,
+            )
 
         # Resolve true ball carrier anchor dynamically (from VLM ground truth, event API telemetry, or automatic ball detector)
         vlm_carrier_info = res_info.get("ball_carrier") if isinstance(res_info, dict) else None

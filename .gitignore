@@ -18,3 +18,5 @@ audio/
 *.png
 test_data/
 *.mp3
+
+scratch/

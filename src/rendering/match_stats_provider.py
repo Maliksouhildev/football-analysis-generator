@@ -652,7 +652,7 @@ class MatchStatsProvider:
         with local disk caching and immediate fallback.
         """
         clean_name = self._normalize_name(player_name)
-        if not clean_name:
+        if not clean_name or any(w in clean_name for w in ("carrier", "runner", "pass", "option", "tactical", "breakdown")):
             return None
 
         slug = clean_name.replace(" ", "_")
@@ -696,10 +696,8 @@ class MatchStatsProvider:
                         role = "CB"
 
                     # Determine team
-                    club = "Real Madrid"
-                    if team_hint and "roma" in team_hint.lower():
-                        club = "AS Roma"
-                    elif "roma" in desc or "roma" in extract:
+                    club = team_hint or "MATCH TELEMETRY"
+                    if "roma" in desc or "roma" in extract:
                         club = "AS Roma"
                     elif "madrid" in desc or "madrid" in extract:
                         club = "Real Madrid"
@@ -712,7 +710,7 @@ class MatchStatsProvider:
                         "number": 10 if pos == "MID" else (9 if pos == "ATT" else (4 if pos == "DEF" else 1)),
                         "position": pos,
                         "role": role,
-                        "team": "home" if club == "AS Roma" else "away",
+                        "team": "home" if team_hint and "home" in team_hint.lower() else "away",
                         "clubName": club,
                         "rating": 7.4,
                         "ratingColor": "#10b981",
@@ -835,7 +833,7 @@ class MatchStatsProvider:
         if not res.get("portraitUrl"):
             slug = res.get("portraitSlug") or self._normalize_name(res["playerName"]).replace(" ", "_")
             res["portraitUrl"] = f"http://127.0.0.1:3000/assets/players/{slug}.png"
-        club = res.get("clubName", "Real Madrid")
+        club = res.get("clubName") or "MATCH TELEMETRY"
         if not res.get("crestUrl"):
             res["crestUrl"] = CLUB_CRESTS.get(club, "http://127.0.0.1:3000/assets/crests/ucl_starball.png")
 
@@ -843,39 +841,39 @@ class MatchStatsProvider:
         if not res.get("countryFlagEmoji"):
             club_lower = club.lower()
             name_lower = res["playerName"].lower()
-            if any(k in name_lower for k in ("mbapp", "konat", "tchouam")):
+            if any(k in name_lower for k in ("mbapp", "konat", "tchouam", "camavinga", "mendy")):
                 res["countryCode"] = "FR"
                 res["countryFlagEmoji"] = "🇫🇷"
-            elif any(k in name_lower for k in ("vinicius", "vini", "rodrygo", "milit")):
+            elif any(k in name_lower for k in ("vinicius", "vini", "rodrygo", "milit", "endrick")):
                 res["countryCode"] = "BR"
                 res["countryFlagEmoji"] = "🇧🇷"
-            elif any(k in name_lower for k in ("bellingham",)):
+            elif any(k in name_lower for k in ("bellingham", "kane", "foden", "saka")):
                 res["countryCode"] = "EN"
                 res["countryFlagEmoji"] = "🏴󠁧󠁢󠁥󠁮󠁧󠁿"
-            elif any(k in name_lower for k in ("courtois",)):
+            elif any(k in name_lower for k in ("courtois", "de bruyne", "lukaku")):
                 res["countryCode"] = "BE"
                 res["countryFlagEmoji"] = "🇧🇪"
-            elif any(k in name_lower for k in ("ndicka",)):
+            elif any(k in name_lower for k in ("ndicka", "kessie", "haller")):
                 res["countryCode"] = "CI"
                 res["countryFlagEmoji"] = "🇨🇮"
-            elif any(k in name_lower for k in ("dybala",)):
+            elif any(k in name_lower for k in ("dybala", "messi", "martinez")):
                 res["countryCode"] = "AR"
                 res["countryFlagEmoji"] = "🇦🇷"
-            elif any(k in name_lower for k in ("pellegrini", "cristante", "mancini", "pisilli")):
+            elif any(k in name_lower for k in ("pellegrini", "cristante", "mancini", "pisilli", "barella", "bastoni")):
                 res["countryCode"] = "IT"
                 res["countryFlagEmoji"] = "🇮🇹"
-            elif any(k in name_lower for k in ("valverde",)):
+            elif any(k in name_lower for k in ("valverde", "nunez")):
                 res["countryCode"] = "UY"
                 res["countryFlagEmoji"] = "🇺🇾"
-            elif any(k in name_lower for k in ("rudiger",)):
+            elif any(k in name_lower for k in ("rudiger", "kroos", "musiala")):
                 res["countryCode"] = "DE"
                 res["countryFlagEmoji"] = "🇩🇪"
             elif any(k in name_lower for k in ("guler", "celik")):
                 res["countryCode"] = "TR"
                 res["countryFlagEmoji"] = "🇹🇷"
             else:
-                res["countryCode"] = "ES" if "madrid" in club_lower else "IT"
-                res["countryFlagEmoji"] = "🇪🇸" if "madrid" in club_lower else "🇮🇹"
+                res["countryCode"] = "INT"
+                res["countryFlagEmoji"] = "🌐"
 
         # Generate realistic 2D heatmap points if missing
         if "heatPoints" not in res or not res["heatPoints"]:

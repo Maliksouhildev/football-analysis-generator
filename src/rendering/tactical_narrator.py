@@ -842,16 +842,16 @@ class TacticalNarrator:
 
         # Resolve real entity names dynamically from match context & vision telestration
         tel_dict = cause_telestration if isinstance(cause_telestration, dict) else {}
-        home_team_name = str(tel_dict.get("home_team") or "AS Roma").strip()
-        away_team_name = str(tel_dict.get("away_team") or "Real Madrid").strip()
+        home_team_name = str(tel_dict.get("home_team") or "Home Team").strip()
+        away_team_name = str(tel_dict.get("away_team") or "Away Team").strip()
 
-        att_team = str(tel_dict.get("attacking_team_name") or tel_dict.get("attacking_team") or "Real Madrid").strip()
+        att_team = str(tel_dict.get("attacking_team_name") or tel_dict.get("attacking_team") or away_team_name).strip()
         if att_team.lower() == "home":
             att_team = home_team_name
         elif att_team.lower() == "away":
             att_team = away_team_name
 
-        def_team = str(tel_dict.get("defending_team_name") or tel_dict.get("defending_team") or ("AS Roma" if att_team == away_team_name else away_team_name)).strip()
+        def_team = str(tel_dict.get("defending_team_name") or tel_dict.get("defending_team") or (home_team_name if att_team == away_team_name else away_team_name)).strip()
         if def_team.lower() == "home":
             def_team = home_team_name
         elif def_team.lower() == "away":
@@ -871,10 +871,11 @@ class TacticalNarrator:
         zone_label = tactical_zone.replace("_", " ").title()
 
         if is_corner:
-            target_spoken = run_name or "Arda Güler"
+            target_spoken = run_name or "the supporting runner"
+            box_target = "the far-post runner"
             return {
                 "beat_1_setup": f"{att_team} work a sharp short corner routine with [highlight:{cat_name}].",
-                "beat_2_cause": f"[highlight:{cat_name}] plays short along the ground to [highlight:{target_spoken}]. [candidate_passes] [run_vectors] Space opens for the whipped cross targeting [highlight:Carlos Espí] inside the box.",
+                "beat_2_cause": f"[highlight:{cat_name}] plays short along the ground to [highlight:{target_spoken}]. [candidate_passes] [run_vectors] Space opens for the whipped cross targeting [highlight:{box_target}] inside the box.",
                 "beat_2_steps": {
                     "step_1": f"[highlight:{cat_name}] addresses the corner kick.",
                     "step_2": f"{def_team} defends the six-yard box.",
@@ -884,56 +885,58 @@ class TacticalNarrator:
                 "beat_3_effect": f"[highlight:{cat_name}] and [highlight:{target_spoken}] manufacture a dangerous crossing opportunity.",
             }
         elif "clip_01" in cid_clean or "konaté" in thesis_lower or ("courtois" in thesis_lower and "tchouaméni" in thesis_lower):
+            gk_outlet = run_name or "the goalkeeper"
             return {
                 "beat_1_setup": f"{att_team} under heavy pressure as [highlight:{cat_name}] controls deep.",
-                "beat_2_cause": f"[highlight:{cat_name}] draws {def_team}'s forward press. With central lanes blocked, [candidate_passes] safe options appear. [stat_card:{cat_name}] Konaté plays a composed back-pass to [highlight:Thibaut Courtois].",
+                "beat_2_cause": f"[highlight:{cat_name}] draws {def_team}'s forward press. With central lanes blocked, [candidate_passes] safe options appear. [stat_card:{cat_name}] {cat_name} plays a composed back-pass to [highlight:{gk_outlet}].",
                 "beat_2_steps": {
                     "step_1": f"[highlight:{cat_name}] controls under heavy pressure.",
                     "step_2": f"{def_team} commits numbers forward to press and close passing lanes.",
-                    "step_3": f"[candidate_passes] The safety passing lane to Courtois opens.",
-                    "step_4": f"[stat_card:{cat_name}] Konaté plays the safety back-pass to [highlight:Thibaut Courtois].",
+                    "step_3": f"[candidate_passes] The safety passing lane to {gk_outlet} opens.",
+                    "step_4": f"[stat_card:{cat_name}] {cat_name} plays the safety back-pass to [highlight:{gk_outlet}].",
                 },
-                "beat_3_effect": f"[highlight:Thibaut Courtois] collects cleanly inside his own penalty box, completely diffusing the high press.",
+                "beat_3_effect": f"[highlight:{gk_outlet}] collects cleanly inside his own penalty box, completely diffusing the high press.",
             }
         elif "clip_02" in cid_clean or ("ndicka" in thesis_lower and "mbappé" in thesis_lower):
+            interceptor = run_name or f"{def_team} defender"
             return {
                 "beat_1_setup": f"[highlight:{cat_name}] drives centrally toward Zone 14.",
-                "beat_2_cause": f"[highlight:{cat_name}] probes the corridor as [candidate_passes] passing angles tighten. [run_vectors] [highlight:Evan Ndicka] steps in decisively to clamp the turnover.",
+                "beat_2_cause": f"[highlight:{cat_name}] probes the corridor as [candidate_passes] passing angles tighten. [run_vectors] [highlight:{interceptor}] steps in decisively to clamp the turnover.",
                 "beat_2_steps": {
                     "step_1": f"[highlight:{cat_name}] receives in the final third.",
                     "step_2": f"{def_team} central block holds firm.",
-                    "step_3": f"[candidate_passes] [run_vectors] Evan Ndicka reads the passing vector.",
-                    "step_4": f"[stat_card:Evan Ndicka] Ndicka intercepts cleanly to win possession.",
+                    "step_3": f"[candidate_passes] [run_vectors] {interceptor} reads the passing vector.",
+                    "step_4": f"[stat_card:{interceptor}] {interceptor} intercepts cleanly to win possession.",
                 },
-                "beat_3_effect": f"[highlight:Evan Ndicka] recovers possession through his intervention to launch an immediate counter.",
+                "beat_3_effect": f"[highlight:{interceptor}] recovers possession through his intervention to launch an immediate counter.",
             }
         elif is_gk_buildup or is_aerial:
-            target_spoken = run_name or "Vinícius Júnior"
+            target_spoken = run_name or (tel_dict.get("runner_name") or "the wide outlet")
             return {
                 "beat_1_setup": f"[highlight:{cat_name}] surveys the pitch from deep under pressure.",
-                "beat_2_cause": f"Roma's high press suffocates the backline. [stat_card:{cat_name}] [highlight:{cat_name}] bypasses the trap, launching a measured aerial delivery [run_vectors] toward [highlight:{target_spoken}].",
+                "beat_2_cause": f"{def_team}'s high press suffocates the backline. [stat_card:{cat_name}] [highlight:{cat_name}] bypasses the trap, launching a measured aerial delivery [run_vectors] toward [highlight:{target_spoken}].",
                 "beat_2_steps": {
                     "step_1": f"[highlight:{cat_name}] calmly invites {def_team}'s press.",
                     "step_2": f"{def_team} front line presses aggressively.",
                     "step_3": f"[run_vectors] {target_spoken} finds space on the far side.",
-                    "step_4": f"[stat_card:{cat_name}] Courtois lifts diagonal aerial pass.",
+                    "step_4": f"[stat_card:{cat_name}] {cat_name} lifts diagonal aerial pass.",
                 },
                 "beat_3_effect": f"The lofted delivery finds [highlight:{target_spoken}] seventy yards upfield to launch the attack.",
             }
         elif run_name:
             return {
                 "beat_1_setup": f"{att_team} circulate possession through [highlight:{cat_name}].",
-                "beat_2_cause": f"[highlight:{cat_name}] spots the opening. [candidate_passes] [run_vectors] Passing lanes open as [highlight:{run_name}] receives between the lines while [highlight:Jude Bellingham] contests.",
+                "beat_2_cause": f"[highlight:{cat_name}] spots the opening. [candidate_passes] [run_vectors] Passing lanes open as [highlight:{run_name}] receives between the lines while {def_team} contests.",
                 "beat_2_steps": {
                     "step_1": f"[highlight:{cat_name}] controls on the ball.",
                     "step_2": f"{def_team} defensive unit shifts across.",
                     "step_3": f"[candidate_passes] [run_vectors] {run_name} attacks the open progression lane.",
-                    "step_4": f"[stat_card:Evan Ndicka] Ndicka slides the release pass to {run_name}.",
+                    "step_4": f"[stat_card:{cat_name}] {cat_name} slides the release pass to {run_name}.",
                 },
                 "beat_3_effect": f"The pass finds [highlight:{run_name}] in stride to sustain {att_team}'s attacking progression.",
             }
         elif "clip_03" in cid_clean or "flank" in thesis_lower:
-            target_spoken = run_name or "Vinícius Júnior"
+            target_spoken = run_name or (tel_dict.get("runner_name") or "the wide runner")
             return {
                 "beat_1_setup": f"{att_team} attack the wide flank through [highlight:{cat_name}].",
                 "beat_2_cause": f"[highlight:{cat_name}] isolates his marker out wide. [candidate_passes] Passing lanes open as [run_vectors] [highlight:{target_spoken}] sprints into the channel. [stat_card:{cat_name}] Composed attacking release.",
