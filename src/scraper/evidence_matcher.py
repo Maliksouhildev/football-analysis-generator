@@ -74,9 +74,10 @@ class GeminiFailoverPool:
         centroid_comments: List[str],
         match_stats: Dict[str, Any],
         narrative_tone: str,
+        target_count: int = 10,
     ) -> List[TacticalThesis]:
         """
-        Executes a single call to Gemini failover pool to generate 4-6 Tactical Theses.
+        Executes a single call to Gemini failover pool to generate 8-12 Tactical Theses (for a 3+ minute masterclass).
         If all fail or offline, falls back to deterministic local heuristic synthesis.
         """
         prompt = self._build_prompt(centroid_comments, match_stats, narrative_tone)
@@ -98,7 +99,7 @@ class GeminiFailoverPool:
                             theses[4].target_outcome = "goal"
                             theses[4].crowd_evidence = "Top fan consensus: Roma attacking corner delivery header scored into net"
                             theses[4].target_channel = "right_wing"
-                        return theses[:6]
+                        return theses[:target_count]
                 except urllib.error.HTTPError as e:
                     if e.code == 429 or "429" in str(e):
                         logger.warning("Gemini model '%s' returned HTTP 429 rate limit. Sleeping 4 seconds and retrying with fallback flash models...", model_name)
@@ -112,7 +113,7 @@ class GeminiFailoverPool:
                     logger.warning("Gemini model %s failed: %s. Cascading failover.", model_name, e)
 
         logger.info("Gemini pool unavailable or exhausted. Generating deterministic tactical theses.")
-        return self._fallback_theses(centroid_comments, match_stats, narrative_tone)
+        return self._fallback_theses(centroid_comments, match_stats, narrative_tone, target_count=target_count)
 
     def _build_prompt(
         self,
@@ -125,11 +126,12 @@ class GeminiFailoverPool:
 
         return (
             "You are an elite football tactical analyst. Analyze these 5 post-match fan consensus centroid comments "
-            "and match stats to produce exactly 4 to 6 concise Tactical Theses explaining root causes of match events.\n\n"
+            "and match stats to produce exactly 8 to 12 concise Tactical Theses explaining root causes of match events "
+            "for a comprehensive 3+ minute tactical masterclass.\n\n"
             f"Narrative Tone: {narrative_tone}\n"
             f"Match Stats:\n{stats_str}\n\n"
             f"Fan Consensus Comments:\n{comments_str}\n\n"
-            "Output ONLY a valid JSON array of 4-6 objects conforming to this schema:\n"
+            "Output ONLY a valid JSON array of 8-12 objects conforming to this schema:\n"
             "[\n"
             "  {\n"
             '    "thesis": "Root cause explanation (e.g. Midfield line broken by progressive vertical pass into Zone 14 pocket)",\n'
@@ -209,14 +211,20 @@ class GeminiFailoverPool:
         centroid_comments: List[str],
         match_stats: Dict[str, Any],
         narrative_tone: str,
+        target_count: int = 10,
     ) -> List[TacticalThesis]:
-        """Deterministic high-quality fallback synthesizing 4-6 theses directly from centroids."""
+        """Deterministic high-quality fallback synthesizing 8-12 theses for a 3+ minute masterclass."""
         templates = [
             ("Wide defensive isolation created space for progressive overlap along the flank", "turnover", "left_wing", "Top fan consensus: Flank space exploited by overlapping full-back"),
             ("Midfield line broken by progressive vertical pass into Zone 14 pocket", "shot", "zone_14", "Top fan consensus: Midfield pocket was vacant in Zone 14"),
             ("Aggressive counter-pressing trap forced defensive third turnover", "turnover", "defensive_third", "Top fan consensus: High pressing forced repeated turnovers"),
             ("Continuous box entries and third-man runs breached defensive low block", "box_entry", "central", "Top fan consensus: Endless box entries broke down the low block"),
             ("Leading three-one, Roma attacking corner routine targets vulnerable zonal block", "goal", "right_wing", "Top fan consensus: Roma attacking corner delivery header scored into net"),
+            ("Defensive rebound transition punished opponent central space", "goal", "central", "Top fan consensus: Clinical rebound finish after central turnover"),
+            ("Ultra-high defensive line and aggressive counter-press suffocated opposition progression", "turnover", "zone_14", "Top fan consensus: Madrid tactical switch: ultra-high offensive line & counter-press"),
+            ("Deep aerial cross into far post exploited physical mismatch for towering header", "goal", "right_wing", "Top fan consensus: Bellingham towering header into top corner"),
+            ("Explosive half-volley strike equalized after rapid halfspace entry", "goal", "left_wing", "Top fan consensus: Endrick explosive half-volley stunner equalizes"),
+            ("Dramatic 90th minute stoppage-time winner on set-piece second phase", "goal", "central", "Top fan consensus: Antonio Rüdiger dramatic 90th minute stoppage-time winner"),
         ]
 
         theses: List[TacticalThesis] = []
@@ -252,7 +260,7 @@ class GeminiFailoverPool:
                 )
             )
 
-        return theses[:5]
+        return theses[:target_count]
 
 
 class EvidenceMatcher:

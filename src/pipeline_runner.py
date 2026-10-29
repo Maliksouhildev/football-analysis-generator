@@ -265,7 +265,7 @@ class TacticalPipelineRunner:
         away_team: str = "Atletico Madrid",
         score: str = "2 - 1",
         render: bool = True,
-        duration: float = 60.0,
+        duration: float = 180.0,
         wait: bool = False,
         matchday_data: Optional[Dict[str, Any]] = None,
         reddit_comments: Optional[List[str]] = None,
@@ -346,8 +346,10 @@ class TacticalPipelineRunner:
                 event_windows = []
 
             if not event_windows:
+                target_duration = max(180.0, float(duration)) if duration else 180.0
+                target_clip_count = max(10, int(math.ceil(target_duration / 20.0)))
                 high_impact = [e for e in raw_events if e.get("should_retain", True) or e.get("expected_score", 0) >= 60]
-                for idx, evt in enumerate(high_impact[:5]):
+                for idx, evt in enumerate(high_impact[:target_clip_count]):
                     m = evt.get("minute", 10)
                     s = evt.get("second", 0)
                     cause_m = max(0, m - 1) if s < 15 else m
@@ -791,7 +793,7 @@ class TacticalPipelineRunner:
                     if temp_b3.is_file():
                         temp_b3.unlink(missing_ok=True)
 
-            post_roll_frames = min(max_available_post_roll, max(90, beat_3_frames))
+            post_roll_frames = min(max_available_post_roll, max(120, beat_3_frames))
             total_composition_frames = cause_frame_idx + freeze_frames + post_roll_frames
             seg_dur = round(total_composition_frames / 30.0, 4)
 
@@ -1225,7 +1227,7 @@ if __name__ == "__main__":
     parser.add_argument("--home", type=str, default="Barcelona", help="Home Team")
     parser.add_argument("--away", type=str, default="Atletico Madrid", help="Away Team")
     parser.add_argument("--score", type=str, default="2 - 1", help="Match Score")
-    parser.add_argument("--duration", type=float, default=60.0, help="Duration in Seconds")
+    parser.add_argument("--duration", type=float, default=180.0, help="Duration in Seconds (default: 180s = 3 min)")
     parser.add_argument("--wait", action="store_true", help="Wait for render completion and poll progress")
     parser.add_argument("--no-render", action="store_true", help="Prepare payload without rendering")
     parser.add_argument("--fixture-id", type=str, help="Unique fixture or match identifier")
