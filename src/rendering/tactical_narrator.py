@@ -21,9 +21,30 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger("rendering.tactical_narrator")
+
+SpeedRegimeType = Literal["FAST_TRANSIT", "NORMAL_FLOW", "SLOW_FOCUS", "FREEZE_HOLD"]
+
+
+class SpeedSegment(BaseModel):
+    segment_type: SpeedRegimeType = Field(..., description="Classification: FAST_TRANSIT, NORMAL_FLOW, SLOW_FOCUS, or FREEZE_HOLD")
+    rate: float = Field(..., description="Playback rate: 1.25 to 1.35 for FAST_TRANSIT, 1.00 for NORMAL_FLOW, 0.60 to 0.75 for SLOW_FOCUS, 0.00 for FREEZE_HOLD")
+    source_start_sec: float = Field(..., description="Source video start timestamp in seconds")
+    source_end_sec: float = Field(..., description="Source video end timestamp in seconds")
+    duration_sec: Optional[float] = Field(None, description="Output duration in seconds")
+    reason: Optional[str] = Field(None, description="Tactical rationale for speed ramping")
+
+
+class TacticalStoryboardSchema(BaseModel):
+    beat_1_setup: str = Field(..., description="Spoken voiceover for moving pre-roll (~1.8 to 2.2s)")
+    beat_2_cause: str = Field(..., description="Spoken voiceover for freeze frame (~6.0 to 7.5s)")
+    beat_2_steps: Optional[Dict[str, str]] = Field(None, description="4-step analyst breakdown")
+    beat_3_effect: str = Field(..., description="Spoken voiceover for unfreezing post-roll (~2.5s)")
+    speed_segments: List[SpeedSegment] = Field(default_factory=list, description="Continuous speed ramping segments covering the clip")
+
 
 PROMPT_3BEAT_TEMPLATE = """You are a World-Class UEFA Champions League Tactical Video Analyst for television broadcast (in the style of Jamie Carragher and Thierry Henry on CBS Sports).
 Analyze this tactical freeze-frame for {home_team} vs {away_team}.
@@ -43,8 +64,15 @@ Event Telemetry Context:
 - Available Match Telemetry & SofaScore Stats:
 {player_telemetry_context}
 
+Speed Regimes for Dynamic Camera & Time-Mapping:
+Between freeze-frames, divide the continuous clip timeline into speed_segments classified into 4 subtle speed regimes:
+- "FAST_TRANSIT" (rate = 1.25 to 1.35): Ball traveling across long pass, uncontested turf, or low-information transitions.
+- "NORMAL_FLOW" (rate = 1.00): Standard live broadcast speed.
+- "SLOW_FOCUS" (rate = 0.60 to 0.75): Subtle cinematic deceleration as player executes press-breaking turn, tight dribble, crucial defensive mistake, or final deflection/shot.
+- "FREEZE_HOLD" (rate = 0.00, duration_sec = 1.5 to 2.5): Full tactical pause where spotlights and HUD badges animate in at cause_frame_idx.
+
 TASK:
-Write exactly 3 distinct spoken voiceover commentary beats in valid JSON format.
+Write exactly 3 distinct spoken voiceover commentary beats and continuous speed_segments in valid JSON format.
 During the video FREEZE (beat_2_cause), you MUST follow the 4-Step Analyst Framework:
 - Step 1 (Catalyst): Identify who has the ball or triggers the action.
 - Step 2 (Geometric Advantage / Shape): Explain the linked defensive line or numerical advantage shape.
@@ -61,7 +89,17 @@ Output schema:
     "step_3": "<Step 3: 4 to 6 words explaining exploitable space>",
     "step_4": "<Step 4: 4 to 6 words explaining vectors and decision taken>"
   }},
-  "beat_3_effect": "<8 to 12 words maximum spoken as video UNFREEZES (~2.5s)>"
+  "beat_3_effect": "<8 to 12 words maximum spoken as video UNFREEZES (~2.5s)>",
+  "speed_segments": [
+    {{
+      "segment_type": "FAST_TRANSIT",
+      "rate": 1.30,
+      "source_start_sec": 0.0,
+      "source_end_sec": 2.2,
+      "duration_sec": 1.69,
+      "reason": "Long ball transit into attacking half-space"
+    }}
+  ]
 }}
 
 CRITICAL BROADCAST RULES:
@@ -82,6 +120,12 @@ CRITICAL BROADCAST RULES:
    - [run_vectors]: Insert when describing off-ball runs or pressing movements (e.g. "watch the pressing run [run_vectors] behind the defense").
    - [highlight:<PlayerName|#Number|Role>]: Insert whenever naming or analyzing a player (e.g. "[highlight:Konaté] holds possession" or "[highlight:#16]" or "[highlight:CDM]"). They will be spotlighted with an animated glowing beam and elevated badge.
    - [stat_card:<PlayerName>], [sofascore:<PlayerName>], [heatmap:<PlayerName>], or [average_position:<PlayerName>]: Insert when analyzing a player's match rating, passing percentage, duels, heatmap, or average position (e.g. "[stat_card:Konaté] completing 93% of his passes today"). This triggers their authentic SofaScore HUD and pitch heatmap at the bottom of the screen.
+10. SPEED SEGMENT CLASSIFICATION:
+    Divide the full clip timeline between freeze-frames into continuous speed_segments with no gaps:
+    - FAST_TRANSIT (rate: 1.25-1.35): long ball transit or uncontested rolling.
+    - NORMAL_FLOW (rate: 1.00): standard match tempo.
+    - SLOW_FOCUS (rate: 0.60-0.75): tight touches, press-breaking turns, crucial defensive mistakes, or shots.
+    - FREEZE_HOLD (rate: 0.00, duration_sec: 1.5-2.5): full tactical pause at cause_frame_idx.
 """
 
 CANONICAL_PROMPT_TEMPLATE = """You are a World-Class UEFA Champions League Tactical Video Analyst for live television broadcast (in the style of Jamie Carragher and Thierry Henry on CBS Sports).
@@ -237,7 +281,10 @@ class TacticalNarrator:
         # Dynamic commentary: If custom script beats provided in event_window, use them
         custom_beats = event_window.get("script") or event_window.get("commentary_beats")
         if custom_beats and isinstance(custom_beats, dict) and all(k in custom_beats for k in ("beat_1_setup", "beat_2_cause", "beat_3_effect")):
-            return self._inject_real_names(copy.deepcopy(custom_beats), tel)
+            c_copy = copy.deepcopy(custom_beats)
+            if "speed_segments" not in c_copy or not c_copy["speed_segments"]:
+                c_copy["speed_segments"] = self._create_default_speed_segments(tel)
+            return self._inject_real_names(c_copy, tel)
 
         # Check circuit breaker
         now = time.time()
@@ -278,6 +325,8 @@ class TacticalNarrator:
                         cat_n = cat_info.get("name") or cat_info.get("name_pos") or "The ball carrier"
                         cat_clean = re.sub(r"\s*\([^)]*\)", "", str(cat_n)).strip()
                         beats["beat_2_cause"] = f"[highlight:{cat_clean}] {beats['beat_2_cause']} [candidate_passes] [run_vectors] [stat_card:{cat_clean}]"
+                    if "speed_segments" not in beats or not beats["speed_segments"]:
+                        beats["speed_segments"] = self._create_default_speed_segments(tel)
                     return self._inject_real_names(beats, tel)
             except Exception as e:
                 logger.warning(f"Live Gemini 3-beat generation failed: {e}. Tripping circuit breaker.")
@@ -507,11 +556,16 @@ class TacticalNarrator:
                         if not b3_str.endswith((".", "!", "?")):
                             b3_str += "."
 
+                        speed_segs = parsed.get("speed_segments") or []
+                        if not isinstance(speed_segs, list):
+                            speed_segs = []
+
                         return {
                             "beat_1_setup": b1_str,
                             "beat_2_cause": b2_text,
                             "beat_2_steps": b2_steps,
                             "beat_3_effect": b3_str,
+                            "speed_segments": speed_segs,
                         }
             except urllib.error.HTTPError as e:
                 last_exc = e
@@ -963,12 +1017,87 @@ class TacticalNarrator:
         if not b1_str.endswith((".", "!", "?")):
             b1_str += "."
 
+        speed_segments = self._create_default_speed_segments(cause_telestration)
+
         return {
             "beat_1_setup": b1_str,
             "beat_2_cause": combined_beat_2,
             "beat_2_steps": steps,
             "beat_3_effect": script_dict["beat_3_effect"],
+            "speed_segments": speed_segments,
         }
+
+    @staticmethod
+    def _create_default_speed_segments(cause_telestration: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+        tel = cause_telestration or {}
+        c_idx = tel.get("cause_frame_idx") or tel.get("video_freeze_frame") or 66
+        try:
+            c_idx_int = int(c_idx)
+        except Exception:
+            c_idx_int = 66
+        t_cause_sec = round(max(0.6, float(c_idx_int) / 30.0), 2)
+        total_sec = round(t_cause_sec + 4.5, 2)
+
+        speed_segments: List[Dict[str, Any]] = []
+        if t_cause_sec > 1.2:
+            transit_end = round(max(0.6, t_cause_sec - 0.6), 2)
+            speed_segments.append({
+                "segment_type": "FAST_TRANSIT",
+                "rate": 1.30,
+                "source_start_sec": 0.0,
+                "source_end_sec": transit_end,
+                "duration_sec": round(transit_end / 1.30, 2),
+                "reason": "Ball traveling in transition across open turf",
+            })
+            speed_segments.append({
+                "segment_type": "SLOW_FOCUS",
+                "rate": 0.70,
+                "source_start_sec": transit_end,
+                "source_end_sec": t_cause_sec,
+                "duration_sec": round((t_cause_sec - transit_end) / 0.70, 2),
+                "reason": "Deceleration as carrier engages defender prior to freeze",
+            })
+        else:
+            speed_segments.append({
+                "segment_type": "NORMAL_FLOW",
+                "rate": 1.00,
+                "source_start_sec": 0.0,
+                "source_end_sec": t_cause_sec,
+                "duration_sec": t_cause_sec,
+                "reason": "Initial tactical phase setup",
+            })
+
+        # Freeze hold
+        speed_segments.append({
+            "segment_type": "FREEZE_HOLD",
+            "rate": 0.00,
+            "source_start_sec": t_cause_sec,
+            "source_end_sec": t_cause_sec,
+            "duration_sec": 2.0,
+            "reason": "Tactical freeze pause for telestration reveal",
+        })
+
+        # Unfreeze micro-technique slow focus
+        focus_end = round(t_cause_sec + 1.2, 2)
+        speed_segments.append({
+            "segment_type": "SLOW_FOCUS",
+            "rate": 0.65,
+            "source_start_sec": t_cause_sec,
+            "source_end_sec": focus_end,
+            "duration_sec": round(1.2 / 0.65, 2),
+            "reason": "Decisive press-breaking turn and key action execution",
+        })
+
+        # Final consequence flow
+        speed_segments.append({
+            "segment_type": "NORMAL_FLOW",
+            "rate": 1.00,
+            "source_start_sec": focus_end,
+            "source_end_sec": total_sec,
+            "duration_sec": round(total_sec - focus_end, 2),
+            "reason": "Consequence unfolds into box or clearance",
+        })
+        return speed_segments
 
     # Backward compatibility with single-sentence freeze-frame commentary
     def generate_commentary(

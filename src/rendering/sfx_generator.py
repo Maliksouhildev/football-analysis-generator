@@ -133,6 +133,46 @@ def synthesize_goal_impact(sr: int = SAMPLE_RATE) -> np.ndarray:
     return _to_stereo_pcm16(mix)
 
 
+def synthesize_slow_focus_swell(sr: int = SAMPLE_RATE) -> np.ndarray:
+    """
+    Subtle sub-bass cinematic inhale/time-slow audio swell (36Hz -> 84Hz sweep over 0.65s)
+    layered with bandpass filtered air texture for dynamic slow-focus deceleration moments.
+    """
+    duration = 0.65
+    n_samples = int(duration * sr)
+    t = np.linspace(0.0, duration, n_samples, endpoint=False)
+
+    # 1. Low frequency exponential glide (36Hz -> 84Hz)
+    f_start = 36.0
+    f_end = 84.0
+    phase = 2.0 * np.pi * (f_start * t + ((f_end - f_start) / (2.0 * duration)) * (t ** 2))
+    sub_bass = np.sin(phase)
+
+    # Inhale crescendo envelope: smooth buildup peaking near 0.52s, gentle release
+    peak_t = 0.52
+    env_sub = np.where(
+        t <= peak_t,
+        (t / peak_t) ** 1.7,
+        np.exp(-(t - peak_t) / 0.05),
+    )
+    sub_bass = sub_bass * env_sub
+
+    # 2. Filtered air inhale texture (bandpass 180Hz - 700Hz)
+    noise = np.random.normal(0.0, 1.0, n_samples)
+    b, a = butter(2, [180.0 / (sr / 2.0), 700.0 / (sr / 2.0)], btype="band")
+    filtered_noise = lfilter(b, a, noise)
+    env_noise = np.where(
+        t <= peak_t,
+        (t / peak_t) ** 2.0,
+        np.exp(-(t - peak_t) / 0.04),
+    )
+    air_texture = filtered_noise * env_noise
+
+    # Layer: 75% sub-bass + 25% subtle air inhale
+    mix = 0.75 * sub_bass + 0.25 * air_texture
+    return _to_stereo_pcm16(mix, peak_norm=0.50)
+
+
 class ProceduralSFXGenerator:
     """Generates and caches all broadcast procedural sound effects."""
 
@@ -146,6 +186,8 @@ class ProceduralSFXGenerator:
             "sfx_tactical_tick": out_p / "sfx_tactical_tick.wav",
             "sfx_ball_kick": out_p / "sfx_ball_kick.wav",
             "sfx_goal_impact": out_p / "sfx_goal_impact.wav",
+            "slow_focus_swell": out_p / "slow_focus_swell.wav",
+            "sfx_slow_focus_swell": out_p / "sfx_slow_focus_swell.wav",
         }
 
         # Synthesize each sound
@@ -161,5 +203,9 @@ class ProceduralSFXGenerator:
         impact_data = synthesize_goal_impact()
         wavfile.write(str(sfx_files["sfx_goal_impact"]), SAMPLE_RATE, impact_data)
 
-        logger.info(f"Synthesized 4 broadcast SFX files to: {out_p}")
+        swell_data = synthesize_slow_focus_swell()
+        wavfile.write(str(sfx_files["slow_focus_swell"]), SAMPLE_RATE, swell_data)
+        wavfile.write(str(sfx_files["sfx_slow_focus_swell"]), SAMPLE_RATE, swell_data)
+
+        logger.info(f"Synthesized 5 broadcast SFX files to: {out_p}")
         return {k: str(v) for k, v in sfx_files.items()}

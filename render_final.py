@@ -36,6 +36,7 @@ for _p in [
 from src.vision.tactical_vision_engine import TacticalVisionEngine
 from src.rendering.tactical_narrator import TacticalNarrator
 from src.rendering.audio_engine import AudioEngine
+from src.rendering.elastic_time_warper import ElasticTimeWarper
 
 
 K_VIDEO_MAP = {
@@ -339,6 +340,7 @@ def main():
     vision_engine = TacticalVisionEngine()
     narrator = TacticalNarrator()
     audio_engine = AudioEngine()
+    elastic_warper = ElasticTimeWarper()
     synchronized_clips = []
 
     print("\n=== STEP 1: Running Vision Analysis & Audio Generation on all 5 clips ===")
@@ -534,21 +536,8 @@ def main():
         b2_ms = beats.get("beat_2_cause", {}).get("duration_ms", 5400) if isinstance(beats.get("beat_2_cause"), dict) else 5400
         b3_ms = beats.get("beat_3_effect", {}).get("duration_ms", 4200) if isinstance(beats.get("beat_3_effect"), dict) else 4200
 
-        # Physical video freeze frame vs pre-roll duration: K = K_video (decoupled from beat_1_frames)
-        b1_sec = b1_ms / 1000.0
-        beat_1_frames = int(math.ceil((b1_sec + 0.15) * 30))
-        b2_sec = b2_ms / 1000.0
-        beat_2_frames = int(math.ceil(b2_sec * 30))
-
-        # Synchronize freeze duration to cover Beat 2 completely with zero audio overlap
-        freeze_end_frame = max(K_video, beat_1_frames) + beat_2_frames + 12
-        freeze_frames = freeze_end_frame - K_video
-
+        # Physical video freeze frame vs pre-roll duration: K = K_video
         K = K_video
-        video_freeze_frame = K
-        pre_roll_duration_frames = K
-        freeze_frame = K
-        cause_frame_idx = K
 
         # Re-save cause_frame_path ({cid}_cause.jpg) from video at exact freeze_frame index K and encode Base64 data URI
         frame_path = sc.get("cause_frame_path") or sc.get("freeze_frame_path") or f"F:/DockerRenders/assets/frames/{cid}_cause.jpg"
@@ -566,56 +555,58 @@ def main():
                     print(f"Re-saved cause freeze frame for {cid} at frame {K} to {frame_path} and encoded Base64 URI")
                 cap.release()
 
-        b3_sec = b3_ms / 1000.0
-        beat_3_frames = math.ceil(b3_sec * 30) + 6
+        # Step 2 & 3: Subtle Elastic Speed-Ramping Engine & Pre-Warped Video Pipeline
+        src_dur_sec = (actual_video_frames / 30.0) if actual_video_frames > 0 else 10.0
+        candidate_segs = sc.get("speed_segments") or beats.get("speed_segments")
+        elastic_sol = elastic_warper.solve_elastic_timeline(
+            beats=beats,
+            source_video_duration_sec=src_dur_sec,
+            cause_frame_idx=K,
+            source_fps=30.0,
+            candidate_segments=candidate_segs,
+        )
 
-        if actual_video_frames <= 0:
-            eff_idx = sc.get("effect_frame_idx", 240)
-            actual_video_frames = max(eff_idx + 30, pre_roll_duration_frames + beat_3_frames + 30)
-
-        # Eliminate trailing black screens between clips: post_roll_frames strictly bounded by video
-        max_available_post_roll = max(1, actual_video_frames - K - 2)
-
-        b3_path = None
-        if isinstance(beats.get("beat_3_effect"), dict) and beats["beat_3_effect"].get("wav_path"):
-            b3_path = Path(beats["beat_3_effect"]["wav_path"])
-        if not b3_path or not b3_path.is_file():
-            cand_b3 = audio_base / cid / "beat_3_effect.wav"
-            if cand_b3.is_file():
-                b3_path = cand_b3
-
-        if beat_3_frames > max_available_post_roll and b3_path and b3_path.is_file():
-            avail_sec = max(0.5, (max_available_post_roll / 30.0) - 0.2)
-            speed_factor = min(1.30, max(1.10, b3_sec / avail_sec))
-            temp_b3 = b3_path.with_name(f"temp_speed_{b3_path.name}")
-            try:
-                cmd = [
-                    "ffmpeg", "-y",
-                    "-i", str(b3_path),
-                    "-filter:a", f"atempo={speed_factor:.3f}",
-                    str(temp_b3),
-                ]
-                subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
-                if temp_b3.is_file() and temp_b3.stat().st_size > 0:
-                    temp_b3.replace(b3_path)
-                    b3_sec = b3_sec / speed_factor
-                    b3_ms = int(b3_sec * 1000)
-                    beat_3_frames = math.ceil(b3_sec * 30) + 6
-                    if isinstance(beats.get("beat_3_effect"), dict):
-                        beats["beat_3_effect"]["duration_sec"] = b3_sec
-                        beats["beat_3_effect"]["duration_ms"] = b3_ms
-                    print(f"Sped up beat_3 commentary for {cid} by {speed_factor:.2f}x to fit available {max_available_post_roll} post-roll frames")
-            except Exception as e:
-                print(f"Could not speed up beat_3 for {cid}: {e}")
-                if temp_b3.is_file():
-                    temp_b3.unlink(missing_ok=True)
-
-        post_roll_frames = min(max_available_post_roll, max(120, beat_3_frames))
-        total_composition_frames = cause_frame_idx + freeze_frames + post_roll_frames
+        speed_segments = elastic_sol["speed_segments"]
+        total_composition_frames = elastic_sol["total_output_frames"]
+        freeze_frames = elastic_sol["freeze_duration_frames"]
+        freeze_start_frame = elastic_sol["freeze_start_frame"]
+        freeze_end_frame = elastic_sol["freeze_end_frame"]
+        post_roll_frames = max(1, total_composition_frames - freeze_end_frame)
         seg_dur = round(total_composition_frames / 30.0, 4)
 
-        vid_name = Path(vid_path).name if vid_path else f"{cid}.mp4"
-        clip_url = f"http://127.0.0.1:3000/assets/clips/{vid_name}"
+        video_freeze_frame = freeze_start_frame
+        pre_roll_duration_frames = freeze_start_frame
+        freeze_frame = freeze_start_frame
+        cause_frame_idx = freeze_start_frame
+
+        # Pre-warp video clip into F:/DockerRenders/assets/clips/warped_{cid}.mp4
+        warped_clip_name = f"warped_{cid}.mp4"
+        warped_vid_path = Path("F:/DockerRenders/assets/clips") / warped_clip_name
+        clip_url = f"http://127.0.0.1:3000/assets/clips/{warped_clip_name}"
+
+        is_warped_ready = False
+        if vid_path and Path(vid_path).is_file():
+            if not warped_vid_path.is_file() or warped_vid_path.stat().st_size < 1000:
+                print(f"Pre-warping video stream for {cid} -> {warped_vid_path}...")
+                try:
+                    elastic_warper.render_warped_video_stream(
+                        source_video_path=vid_path,
+                        output_video_path=warped_vid_path,
+                        out_frame_to_source_time_sec=elastic_sol["out_frame_to_source_time_sec"],
+                        instantaneous_rates=elastic_sol["instantaneous_rates"],
+                        width=1920,
+                        height=1080,
+                        fps=30,
+                    )
+                    is_warped_ready = True
+                except Exception as e:
+                    print(f"Warning: Pre-warping video failed for {cid}: {e}. Falling back to standard clip.")
+                    clip_url = f"http://127.0.0.1:3000/assets/clips/{Path(vid_path).name}"
+            else:
+                is_warped_ready = True
+        else:
+            vid_name = Path(vid_path).name if vid_path else f"{cid}.mp4"
+            clip_url = f"http://127.0.0.1:3000/assets/clips/{vid_name}"
 
         frame_name = Path(frame_path).name if frame_path else f"{cid}_cause.jpg"
         freeze_frame_url = freeze_frame_b64 or f"http://127.0.0.1:3000/assets/frames/{frame_name}"
@@ -649,6 +640,19 @@ def main():
                 cause_tel["is_set_piece_or_long_ball"] = True
                 cause_tel["is_set_piece"] = True
 
+            # Remap tracks_per_frame and cause_telestration through source_frame_to_out_frame
+            remapped_vis = elastic_warper.remap_vision_coordinates(
+                tracks_per_frame=t_map,
+                cause_frame_idx=K,
+                effect_frame_idx=sc.get("effect_frame_idx", 240),
+                freeze_frames=freeze_frames,
+                out_frame_to_source_time_sec=elastic_sol["out_frame_to_source_time_sec"],
+                source_frame_to_out_frame=elastic_sol["source_frame_to_out_frame"],
+                cause_telestration=cause_tel,
+            )
+            t_map = remapped_vis["warped_tracks_per_frame"]
+            cause_tel = remapped_vis["warped_cause_telestration"]
+
             # Persist updated realigned cause_telestration and tracks_per_frame to checkpoint JSON
             vis_checkpoint = chk_dir / f"{cid}_vision.json"
             if vis_checkpoint.is_file():
@@ -662,10 +666,18 @@ def main():
                 except Exception:
                     pass
 
+        eff_frame_idx = remapped_vis["warped_effect_frame_idx"] if 'remapped_vis' in locals() else sc.get("effect_frame_idx", 240)
+
         seg = {
             "id": f"seg_{cid}",
             "type": "clip",
             "url": clip_url,
+            "warped_video_url": clip_url,
+            "warpedVideoUrl": clip_url,
+            "is_warped": is_warped_ready,
+            "isWarped": is_warped_ready,
+            "speed_segments": speed_segments,
+            "speedSegments": speed_segments,
             "freezeFrameUrl": freeze_frame_url,
             "freeze_frame_url": freeze_frame_url,
             "telestration": {
@@ -695,7 +707,8 @@ def main():
             "preRollDurationFrames": pre_roll_duration_frames,
             "cause_frame_idx": cause_frame_idx,
             "causeFrameIdx": cause_frame_idx,
-            "effect_frame_idx": sc.get("effect_frame_idx", 240),
+            "effect_frame_idx": eff_frame_idx,
+            "effectFrameIdx": eff_frame_idx,
             "freeze_frames": freeze_frames,
             "freezeFrames": freeze_frames,
             "tracks_per_frame": t_map,
