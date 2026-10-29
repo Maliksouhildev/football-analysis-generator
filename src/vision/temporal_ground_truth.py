@@ -785,7 +785,7 @@ class TemporalGroundTruthEngine:
             "from_pct": [round(rx_now, 1), round(ry_now, 1)],
             "to_pct": [round(to_x, 1), round(to_y, 1)],
             "was_taken": True,
-            "color": r_track.get("jersey_hex") or ("#ffffff" if r_track.get("team") == "away" else "#ef4444"),
+            "color": r_track.get("jersey_hex") or "#ffffff",
         })
         return vectors
 
