@@ -35,6 +35,11 @@ class SpeedSegment(BaseModel):
     source_start_sec: float = Field(..., description="Source video start timestamp in seconds")
     source_end_sec: float = Field(..., description="Source video end timestamp in seconds")
     duration_sec: Optional[float] = Field(None, description="Output duration in seconds")
+    start_frame: Optional[int] = Field(None, description="Timeline start frame index")
+    end_frame: Optional[int] = Field(None, description="Timeline end frame index")
+    startFrame: Optional[int] = Field(None, description="Timeline start frame index (camelCase)")
+    endFrame: Optional[int] = Field(None, description="Timeline end frame index (camelCase)")
+    output_frames: Optional[int] = Field(None, description="Total output frames")
     reason: Optional[str] = Field(None, description="Tactical rationale for speed ramping")
 
 
@@ -556,9 +561,18 @@ class TacticalNarrator:
                         if not b3_str.endswith((".", "!", "?")):
                             b3_str += "."
 
-                        speed_segs = parsed.get("speed_segments") or []
-                        if not isinstance(speed_segs, list):
-                            speed_segs = []
+                        raw_segs = parsed.get("speed_segments") or []
+                        speed_segs: List[Dict[str, Any]] = []
+                        if isinstance(raw_segs, list) and raw_segs:
+                            for s in raw_segs:
+                                if isinstance(s, dict) and "segment_type" in s and "rate" in s:
+                                    try:
+                                        m = SpeedSegment(**s)
+                                        speed_segs.append(m.model_dump() if hasattr(m, "model_dump") else m.dict())
+                                    except Exception:
+                                        pass
+                        if not speed_segs or not any(s.get("segment_type") == "FREEZE_HOLD" for s in speed_segs):
+                            speed_segs = self._create_default_speed_segments(cause_telestration)
 
                         return {
                             "beat_1_setup": b1_str,

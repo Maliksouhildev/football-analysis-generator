@@ -499,12 +499,6 @@ def main():
         cid = sc.get("clip_id", f"clip_{s_idx+1:02d}")
         beats = sc.get("beats", {})
 
-        # Ensure visual cue tags are enriched with match telemetry
-        cue_tags = ensure_clip_visual_cue_tags(sc, sc, cid)
-        sc["visual_cue_tags"] = cue_tags
-        if isinstance(beats, dict):
-            beats["visual_cue_tags"] = cue_tags
-
         # Ensure beat audio URLs are populated with HTTP endpoints for Remotion container
         if beats:
             for b_name in ("beat_1_setup", "beat_2_cause", "beat_3_effect"):
@@ -579,6 +573,15 @@ def main():
         freeze_frame = freeze_start_frame
         cause_frame_idx = freeze_start_frame
 
+        # Ensure visual cue tags are enriched with match telemetry and snapped to warped timeline
+        sc_tag_context = dict(sc)
+        sc_tag_context["cause_frame_idx"] = freeze_start_frame
+        sc_tag_context["freeze_frames"] = freeze_frames
+        cue_tags = ensure_clip_visual_cue_tags(sc_tag_context, sc_tag_context, cid)
+        sc["visual_cue_tags"] = cue_tags
+        if isinstance(beats, dict):
+            beats["visual_cue_tags"] = cue_tags
+
         # Pre-warp video clip into F:/DockerRenders/assets/clips/warped_{cid}.mp4
         warped_clip_name = f"warped_{cid}.mp4"
         warped_vid_path = Path("F:/DockerRenders/assets/clips") / warped_clip_name
@@ -586,7 +589,7 @@ def main():
 
         is_warped_ready = False
         if vid_path and Path(vid_path).is_file():
-            if not warped_vid_path.is_file() or warped_vid_path.stat().st_size < 1000:
+            if "--force" in sys.argv or not warped_vid_path.is_file() or warped_vid_path.stat().st_size < 1000:
                 print(f"Pre-warping video stream for {cid} -> {warped_vid_path}...")
                 try:
                     elastic_warper.render_warped_video_stream(

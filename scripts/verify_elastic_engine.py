@@ -97,6 +97,20 @@ def test_elastic_solver_and_easing():
     # Verify rates are bounded within natural broadcast regimes
     assert np.all(rates >= 0.0), "Negative rate detected!"
     assert np.all(rates <= 1.36), f"Rate {rates.max()} exceeded broadcast limit 1.35x!"
+
+    # Verify freeze frame has ZERO drift
+    t_cause_expected = 80 / 30.0
+    f_f_start = sol["freeze_start_frame"]
+    f_f_end = sol["freeze_end_frame"]
+    t_map = sol["out_frame_to_source_time_sec"]
+
+    print(f"Freeze window: output frames [{f_f_start}, {f_f_end})")
+    print(f"t_source at freeze start ({f_f_start}): {t_map[f_f_start]:.4f}s (frame: {t_map[f_f_start] * 30.0:.2f})")
+    print(f"t_source at freeze end-1 ({f_f_end - 1}): {t_map[f_f_end - 1]:.4f}s (frame: {t_map[f_f_end - 1] * 30.0:.2f})")
+
+    assert abs(t_map[f_f_start] - t_cause_expected) < 1e-4, f"Freeze start mismatch: {t_map[f_f_start]} vs {t_cause_expected}"
+    assert abs(t_map[f_f_end - 1] - t_cause_expected) < 1e-4, f"Freeze drift detected: {t_map[f_f_end - 1]} vs {t_cause_expected}"
+    print("Zero-Drift Freeze Verification PASSED!")
     print("Test 2 PASSED!")
 
 
@@ -104,9 +118,9 @@ def test_bidirectional_lookup_and_remapping():
     print("\n--- Test 3: Bidirectional Lookup & Vision Remapping ---")
     warper = ElasticTimeWarper(fps=30)
     beats = {
-        "beat_1_setup": {"duration_ms": 2000},
-        "beat_2_cause": {"duration_ms": 5000},
-        "beat_3_effect": {"duration_ms": 3000},
+        "beat_1_setup": {"duration_ms": 2000},  # 2.0s -> 60 frames
+        "beat_2_cause": {"duration_ms": 5000},  # 5.0s -> 150 frames
+        "beat_3_effect": {"duration_ms": 3000}, # 3.0s -> 90 frames
     }
     sol = warper.solve_elastic_timeline(beats, source_video_duration_sec=8.0, cause_frame_idx=80)
 
@@ -117,7 +131,7 @@ def test_bidirectional_lookup_and_remapping():
     f_src_test = 80
     f_out = src_to_out(f_src_test)
     print(f"Source frame {f_src_test} maps to Output frame {f_out}")
-    assert 0 <= f_out < sol["total_output_frames"]
+    assert f_out == sol["freeze_start_frame"], f"Source cause frame 80 must map exactly to freeze start frame {sol['freeze_start_frame']}, got {f_out}!"
 
     # Remap vision tracks and vector trajectory
     mock_tracks = {
@@ -126,6 +140,7 @@ def test_bidirectional_lookup_and_remapping():
         "180": [{"track_id": 7, "x_pct": 85.0, "y_pct": 65.0}],
     }
     mock_tel = {
+        "ball_carrier_per_frame": {"0": 7, "80": 7, "180": 9},
         "vectors": [
             {
                 "from_track_id": 7,
@@ -150,6 +165,13 @@ def test_bidirectional_lookup_and_remapping():
     assert len(warped_tracks) == sol["total_output_frames"], "Tracks not remapped for every output frame!"
     remapped_vectors = remapped["warped_cause_telestration"]["vectors"]
     assert remapped_vectors[0]["pass_start_frame"] == f_out
+    assert remapped["warped_cause_frame_idx"] == sol["freeze_start_frame"]
+
+    # Verify ball carrier per frame remapping
+    remapped_bc = remapped["warped_cause_telestration"]["ball_carrier_per_frame"]
+    assert str(f_out) in remapped_bc, "ball_carrier_per_frame not remapped to output timeline!"
+    assert remapped_bc[str(f_out)] == 7, "Carrier at freeze frame must match track 7"
+
     print(f"Remapped pass vector start frame: {remapped_vectors[0]['pass_start_frame']}")
     print(f"Remapped pass vector receive frame: {remapped_vectors[0]['pass_receive_frame']}")
     print("Test 3 PASSED!")

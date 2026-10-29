@@ -73,6 +73,9 @@ class ElasticTimeWarper:
           * FREEZE_HOLD: 0.00x
         - Total output frame count matches master voiceover WAV duration:
           abs(video_frames - audio_frames) <= 1
+        - Freeze frame has ZERO drift: t_source(F_out) == cause_frame_idx / source_fps
+          for every frame in the freeze window.
+        - Source frame cause_frame_idx maps exactly to freeze_start_frame.
         """
         # 1. Resolve master audio durations
         b1_ms = beats.get("beat_1_setup", {}).get("duration_ms", 2000) if isinstance(beats.get("beat_1_setup"), dict) else 2000
@@ -83,106 +86,176 @@ class ElasticTimeWarper:
         d_audio_2 = max(1.5, float(b2_ms) / 1000.0)
         d_audio_3 = max(0.8, float(b3_ms) / 1000.0)
 
-        # Exact total target audio frames
+        # Exact total target audio frames partitioned per beat
         total_audio_sec = d_audio_1 + d_audio_2 + d_audio_3
         total_target_frames = int(round(total_audio_sec * self.fps))
+        f1_frames = int(round(d_audio_1 * self.fps))
+        f2_frames = int(round(d_audio_2 * self.fps))
+        f3_frames = max(15, total_target_frames - f1_frames - f2_frames)
+        total_target_frames = f1_frames + f2_frames + f3_frames
 
         # 2. Source video landmarks
         t_cause = max(0.1, float(cause_frame_idx) / source_fps)
         t_end = max(t_cause + 1.0, float(source_video_duration_sec))
-
         d_video_1 = t_cause
         d_video_3 = t_end - t_cause
 
-        # 3. Micro-beat 1 (Pre-roll: 0.0 to t_cause)
-        # Solve dynamic playback rate r_1
-        target_r1 = d_video_1 / d_audio_1
-        target_out_frames_1 = int(round(d_audio_1 * self.fps))
+        W = min(self.transition_frames, max(2, f1_frames // 4))
 
-        # Build Phase 1 segments
+        # 3. Micro-beat 1 (Pre-roll: 0.0 to t_cause in f1_frames)
+        # Target sum of rates: sum(rates[:f1_frames]) / self.fps == t_cause
+        target_sum_1 = t_cause * self.fps
+        rates = np.zeros(total_target_frames, dtype=np.float64)
+
+        # Ease into freeze over the last W frames of Phase 1: [f1_frames - W, f1_frames]
+        tau_ease = np.linspace(0.0, 1.0, W, endpoint=False)
+        h_ease = 3.0 * (tau_ease ** 2) - 2.0 * (tau_ease ** 3)
+        r_focus_phase1 = 0.70
+
+        # Last W frames ease from r_focus_phase1 down to 0.0
+        ease_in_rates = r_focus_phase1 * (1.0 - h_ease)
+        sum_ease_in = float(np.sum(ease_in_rates))
+
+        f_rem_p1 = max(1, f1_frames - W)
+        sum_rem_p1 = max(0.1, target_sum_1 - sum_ease_in)
+        avg_r_rem = sum_rem_p1 / float(f_rem_p1)
+
         segments_p1: List[Dict[str, Any]] = []
-        if d_video_1 >= 1.4:
-            # Transit portion + subtle deceleration before freeze
-            transit_end = round(max(0.4, d_video_1 - 0.7), 3)
-            # Allocate frames
-            ratio = transit_end / d_video_1
-            f_transit = max(1, int(round(target_out_frames_1 * ratio)))
-            f_decel = max(1, target_out_frames_1 - f_transit)
 
-            r_transit = min(1.35, max(1.05, (transit_end) / (f_transit / self.fps)))
-            r_decel = max(0.60, min(0.85, (d_video_1 - transit_end) / (f_decel / self.fps)))
+        if avg_r_rem > 1.05 and f_rem_p1 >= 10:
+            # Transit acceleration + subtle deceleration before freeze
+            f_focus_p1 = max(4, min(14, int(round(f_rem_p1 * 0.22))))
+            f_transit_p1 = f_rem_p1 - f_focus_p1
 
+            # Solve r_transit so sum equals sum_rem_p1
+            r_transit = (sum_rem_p1 - f_focus_p1 * r_focus_phase1) / float(f_transit_p1)
+            # Clamp transit within broadcast limits 1.25x - 1.35x
+            if r_transit > 1.35:
+                # If required rate exceeds 1.35, reduce f_focus_p1
+                r_transit = 1.35
+                r_focus_phase1 = max(0.60, (sum_rem_p1 - f_transit_p1 * r_transit) / float(f_focus_p1))
+                ease_in_rates = r_focus_phase1 * (1.0 - h_ease)
+                # Recalculate remaining to balance exactly
+                rem_needed = target_sum_1 - float(np.sum(ease_in_rates)) - f_focus_p1 * r_focus_phase1
+                r_transit = rem_needed / float(f_transit_p1)
+
+            rates[:f_transit_p1] = r_transit
+            rates[f_transit_p1:f_transit_p1 + f_focus_p1] = r_focus_phase1
+            rates[f1_frames - W:f1_frames] = ease_in_rates
+
+            # Apply smooth Hermite transition between transit and focus
+            t_w = min(W, f_transit_p1, f_focus_p1)
+            if t_w > 1:
+                t_tau = np.linspace(0.0, 1.0, t_w)
+                t_h = 3.0 * (t_tau ** 2) - 2.0 * (t_tau ** 3)
+                b_start = f_transit_p1 - t_w // 2
+                rates[b_start:b_start + t_w] = r_transit + (r_focus_phase1 - r_transit) * t_h
+
+            t_transit_sec = round(float(np.sum(rates[:f_transit_p1])) / self.fps, 4)
             segments_p1.append({
                 "segment_type": "FAST_TRANSIT",
-                "rate": round(r_transit, 3),
+                "rate": round(float(np.mean(rates[:f_transit_p1])), 3),
                 "source_start_sec": 0.0,
-                "source_end_sec": transit_end,
-                "output_frames": f_transit,
+                "source_end_sec": t_transit_sec,
+                "output_frames": f_transit_p1,
                 "reason": "Ball traveling across open space in transition",
             })
             segments_p1.append({
                 "segment_type": "SLOW_FOCUS",
-                "rate": round(r_decel, 3),
-                "source_start_sec": transit_end,
-                "source_end_sec": d_video_1,
-                "output_frames": f_decel,
+                "rate": round(r_focus_phase1, 3),
+                "source_start_sec": t_transit_sec,
+                "source_end_sec": round(t_cause, 4),
+                "output_frames": f_focus_p1 + W,
                 "reason": "Cinematic deceleration as carrier engages defender",
             })
         else:
-            r1_clamped = min(1.35, max(0.65, target_r1))
+            # Single uniform pre-roll flow with smooth ease into freeze
+            r_flat = sum_rem_p1 / float(f_rem_p1)
+            rates[:f_rem_p1] = r_flat
+            rates[f1_frames - W:f1_frames] = r_flat * (1.0 - h_ease)
             segments_p1.append({
-                "segment_type": "NORMAL_FLOW" if 0.90 <= r1_clamped <= 1.10 else ("FAST_TRANSIT" if r1_clamped > 1.10 else "SLOW_FOCUS"),
-                "rate": round(r1_clamped, 3),
+                "segment_type": "NORMAL_FLOW" if 0.90 <= r_flat <= 1.10 else ("FAST_TRANSIT" if r_flat > 1.10 else "SLOW_FOCUS"),
+                "rate": round(float(r_flat), 3),
                 "source_start_sec": 0.0,
-                "source_end_sec": d_video_1,
-                "output_frames": target_out_frames_1,
+                "source_end_sec": round(t_cause, 4),
+                "output_frames": f1_frames,
                 "reason": "Pre-roll buildup flow",
             })
 
-        # 4. Micro-beat 2 (Freeze Hold at t_cause)
-        target_out_frames_2 = int(round(d_audio_2 * self.fps))
+        # Ensure Phase 1 sum equals t_cause * fps EXACTLY to machine precision
+        scale_p1 = target_sum_1 / max(1e-6, float(np.sum(rates[:f1_frames])))
+        rates[:f1_frames] *= scale_p1
+
+        # 4. Micro-beat 2 (Tactical Freeze Hold at t_cause)
+        # Rates MUST be strictly 0.00 for the entire freeze duration
+        freeze_start_frame = f1_frames
+        freeze_end_frame = f1_frames + f2_frames
+        rates[freeze_start_frame:freeze_end_frame] = 0.0
+
         segment_p2 = {
             "segment_type": "FREEZE_HOLD",
             "rate": 0.00,
-            "source_start_sec": d_video_1,
-            "source_end_sec": d_video_1,
-            "output_frames": target_out_frames_2,
+            "source_start_sec": round(t_cause, 4),
+            "source_end_sec": round(t_cause, 4),
+            "output_frames": f2_frames,
             "reason": "Tactical freeze hold for telestration HUD reveal",
         }
 
-        # 5. Micro-beat 3 (Post-roll: t_cause to t_end)
-        # Allocate remaining target frames so total output frames match total_target_frames EXACTLY
-        consumed_frames = sum(s["output_frames"] for s in segments_p1) + target_out_frames_2
-        target_out_frames_3 = max(15, total_target_frames - consumed_frames)
+        # 5. Micro-beat 3 (Post-roll: t_cause to t_end in f3_frames)
+        # Dedicated SLOW_FOCUS right as video unfreezes (skill, turn, deflection)
+        W_post = min(W, max(2, f3_frames // 4))
+        tau_out = np.linspace(0.0, 1.0, W_post)
+        h_out = 3.0 * (tau_out ** 2) - 2.0 * (tau_out ** 3)
+        r_focus_phase3 = 0.68
 
-        segments_p3: List[Dict[str, Any]] = []
-        # In post-roll, dedicate the first ~1.2s to SLOW_FOCUS (skill, turn, mistake), remainder to transit/flow
-        d_focus_source = min(1.5, max(0.6, d_video_3 * 0.45))
-        f_focus = min(int(round(target_out_frames_3 * 0.55)), max(12, int(round((d_focus_source / 0.68) * self.fps))))
-        f_flow = max(1, target_out_frames_3 - f_focus)
+        # Ease out of freeze from 0.0 up to r_focus_phase3
+        ease_out_rates = r_focus_phase3 * h_out
+        f_focus_flat = max(6, min(24, int(round(f3_frames * 0.40)) - W_post))
+        f_focus_total = W_post + f_focus_flat
+        f_flow_total = max(1, f3_frames - f_focus_total)
 
-        r_focus = max(0.55, min(0.78, d_focus_source / (f_focus / self.fps)))
-        rem_source = d_video_3 - d_focus_source
-        r_flow = min(1.35, max(0.95, rem_source / (f_flow / self.fps)))
+        # Remaining source footage to cover in post-roll
+        target_rem_source_sec = min(d_video_3, (f_focus_total * (r_focus_phase3 / self.fps)) + (f_flow_total * (1.30 / self.fps)))
+        source_covered_focus = (float(np.sum(ease_out_rates)) + f_focus_flat * r_focus_phase3) / self.fps
+        source_needed_flow = max(0.2, target_rem_source_sec - source_covered_focus)
+        r_flow_phase3 = min(1.35, max(0.90, (source_needed_flow * self.fps) / float(f_flow_total)))
 
-        segments_p3.append({
-            "segment_type": "SLOW_FOCUS",
-            "rate": round(r_focus, 3),
-            "source_start_sec": d_video_1,
-            "source_end_sec": round(d_video_1 + d_focus_source, 3),
-            "output_frames": f_focus,
-            "reason": "Subtle slow-motion focus during decisive turn and execution",
-        })
-        segments_p3.append({
-            "segment_type": "FAST_TRANSIT" if r_flow >= 1.15 else "NORMAL_FLOW",
-            "rate": round(r_flow, 3),
-            "source_start_sec": round(d_video_1 + d_focus_source, 3),
-            "source_end_sec": t_end,
-            "output_frames": f_flow,
-            "reason": "Consequence unfolds into attack progression or clearance",
-        })
+        p3_start = freeze_end_frame
+        rates[p3_start:p3_start + W_post] = ease_out_rates
+        rates[p3_start + W_post:p3_start + f_focus_total] = r_focus_phase3
+        rates[p3_start + f_focus_total:p3_start + f3_frames] = r_flow_phase3
 
-        # Combine all resolved segments
+        # Apply smooth Hermite transition between post-roll focus and flow
+        t_w3 = min(W_post, f_focus_flat, f_flow_total)
+        if t_w3 > 1:
+            t_tau3 = np.linspace(0.0, 1.0, t_w3)
+            t_h3 = 3.0 * (t_tau3 ** 2) - 2.0 * (t_tau3 ** 3)
+            b_start3 = (p3_start + f_focus_total) - t_w3 // 2
+            rates[b_start3:b_start3 + t_w3] = r_focus_phase3 + (r_flow_phase3 - r_focus_phase3) * t_h3
+
+        focus_end_sec = round(t_cause + (float(np.sum(rates[p3_start:p3_start + f_focus_total])) / self.fps), 4)
+        end_sec_total = round(t_cause + (float(np.sum(rates[p3_start:])) / self.fps), 4)
+
+        segments_p3: List[Dict[str, Any]] = [
+            {
+                "segment_type": "SLOW_FOCUS",
+                "rate": round(r_focus_phase3, 3),
+                "source_start_sec": round(t_cause, 4),
+                "source_end_sec": focus_end_sec,
+                "output_frames": f_focus_total,
+                "reason": "Subtle slow-motion focus during decisive turn and execution",
+            },
+            {
+                "segment_type": "FAST_TRANSIT" if r_flow_phase3 >= 1.15 else "NORMAL_FLOW",
+                "rate": round(float(r_flow_phase3), 3),
+                "source_start_sec": focus_end_sec,
+                "source_end_sec": end_sec_total,
+                "output_frames": f_flow_total,
+                "reason": "Consequence unfolds into attack progression or clearance",
+            },
+        ]
+
+        # Combine all resolved continuous segments
         all_segments: List[Dict[str, Any]] = segments_p1 + [segment_p2] + segments_p3
 
         # Compute cumulative frame indices on output timeline
@@ -196,15 +269,22 @@ class ElasticTimeWarper:
             seg["duration_sec"] = round(seg["output_frames"] / self.fps, 4)
 
         # Build continuous piecewise time map
-        out_time_map, rates_map = self.build_continuous_piecewise_time_map(
-            resolved_segments=all_segments,
-            total_output_frames=total_target_frames,
+        out_time_map = self.build_continuous_piecewise_time_map(
+            rates=rates,
+            freeze_start_frame=freeze_start_frame,
+            freeze_end_frame=freeze_end_frame,
+            t_cause=t_cause,
             source_start_sec=0.0,
         )
 
-        bidirectional = self.build_bidirectional_lookup(out_time_map, source_fps=source_fps)
+        bidirectional = self.build_bidirectional_lookup(
+            out_frame_to_source_time_sec=out_time_map,
+            cause_frame_idx=cause_frame_idx,
+            freeze_start_frame=freeze_start_frame,
+            freeze_end_frame=freeze_end_frame,
+            source_fps=source_fps,
+        )
 
-        # Verify exact frame matching
         actual_video_frames = len(out_time_map)
         frame_diff = abs(actual_video_frames - total_target_frames)
         assert frame_diff <= 1, f"Frame sync violation: {actual_video_frames} video frames vs {total_target_frames} audio frames (diff: {frame_diff})"
@@ -215,85 +295,86 @@ class ElasticTimeWarper:
             "total_audio_frames": total_target_frames,
             "frame_diff": frame_diff,
             "out_frame_to_source_time_sec": out_time_map,
-            "instantaneous_rates": rates_map,
+            "instantaneous_rates": rates,
             "source_frame_to_out_frame": bidirectional["source_frame_to_out_frame"],
             "source_frame_to_out_frame_map": bidirectional["source_frame_to_out_frame_map"],
-            "freeze_start_frame": segment_p2["start_frame"],
-            "freeze_duration_frames": segment_p2["output_frames"],
-            "freeze_end_frame": segment_p2["end_frame"],
+            "freeze_start_frame": freeze_start_frame,
+            "freeze_duration_frames": f2_frames,
+            "freeze_end_frame": freeze_end_frame,
         }
 
     def build_continuous_piecewise_time_map(
         self,
-        resolved_segments: List[Dict[str, Any]],
-        total_output_frames: int,
+        rates: np.ndarray,
+        freeze_start_frame: int,
+        freeze_end_frame: int,
+        t_cause: float,
         source_start_sec: float = 0.0,
-    ) -> Tuple[np.ndarray, np.ndarray]:
+    ) -> np.ndarray:
         """
-        Constructs a continuous piecewise instantaneous rate array r(k) at 30fps
-        using a 6-frame (0.20s) Hermite cubic ease-in/ease-out ramp between adjacent speed regimes.
-        Then integrates:
+        Integrates instantaneous rates into source timestamps:
             t_source(F_out) = sum_{k=0}^{F_out} (r(k) / 30.0)
+        Guarantees:
+        - t_source(F_out) == t_cause for all F_out in [freeze_start_frame, freeze_end_frame - 1].
+        - Discrete monotonic continuity without drift.
         """
-        rates = np.zeros(total_output_frames, dtype=np.float64)
+        N_out = len(rates)
+        t_source = np.zeros(N_out, dtype=np.float64)
 
-        # Fill segment base rates
-        for seg in resolved_segments:
-            s_f = max(0, min(total_output_frames, seg["start_frame"]))
-            e_f = max(0, min(total_output_frames, seg["end_frame"]))
-            rates[s_f:e_f] = float(seg["rate"])
+        # Phase 1 integration
+        accum = float(source_start_sec)
+        for k in range(freeze_start_frame):
+            accum += rates[k] / float(self.fps)
+            t_source[k] = min(t_cause, accum)
 
-        # Apply 6-frame Hermite cubic ease transitions between adjacent regimes
-        W = self.transition_frames
-        for idx in range(len(resolved_segments) - 1):
-            seg_curr = resolved_segments[idx]
-            seg_next = resolved_segments[idx + 1]
+        # Freeze hold: strictly locked to t_cause (0 drift)
+        for k in range(freeze_start_frame, freeze_end_frame):
+            t_source[k] = t_cause
 
-            boundary = seg_curr["end_frame"]
-            r_from = float(seg_curr["rate"])
-            r_to = float(seg_next["rate"])
+        # Phase 3 integration
+        accum_post = t_cause
+        for k in range(freeze_end_frame, N_out):
+            accum_post += rates[k] / float(self.fps)
+            t_source[k] = accum_post
 
-            # Center the transition around the boundary
-            trans_start = max(0, boundary - W // 2)
-            trans_end = min(total_output_frames, trans_start + W)
-            actual_w = trans_end - trans_start
-
-            if actual_w > 1:
-                for step in range(actual_w):
-                    k = trans_start + step
-                    tau = float(step) / float(actual_w - 1)
-                    ease_val = self._hermite_cubic(tau)
-                    rates[k] = r_from + (r_to - r_from) * ease_val
-
-        # Integrate to obtain source timestamp t_source(F_out)
-        t_source = np.zeros(total_output_frames, dtype=np.float64)
-        accum_t = float(source_start_sec)
-
-        for k in range(total_output_frames):
-            # Advance source time according to instantaneous rate
-            accum_t += rates[k] / float(self.fps)
-            t_source[k] = accum_t
-
-        return t_source, rates
+        return t_source
 
     def build_bidirectional_lookup(
         self,
         out_frame_to_source_time_sec: np.ndarray,
+        cause_frame_idx: int,
+        freeze_start_frame: int,
+        freeze_end_frame: int,
         source_fps: float = 30.0,
     ) -> Dict[str, Any]:
         """
         Constructs bidirectional lookup:
         - out_frame_to_source_time_sec: List[float]
-        - source_frame_to_out_frame: Callable[[int | float], int]
+        - source_frame_to_out_frame: exact inversion mapping cause_frame_idx directly
+          to freeze_start_frame without search ambiguity.
         - source_frame_to_out_frame_map: Dict[int, int]
         """
         N_out = len(out_frame_to_source_time_sec)
         out_list = [round(float(t), 4) for t in out_frame_to_source_time_sec]
+        t_cause = float(cause_frame_idx) / source_fps
 
         def source_frame_to_out_frame(f_src: Union[int, float]) -> int:
-            t_target = float(f_src) / source_fps
-            idx = int(np.searchsorted(out_frame_to_source_time_sec, t_target, side="left"))
-            return max(0, min(N_out - 1, idx))
+            f_val = float(f_src)
+            # Exact mapping for cause frame: returns freeze start frame
+            if abs(f_val - cause_frame_idx) < 1e-4:
+                return freeze_start_frame
+
+            t_target = f_val / source_fps
+            if t_target < t_cause:
+                # Search in pre-roll
+                idx = int(np.searchsorted(out_frame_to_source_time_sec[:freeze_start_frame], t_target, side="left"))
+                return max(0, min(freeze_start_frame, idx))
+            else:
+                # Search in post-roll
+                if freeze_end_frame >= N_out:
+                    return freeze_end_frame
+                idx = freeze_end_frame + int(np.searchsorted(out_frame_to_source_time_sec[freeze_end_frame:], t_target, side="left"))
+                return max(freeze_end_frame, min(N_out - 1, idx))
 
         # Generate integer map up to maximum source frame
         max_source_t = out_frame_to_source_time_sec[-1] if N_out > 0 else 0.0
@@ -321,31 +402,44 @@ class ElasticTimeWarper:
         cause_telestration: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
-        Remaps all vision coordinates, tracking detections, freeze landmarks, and pass
-        vectors through the piecewise elastic time map into Remotion output frames F_out.
+        Remaps all vision coordinates, tracking detections, freeze landmarks, pass
+        vectors, and ball carrier mappings through the piecewise elastic time map
+        into Remotion output frames F_out.
         """
         N_out = len(out_frame_to_source_time_sec)
         warped_tracks: Dict[str, List[Dict[str, Any]]] = {}
 
         # 1. Remap tracks_per_frame directly to output frames F_out
         source_frame_keys = [int(k) for k in tracks_per_frame.keys() if str(k).isdigit()]
-
-        for f_out in range(N_out):
-            t_src = out_frame_to_source_time_sec[f_out]
-            f_src = int(round(t_src * source_fps))
-            f_key = str(f_src)
-
-            if f_key in tracks_per_frame:
-                warped_tracks[str(f_out)] = tracks_per_frame[f_key]
-            elif source_frame_keys:
-                closest_k = min(source_frame_keys, key=lambda k: abs(k - f_src))
-                warped_tracks[str(f_out)] = tracks_per_frame.get(str(closest_k), [])
-
-        # 2. Remap landmarks
         warped_cause_idx = source_frame_to_out_frame(cause_frame_idx)
         warped_effect_idx = source_frame_to_out_frame(effect_frame_idx)
+        freeze_start_frame = warped_cause_idx
+        freeze_end_frame = warped_cause_idx + freeze_frames
 
-        # 3. Remap vectors and trajectories if present
+        for f_out in range(N_out):
+            if freeze_start_frame <= f_out < freeze_end_frame:
+                # During freeze: lock strictly to cause_frame_idx detections
+                f_key = str(cause_frame_idx)
+                if f_key in tracks_per_frame:
+                    warped_tracks[str(f_out)] = tracks_per_frame[f_key]
+                elif source_frame_keys:
+                    closest_k = min(source_frame_keys, key=lambda k: abs(k - cause_frame_idx))
+                    warped_tracks[str(f_out)] = tracks_per_frame.get(str(closest_k), [])
+                else:
+                    warped_tracks[str(f_out)] = []
+            else:
+                t_src = out_frame_to_source_time_sec[f_out]
+                f_src = int(round(t_src * source_fps))
+                f_key = str(f_src)
+                if f_key in tracks_per_frame:
+                    warped_tracks[str(f_out)] = tracks_per_frame[f_key]
+                elif source_frame_keys:
+                    closest_k = min(source_frame_keys, key=lambda k: abs(k - f_src))
+                    warped_tracks[str(f_out)] = tracks_per_frame.get(str(closest_k), [])
+                else:
+                    warped_tracks[str(f_out)] = []
+
+        # 2. Remap landmarks and vectors if present
         remapped_tel = dict(cause_telestration) if cause_telestration else {}
         if "vectors" in remapped_tel and isinstance(remapped_tel["vectors"], list):
             new_vectors = []
@@ -355,6 +449,12 @@ class ElasticTimeWarper:
                     v_copy["pass_start_frame"] = source_frame_to_out_frame(v_copy["pass_start_frame"])
                 if "pass_receive_frame" in v_copy and isinstance(v_copy["pass_receive_frame"], (int, float)):
                     v_copy["pass_receive_frame"] = source_frame_to_out_frame(v_copy["pass_receive_frame"])
+                if "landing_frame" in v_copy and isinstance(v_copy["landing_frame"], (int, float)):
+                    v_copy["landing_frame"] = source_frame_to_out_frame(v_copy["landing_frame"])
+                if "start_frame" in v_copy and isinstance(v_copy["start_frame"], (int, float)):
+                    v_copy["start_frame"] = source_frame_to_out_frame(v_copy["start_frame"])
+                if "end_frame" in v_copy and isinstance(v_copy["end_frame"], (int, float)):
+                    v_copy["end_frame"] = source_frame_to_out_frame(v_copy["end_frame"])
                 if "trajectory" in v_copy and isinstance(v_copy["trajectory"], list):
                     remapped_traj = []
                     for pt in v_copy["trajectory"]:
@@ -367,6 +467,25 @@ class ElasticTimeWarper:
                     v_copy["trajectory"] = remapped_traj
                 new_vectors.append(v_copy)
             remapped_tel["vectors"] = new_vectors
+
+        # 3. Remap ball_carrier_per_frame
+        if "ball_carrier_per_frame" in remapped_tel and isinstance(remapped_tel["ball_carrier_per_frame"], dict):
+            orig_bc = remapped_tel["ball_carrier_per_frame"]
+            bc_keys = [int(k) for k in orig_bc.keys() if str(k).isdigit()]
+            warped_bc: Dict[str, Any] = {}
+            for f_out in range(N_out):
+                if freeze_start_frame <= f_out < freeze_end_frame:
+                    f_src = cause_frame_idx
+                else:
+                    t_src = out_frame_to_source_time_sec[f_out]
+                    f_src = int(round(t_src * source_fps))
+                f_key = str(f_src)
+                if f_key in orig_bc:
+                    warped_bc[str(f_out)] = orig_bc[f_key]
+                elif bc_keys:
+                    closest_k = min(bc_keys, key=lambda k: abs(k - f_src))
+                    warped_bc[str(f_out)] = orig_bc.get(str(closest_k))
+            remapped_tel["ball_carrier_per_frame"] = warped_bc
 
         remapped_tel["cause_frame_idx"] = warped_cause_idx
         remapped_tel["causeFrameIdx"] = warped_cause_idx
@@ -466,9 +585,9 @@ class ElasticTimeWarper:
                     last_read_idx = idx_clamped
                     if frame.shape[1] != width or frame.shape[0] != height:
                         frame = cv2.resize(frame, (width, height), interpolation=cv2.INTER_LINEAR)
-                    # Cache up to 16 recent frames
-                    if len(frame_cache) > 16:
-                        frame_cache.clear()
+                    # Keep up to 32 recent frames in LRU order
+                    if len(frame_cache) > 32:
+                        frame_cache.pop(next(iter(frame_cache)))
                     frame_cache[idx_clamped] = frame
                     return frame
 
@@ -479,8 +598,8 @@ class ElasticTimeWarper:
             if ret and frame is not None:
                 if frame.shape[1] != width or frame.shape[0] != height:
                     frame = cv2.resize(frame, (width, height), interpolation=cv2.INTER_LINEAR)
-                if len(frame_cache) > 16:
-                    frame_cache.clear()
+                if len(frame_cache) > 32:
+                    frame_cache.pop(next(iter(frame_cache)))
                 frame_cache[idx_clamped] = frame
                 return frame
 
@@ -497,8 +616,8 @@ class ElasticTimeWarper:
                 f_ceil = min(total_src_frames - 1, f_floor + 1)
                 alpha = f_src_float - f_floor
 
-                if r_now < 0.85 and 0.001 < alpha < 0.999 and f_floor != f_ceil:
-                    # Silky slow-motion alpha-blending between adjacent source frames
+                if 0.05 <= r_now < 0.85 and 0.001 < alpha < 0.999 and f_floor != f_ceil:
+                    # Silky slow-motion alpha-blending between adjacent source frames during deceleration
                     img_floor = get_frame(f_floor)
                     img_ceil = get_frame(f_ceil)
                     out_frame = cv2.addWeighted(img_floor, 1.0 - alpha, img_ceil, alpha, 0.0)
