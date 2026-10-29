@@ -143,130 +143,169 @@ def ensure_clip_visual_cue_tags(sc: dict, vis: dict, cid: str) -> list:
 
     beats = sc.get("beats") or {}
     raw_tags = beats.get("visual_cue_tags") or sc.get("visual_cue_tags")
-    if isinstance(raw_tags, list) and len(raw_tags) > 0:
-        for t in raw_tags:
-            tgt = t.get("target") or t.get("player_name")
-            if tgt and not t.get("player_stats"):
-                t["player_stats"] = stats_provider.get_player_stats(tgt)
-        return raw_tags
-
     narrator = TacticalNarrator()
-    extracted_tags = []
     fps = 30
     K = sc.get("cause_frame_idx", 66)
     f_frames = beats.get("beat_2_cause", {}).get("freeze_frames", 150) if isinstance(beats, dict) else 150
 
-    b1_text = beats.get("beat_1_setup", {}).get("raw_text") or beats.get("beat_1_setup", {}).get("text", "") if isinstance(beats, dict) else ""
-    b2_text = beats.get("beat_2_cause", {}).get("raw_text") or beats.get("beat_2_cause", {}).get("text", "") if isinstance(beats, dict) else ""
-    b3_text = beats.get("beat_3_effect", {}).get("raw_text") or beats.get("beat_3_effect", {}).get("text", "") if isinstance(beats, dict) else ""
-
-    _, t1 = narrator.extract_cue_tags(b1_text)
-    _, t2 = narrator.extract_cue_tags(b2_text)
-    _, t3 = narrator.extract_cue_tags(b3_text)
-
-    dur1 = beats.get("beat_1_setup", {}).get("duration_sec", 2.0) if isinstance(beats, dict) else 2.0
-    dur2 = beats.get("beat_2_cause", {}).get("duration_sec", 6.0) if isinstance(beats, dict) else 6.0
-    dur3 = beats.get("beat_3_effect", {}).get("duration_sec", 3.0) if isinstance(beats, dict) else 3.0
-
-    for t in t1:
-        frac = (t["word_index"] / max(1, t.get("total_words", 1)))
-        t["start_frame"] = int(round(frac * dur1 * fps))
-        t["duration_frames"] = 75
-        t["end_frame"] = t["start_frame"] + t["duration_frames"]
-        t["beat"] = "beat_1_setup"
-        extracted_tags.append(t)
-
-    for t in t2:
-        frac = (t["word_index"] / max(1, t.get("total_words", 1)))
-        local_f = int(round(frac * dur2 * fps))
-        t["start_frame"] = K + local_f
-        if t["type"] in ("candidate_passes", "pass_options"):
-            opt_duration = min(int(f_frames * 0.40), max(30, int((K + f_frames - t["start_frame"]) * 0.45)))
-            t["duration_frames"] = opt_duration
-            t["end_frame"] = t["start_frame"] + opt_duration
-        elif t["type"] in ("run_vectors", "vectors", "player_runs"):
-            t["duration_frames"] = min(int(f_frames * 0.50), max(30, (K + f_frames) - t["start_frame"]))
-            t["end_frame"] = t["start_frame"] + t["duration_frames"]
-        elif any(k in t["type"] for k in ("stat", "sofascore", "heatmap", "average_position")):
-            t["duration_frames"] = 90
-            t["end_frame"] = min(K + f_frames, t["start_frame"] + t["duration_frames"])
-        else:
-            t["duration_frames"] = 75
-            t["end_frame"] = min(K + f_frames, t["start_frame"] + t["duration_frames"])
-        t["beat"] = "beat_2_cause"
-        extracted_tags.append(t)
-
-    b3_start = K + f_frames
-    for t in t3:
-        frac = (t["word_index"] / max(1, t.get("total_words", 1)))
-        local_f = int(round(frac * dur3 * fps))
-        t["start_frame"] = b3_start + local_f
-        t["duration_frames"] = 75
-        t["end_frame"] = t["start_frame"] + t["duration_frames"]
-        t["beat"] = "beat_3_effect"
-        extracted_tags.append(t)
-
-    if extracted_tags:
-        for t in extracted_tags:
-            tgt = t.get("target") or t.get("player_name")
-            if tgt:
-                p_stats = stats_provider.get_player_stats(tgt)
-                if p_stats:
-                    t["player_stats"] = p_stats
-                    t["player_name"] = p_stats.get("playerName")
-                    t["player_number"] = p_stats.get("number")
-                    t["player_role"] = p_stats.get("role")
-        return extracted_tags
-
-    # Fallback to generating authentic visual cue tags for the tactical scenario
     c_tel = vis.get("cause_telestration") or sc.get("cause_telestration") or {}
     cat_player = c_tel.get("catalyst_player") or {}
-    cat_name = cat_player.get("name") or "The ball carrier"
-    cat_clean = re.sub(r'[\(\[\/].*?[\)\]\/]', '', cat_name).strip()
+    cat_raw = cat_player.get("name") or cat_player.get("name_pos") or ""
+    cat_clean = re.sub(r'[\(\[\/].*?[\)\]\/]', '', cat_raw).strip()
 
     run_player = c_tel.get("runner_player") or {}
-    run_name = run_player.get("name") or ""
-    run_clean = re.sub(r'[\(\[\/].*?[\)\]\/]', '', run_name).strip()
+    run_raw = run_player.get("name") or run_player.get("name_pos") or ""
+    run_clean = re.sub(r'[\(\[\/].*?[\)\]\/]', '', run_raw).strip()
 
-    default_tags = []
-    if cat_clean and "CARRIER" not in cat_clean.upper() and cat_clean.upper() not in ("BALL CARRIER", "CARRIER", "THE BALL CARRIER"):
-        default_tags.append({
-            "type": "highlight",
-            "target": cat_clean,
-            "start_frame": max(0, K - 15),
-            "duration_frames": 75,
-            "end_frame": K + 60,
-            "player_name": cat_clean,
-            "beat": "beat_1_setup",
-        })
+    # Collect all verified player names present on the pitch
+    pls = c_tel.get("players") or []
+    verified_pls = []
+    for p in pls:
+        p_n = str(p.get("name") or p.get("label") or "").strip()
+        p_c = re.sub(r'[\(\[\/].*?[\)\]\/]', '', p_n).strip()
+        if p_c and "CARRIER" not in p_c.upper() and "RUNNER" not in p_c.upper() and "DEFENDER" not in p_c.upper() and "SUPPORT" not in p_c.upper():
+            if p_c not in verified_pls:
+                verified_pls.append(p_c)
 
-    vecs = c_tel.get("vectors") or []
-    has_pass_opts = any(v.get("type") == "PASS_OPTION_DASHED" for v in vecs) or c_tel.get("pass_vector")
-    if has_pass_opts:
-        opt_duration = min(int(f_frames * 0.40), max(36, int(f_frames * 0.38)))
-        default_tags.append({
-            "type": "candidate_passes",
-            "target": "pass_options",
-            "start_frame": K + 15,
-            "duration_frames": opt_duration,
-            "end_frame": K + 15 + opt_duration,
-            "beat": "beat_2_cause",
-        })
-        has_exec_pass = any(v.get("was_taken") is not False and v.get("type") in ("GROUND_PASS_SOLID", "AERIAL_BALL_ARC") for v in vecs) or c_tel.get("pass_vector")
-        if has_exec_pass:
-            exec_start = K + 15 + opt_duration + 6
-            default_tags.append({
-                "type": "executed_pass",
-                "target": "executed_pass",
-                "start_frame": exec_start,
-                "duration_frames": max(30, (K + f_frames) - exec_start),
-                "end_frame": K + f_frames,
+    if not cat_clean or "CARRIER" in cat_clean.upper() or cat_clean.upper() in ("BALL CARRIER", "THE BALL CARRIER"):
+        if verified_pls:
+            cat_clean = verified_pls[0]
+
+    if not run_clean or "RUNNER" in run_clean.upper() or run_clean.upper() in ("THIRD-MAN RUNNER", "THE RUNNER"):
+        for p_cand in verified_pls:
+            if p_cand.lower() != cat_clean.lower():
+                run_clean = p_cand
+                break
+
+    extracted_tags = []
+    if isinstance(raw_tags, list) and len(raw_tags) > 0:
+        extracted_tags = list(raw_tags)
+    else:
+        b1_text = beats.get("beat_1_setup", {}).get("raw_text") or beats.get("beat_1_setup", {}).get("text", "") if isinstance(beats, dict) else ""
+        b2_text = beats.get("beat_2_cause", {}).get("raw_text") or beats.get("beat_2_cause", {}).get("text", "") if isinstance(beats, dict) else ""
+        b3_text = beats.get("beat_3_effect", {}).get("raw_text") or beats.get("beat_3_effect", {}).get("text", "") if isinstance(beats, dict) else ""
+
+        _, t1 = narrator.extract_cue_tags(b1_text)
+        _, t2 = narrator.extract_cue_tags(b2_text)
+        _, t3 = narrator.extract_cue_tags(b3_text)
+
+        dur1 = beats.get("beat_1_setup", {}).get("duration_sec", 2.0) if isinstance(beats, dict) else 2.0
+        dur2 = beats.get("beat_2_cause", {}).get("duration_sec", 6.0) if isinstance(beats, dict) else 6.0
+        dur3 = beats.get("beat_3_effect", {}).get("duration_sec", 3.0) if isinstance(beats, dict) else 3.0
+
+        for t in t1:
+            frac = (t["word_index"] / max(1, t.get("total_words", 1)))
+            t["start_frame"] = int(round(frac * dur1 * fps))
+            t["duration_frames"] = 75
+            t["end_frame"] = t["start_frame"] + t["duration_frames"]
+            t["beat"] = "beat_1_setup"
+            extracted_tags.append(t)
+
+        for t in t2:
+            frac = (t["word_index"] / max(1, t.get("total_words", 1)))
+            local_f = int(round(frac * dur2 * fps))
+            t["start_frame"] = K + local_f
+            if t["type"] in ("candidate_passes", "pass_options"):
+                opt_duration = min(int(f_frames * 0.40), max(30, int((K + f_frames - t["start_frame"]) * 0.45)))
+                t["duration_frames"] = opt_duration
+                t["end_frame"] = t["start_frame"] + opt_duration
+            elif t["type"] in ("run_vectors", "vectors", "player_runs"):
+                t["duration_frames"] = min(int(f_frames * 0.50), max(30, (K + f_frames) - t["start_frame"]))
+                t["end_frame"] = t["start_frame"] + t["duration_frames"]
+            elif any(k in t["type"] for k in ("stat", "sofascore", "heatmap", "average_position")):
+                t["duration_frames"] = 90
+                t["end_frame"] = min(K + f_frames, t["start_frame"] + t["duration_frames"])
+            else:
+                t["duration_frames"] = 75
+                t["end_frame"] = min(K + f_frames, t["start_frame"] + t["duration_frames"])
+            t["beat"] = "beat_2_cause"
+            extracted_tags.append(t)
+
+        b3_start = K + f_frames
+        for t in t3:
+            frac = (t["word_index"] / max(1, t.get("total_words", 1)))
+            local_f = int(round(frac * dur3 * fps))
+            t["start_frame"] = b3_start + local_f
+            t["duration_frames"] = 75
+            t["end_frame"] = t["start_frame"] + t["duration_frames"]
+            t["beat"] = "beat_3_effect"
+            extracted_tags.append(t)
+
+    # GUARANTEE 2 SEQUENTIAL PLAYER HIGHLIGHT TAGS FOR FLUID CAMERA SLIDING PAN
+    hl_tags = [t for t in extracted_tags if t.get("type") == "highlight"]
+
+    h0_split_frame = K + int(f_frames * 0.44)
+    h1_start_frame = K + int(f_frames * 0.46)
+    freeze_end_tag = K + f_frames - 12
+
+    if len(hl_tags) == 0:
+        if cat_clean:
+            extracted_tags.append({
+                "type": "highlight",
+                "target": cat_clean,
+                "player_name": cat_clean,
+                "start_frame": max(0, K - 12),
+                "duration_frames": h0_split_frame - max(0, K - 12),
+                "end_frame": h0_split_frame,
+                "beat": "beat_1_setup",
+            })
+        if run_clean and run_clean.lower() != cat_clean.lower():
+            extracted_tags.append({
+                "type": "highlight",
+                "target": run_clean,
+                "player_name": run_clean,
+                "start_frame": h1_start_frame,
+                "duration_frames": max(30, freeze_end_tag - h1_start_frame),
+                "end_frame": freeze_end_tag,
+                "beat": "beat_2_cause",
+            })
+    elif len(hl_tags) == 1:
+        # One player already highlighted; clamp its endFrame so the camera can slide to the second player
+        h0_tag = hl_tags[0]
+        h0_name = str(h0_tag.get("target") or h0_tag.get("player_name") or "").strip()
+        h0_tag["end_frame"] = min(h0_tag.get("end_frame", h0_split_frame), h0_split_frame)
+        h0_tag["duration_frames"] = max(20, h0_tag["end_frame"] - h0_tag.get("start_frame", 0))
+
+        # Pick distinct second player
+        h1_cand = None
+        if run_clean and run_clean.lower() != h0_name.lower():
+            h1_cand = run_clean
+        elif cat_clean and cat_clean.lower() != h0_name.lower():
+            h1_cand = cat_clean
+        else:
+            for p_cand in verified_pls:
+                if p_cand.lower() != h0_name.lower():
+                    h1_cand = p_cand
+                    break
+
+        if h1_cand:
+            extracted_tags.append({
+                "type": "highlight",
+                "target": h1_cand,
+                "player_name": h1_cand,
+                "start_frame": h1_start_frame,
+                "duration_frames": max(30, freeze_end_tag - h1_start_frame),
+                "end_frame": freeze_end_tag,
                 "beat": "beat_2_cause",
             })
 
-    has_runs = any(v.get("type") in ("PRESSING_RUN", "PRESSING_ARROW", "PLAYER_RUN_DASHED") for v in vecs)
-    if has_runs:
-        default_tags.append({
+    # Ensure candidate passes and run vectors are also present if not already added
+    has_opts = any(t.get("type") in ("candidate_passes", "pass_options") for t in extracted_tags)
+    vecs = c_tel.get("vectors") or []
+    if not has_opts and (any(v.get("type") == "PASS_OPTION_DASHED" for v in vecs) or c_tel.get("pass_vector")):
+        opt_dur = min(int(f_frames * 0.40), max(36, int(f_frames * 0.38)))
+        extracted_tags.append({
+            "type": "candidate_passes",
+            "target": "pass_options",
+            "start_frame": K + 15,
+            "duration_frames": opt_dur,
+            "end_frame": K + 15 + opt_dur,
+            "beat": "beat_2_cause",
+        })
+
+    has_runs = any(t.get("type") in ("run_vectors", "vectors", "player_runs") for t in extracted_tags)
+    if not has_runs and any(v.get("type") in ("PRESSING_RUN", "PRESSING_ARROW", "PLAYER_RUN_DASHED") for v in vecs):
+        extracted_tags.append({
             "type": "run_vectors",
             "target": "run_vectors",
             "start_frame": K + 20,
@@ -275,38 +314,19 @@ def ensure_clip_visual_cue_tags(sc: dict, vis: dict, cid: str) -> list:
             "beat": "beat_2_cause",
         })
 
-    target_stats_name = cat_clean if cat_clean and cat_clean.upper() not in ("BALL CARRIER", "CARRIER") else (run_clean or "Konaté")
-    p_stats = stats_provider.get_player_stats(target_stats_name)
-    if p_stats:
-        default_tags.append({
-            "type": "stat_card",
-            "target": target_stats_name,
-            "start_frame": K + 25,
-            "duration_frames": 90,
-            "end_frame": min(K + f_frames, K + 115),
-            "player_stats": p_stats,
-            "player_name": p_stats.get("playerName"),
-            "player_number": p_stats.get("number"),
-            "player_role": p_stats.get("role"),
-            "beat": "beat_2_cause",
-        })
+    # Enrich all tags with real player stats
+    for t in extracted_tags:
+        tgt = t.get("target") or t.get("player_name")
+        if tgt and not t.get("player_stats"):
+            p_stats = stats_provider.get_player_stats(tgt)
+            if p_stats:
+                t["player_stats"] = p_stats
+                t["player_name"] = p_stats.get("playerName", tgt)
+                t["player_number"] = p_stats.get("number")
+                t["player_role"] = p_stats.get("role")
 
-    if run_clean and run_clean.upper() not in ("RUNNER", "THIRD-MAN RUNNER"):
-        default_tags.append({
-            "type": "highlight",
-            "target": run_clean,
-            "start_frame": K + 40,
-            "duration_frames": 70,
-            "end_frame": K + 110,
-            "player_name": run_clean,
-            "beat": "beat_2_cause",
-        })
-
-    for t in default_tags:
-        if not t.get("player_stats") and t.get("target"):
-            t["player_stats"] = stats_provider.get_player_stats(t["target"])
-
-    return default_tags
+    extracted_tags.sort(key=lambda x: x.get("start_frame", 0))
+    return extracted_tags
 
 
 def main():

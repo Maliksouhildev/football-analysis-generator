@@ -66,6 +66,8 @@ Event Telemetry Context:
   * Attacking Shape / Overload: {triangle_info}
   * Key Players In Spotlight: {focal_info}
   * Ball Carrier / Catalyst In Focus: {catalyst_info}
+  * Target / Runner / Receiver In Focus: {runner_info}
+  * Verified Players On Pitch: {available_players_info}
 - Available Match Telemetry & SofaScore Stats:
 {player_telemetry_context}
 
@@ -117,7 +119,14 @@ CRITICAL BROADCAST RULES:
 4. Every clip must receive a completely distinct, non-repetitive sentence structure and opener tailored to its tactical zone ({tactical_zone}) and match minute ({clock}). Never repeat openers across clips.
 5. No emojis, no hashtags, no conversational filler (no "Here we see", no "Notice how").
 6. Output ONLY the valid JSON object.
-7. When referring to the ball carrier or tactical actors, use their verified name ({catalyst_info}, etc.) rather than generic placeholder words ('BALL CARRIER'). Never invent or hallucinate players outside the verified roster.
+7. EXPLICIT PLAYER NAMING & SEQUENTIAL HIGHLIGHTING (MANDATORY - CAMERA SLIDING PAN SYSTEM):
+   - You MUST explicitly name BOTH key players involved in the tactical sequence:
+     a) The Catalyst/Initiator ({catalyst_info}): the player on the ball who initiates the play, pass, or mistake.
+     b) The Target/Runner/Presser ({runner_info} or from {available_players_info}): the player making the run, receiving the delivery, or pressing.
+   - For EACH player named, you MUST prepend an inline highlight tag: `[highlight:PlayerName]`.
+     Example: "[highlight:{catalyst_info}] recognizes the space, clipping a piercing ball directly into [highlight:{runner_info}]..."
+   - When you tag multiple players in sequence, the broadcast camera dynamically slides smoothly across the pitch between them while holding full zoom!
+   - NEVER use generic placeholders like 'the ball carrier' or 'the runner'. Always use the verified roster names.
 8. For corner kicks (CORNER_SET_PIECE) and deep buildup (DEEP_BUILDUP_PROGRESSION), focus on box marking/delivery zone or passing structure vs first pressing line, and NEVER claim a shot or goal conversion when none occurred.
 9. VISUAL CUE TAGS & TELEMETRY CUES (CRITICAL - OBLIGATED TO SHOW PLAYER/MATCH DATA):
    You MUST inject inline visual cue tags at the precise moments visual elements should appear:
@@ -488,6 +497,21 @@ class TacticalNarrator:
         runner_p = cause_telestration.get("runner_player") or {}
         raw_runner = str(runner_p.get("name") or runner_p.get("name_pos") or "").strip()
         runner_info = re.sub(r'[\(\[\/].*?[\)\]\/]', '', raw_runner).strip()
+        pls = cause_telestration.get("players") or []
+        avail_names = []
+        for p in pls:
+            p_n = str(p.get("name") or "").strip()
+            p_clean = re.sub(r'[\(\[\/].*?[\)\]\/]', '', p_n).strip()
+            if p_clean and "CARRIER" not in p_clean.upper() and "RUNNER" not in p_clean.upper() and "DEFENDER" not in p_clean.upper():
+                avail_names.append(p_clean)
+        available_players_info = ", ".join(avail_names) if avail_names else "Roster verified players"
+
+        if (not runner_info or runner_info.upper() in ("RUNNER", "THIRD-MAN RUNNER")) and avail_names:
+            for cand in avail_names:
+                if cand.lower() != catalyst_info.lower():
+                    runner_info = cand
+                    break
+
         if runner_info and runner_info.upper() not in ("RUNNER", "THIRD-MAN RUNNER"):
             run_stats = stats_provider.get_player_stats(runner_info)
             if run_stats:
@@ -514,6 +538,8 @@ class TacticalNarrator:
             triangle_info=triangle_info,
             focal_info=focal_info,
             catalyst_info=catalyst_info,
+            runner_info=runner_info or "Primary tactical receiver",
+            available_players_info=available_players_info,
             player_telemetry_context=player_telemetry_context,
         )
 
