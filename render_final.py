@@ -913,7 +913,7 @@ def main():
     start_poll = time.time()
     final_output_path = None
 
-    while time.time() - start_poll < 3600:
+    while time.time() - start_poll < 7200:
         try:
             with urllib.request.urlopen(poll_url, timeout=10) as resp:
                 status_data = json.loads(resp.read().decode("utf-8"))
@@ -935,7 +935,7 @@ def main():
         time.sleep(5)
 
     if not final_output_path:
-        raise TimeoutError("Remotion render timed out after 1200 seconds")
+        raise TimeoutError("Remotion render timed out after 7200 seconds")
 
     host_output_mp4 = Path("F:/DockerRenders") / f"{job_id}.mp4"
     target_mp4 = Path("F:/DockerRenders/Tactical_Masterclass_Clean_V4.mp4")
