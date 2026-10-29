@@ -830,8 +830,19 @@ class MatchStatsProvider:
     def _enrich_stats(self, base_entry: Dict[str, Any]) -> Dict[str, Any]:
         """Adds asset URLs (portrait, club crest, flags) and authentic 2D heatPoints to player entry."""
         res = dict(base_entry)
+        player_name = res.get("playerName", "")
+        club = res.get("clubName") or "MATCH TELEMETRY"
+
+        try:
+            from src.rendering.player_asset_manager import PlayerAssetManager
+            portrait_url = PlayerAssetManager().get_player_portrait(player_name, team=club)
+            if portrait_url:
+                res["portraitUrl"] = portrait_url
+        except Exception as e:
+            logger.debug("PlayerAssetManager lookup skipped for %s: %s", player_name, e)
+
         if not res.get("portraitUrl"):
-            slug = res.get("portraitSlug") or self._normalize_name(res["playerName"]).replace(" ", "_")
+            slug = res.get("portraitSlug") or self._normalize_name(player_name).replace(" ", "_")
             res["portraitUrl"] = f"http://127.0.0.1:3000/assets/players/{slug}.png"
         club = res.get("clubName") or "MATCH TELEMETRY"
         if not res.get("crestUrl"):

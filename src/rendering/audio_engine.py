@@ -444,6 +444,9 @@ class AudioEngine:
                         t["player_name"] = p1_stats.get("playerName")
                         t["heat_points"] = p1_stats.get("heatPoints")
                         t["country_flag"] = p1_stats.get("countryFlagEmoji")
+                        t["country_code"] = p1_stats.get("countryCode")
+                        t["avatar_url"] = p1_stats.get("portraitUrl")
+                        t["portrait_url"] = p1_stats.get("portraitUrl")
                     if p2_stats:
                         t["comparison_player"] = p2_stats
                 else:
@@ -453,8 +456,11 @@ class AudioEngine:
                         t["player_name"] = p_stats.get("playerName")
                         t["player_number"] = p_stats.get("number")
                         t["player_role"] = p_stats.get("role")
+                        t["avatar_url"] = p_stats.get("portraitUrl")
+                        t["portrait_url"] = p_stats.get("portraitUrl")
                         t["heat_points"] = p_stats.get("heatPoints")
                         t["country_flag"] = p_stats.get("countryFlagEmoji")
+                        t["country_code"] = p_stats.get("countryCode")
                         t["tactical_note"] = p_stats.get("tacticalNote")
 
         post_roll_frames = None

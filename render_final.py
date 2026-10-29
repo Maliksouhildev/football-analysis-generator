@@ -314,16 +314,36 @@ def ensure_clip_visual_cue_tags(sc: dict, vis: dict, cid: str) -> list:
             "beat": "beat_2_cause",
         })
 
-    # Enrich all tags with real player stats
+    # MANDATORY FORCED DATA ANALYSIS PICTURE: Guarantee match_heatmap modal tag
+    has_data_tag = any(t.get("type") in ("match_heatmap", "heatmap", "stat_card", "sofascore", "average_position") for t in extracted_tags)
+    if not has_data_tag and cat_clean:
+        opt_start = K + int(f_frames * 0.35)
+        opt_dur = min(90, max(30, int(f_frames * 0.55)))
+        extracted_tags.append({
+            "type": "match_heatmap",
+            "target": cat_clean,
+            "player_name": cat_clean,
+            "start_frame": opt_start,
+            "duration_frames": opt_dur,
+            "end_frame": opt_start + opt_dur,
+            "beat": "beat_2_cause",
+        })
+
+    # Enrich all tags with real player stats & official portraits
     for t in extracted_tags:
         tgt = t.get("target") or t.get("player_name")
-        if tgt and not t.get("player_stats"):
-            p_stats = stats_provider.get_player_stats(tgt)
+        if tgt:
+            p_stats = t.get("player_stats") or stats_provider.get_player_stats(tgt)
             if p_stats:
                 t["player_stats"] = p_stats
                 t["player_name"] = p_stats.get("playerName", tgt)
                 t["player_number"] = p_stats.get("number")
                 t["player_role"] = p_stats.get("role")
+                t["avatar_url"] = p_stats.get("portraitUrl")
+                t["portrait_url"] = p_stats.get("portraitUrl")
+                t["country_flag"] = p_stats.get("countryFlagEmoji")
+                t["country_code"] = p_stats.get("countryCode")
+                t["heat_points"] = p_stats.get("heatPoints")
 
     extracted_tags.sort(key=lambda x: x.get("start_frame", 0))
     return extracted_tags
