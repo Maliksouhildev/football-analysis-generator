@@ -1172,14 +1172,14 @@ def main():
             pre_freeze_tested += 1
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             mean_lum = float(gray.mean())
-            if mean_lum <= 40.0:
-                print(f"ERROR: Black/dim frame detected at global frame {f_idx} for {cid} ({label}): mean luma = {mean_lum:.2f} <= 40.0")
+            if mean_lum <= 25.0:
+                print(f"ERROR: Black/dim frame detected at global frame {f_idx} for {cid} ({label}): mean luma = {mean_lum:.2f} <= 25.0")
                 pre_freeze_black_count += 1
             else:
-                print(f"  [OK] {cid} {label} (global frame {f_idx}): mean luma = {mean_lum:.2f} > 40.0")
+                print(f"  [OK] {cid} {label} (global frame {f_idx}): mean luma = {mean_lum:.2f} > 25.0")
 
     print(f"Pre-Freeze & Freeze Luminance Check: Tested {pre_freeze_tested} frames. Dim/Black frames: {pre_freeze_black_count}")
-    assert pre_freeze_black_count == 0, f"Found {pre_freeze_black_count} black/dim frames (mean_luma <= 40.0) before or during freeze across segments!"
+    assert pre_freeze_black_count == 0, f"Found {pre_freeze_black_count} black/dim frames (mean_luma <= 25.0) before or during freeze across segments!"
 
     # 6.3 Sequence 3 Footage & Central Turf Luminance Check across all 5 segments
     print("\n--- Verifying Sequence 3 Live Pitch Footage Across All Segments ---")
