@@ -41,6 +41,34 @@ class TestTelestrationVectors:
         target_ids = {int(v.get("to_track_id", -1)) for v in pass_options}
         assert 1 not in target_ids, "Receiver of executed pass (track 1) must not have a duplicate candidate pass option"
 
+    def test_blocked_pass_option_rejected_when_opponent_in_lane(self):
+        """
+        Verifies that when an opponent is pressing in the passing lane between carrier
+        and teammate, that candidate pass is strictly rejected as unsafe.
+        """
+        cause_tel = {}
+        tracks = [
+            {"track_id": 10, "x_pct": 72.0, "y_pct": 39.5, "team": "away", "name": "Konaté"}, # Carrier
+            {"track_id": 1, "x_pct": 92.0, "y_pct": 50.0, "team": "away", "name": "Rüdiger"},  # Executed pass receiver
+            {"track_id": 6, "x_pct": 31.3, "y_pct": 30.1, "team": "away", "name": "Dumfries"}, # Teammate with presser in lane
+            {"track_id": 5, "x_pct": 65.0, "y_pct": 79.5, "team": "away", "name": "Cucurella"}, # Clear open teammate
+            {"track_id": 8, "x_pct": 56.0, "y_pct": 36.2, "team": "home", "name": "Pisilli"},  # Pressing defender in Dumfries lane
+        ]
+        ctx = {"clip_id": "clip_01_left_wing"}
+        TacticalVisionEngine.sanitize_v3_telestration(
+            cause_tel=cause_tel,
+            tracks_at_freeze=tracks,
+            clip_id="clip_01_left_wing",
+            event_context=ctx,
+        )
+        pass_options = [v for v in cause_tel.get("vectors", []) if v.get("type") == "PASS_OPTION_DASHED"]
+        target_ids = {int(v.get("to_track_id", -1)) for v in pass_options}
+        
+        # Dumfries (track 6) must NOT be shown as pass option because Pisilli (track 8) is directly in the lane
+        assert 6 not in target_ids, "Pass to Dumfries (track 6) must be rejected because Pisilli blocks the lane!"
+        # Cucurella (track 5) is completely open and must be included
+        assert 5 in target_ids, "Pass to Cucurella (track 5) is safe and should be included as an option"
+
     def test_head_on_opposing_pressing_run_suppressed(self):
         """Verifies that an opponent standing at the pass destination does not generate a colliding head-on opposing pressing run."""
         cause_tel = {

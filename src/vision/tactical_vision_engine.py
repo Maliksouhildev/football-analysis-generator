@@ -2839,6 +2839,93 @@ TASKS:
 
 
     @staticmethod
+    def evaluate_passing_lane_safety(
+        carrier_pt: Tuple[float, float],
+        teammate_pt: Tuple[float, float],
+        defenders: List[Dict[str, Any]],
+        pressing_runs: Optional[Dict[int, List[float]]] = None,
+        min_pass_dist: float = 8.0,
+        max_pass_dist: float = 65.0,
+    ) -> Tuple[bool, float, str]:
+        """
+        Evaluates whether a candidate pass from carrier to teammate represents a genuine, safe passing option.
+        Strictly rejects passing lanes that are:
+        1. Obstructed by any opponent positioned in the passing corridor or interception cone.
+        2. Intersected by an active opposition pressing run vector.
+        3. Aimed at a receiver who is tightly front-marked or contested by an opponent (no separation).
+        4. Blocked by an immediate opponent pressing the carrier's release angle.
+
+        Returns:
+            (is_safe, safety_score, reason)
+        """
+        cat_x, cat_y = carrier_pt
+        tm_x, tm_y = teammate_pt
+
+        P_x = tm_x - cat_x
+        P_y = tm_y - cat_y
+        L_sq = P_x * P_x + P_y * P_y
+        L = math.sqrt(L_sq)
+
+        if L < min_pass_dist or L > max_pass_dist:
+            return False, 0.0, f"Distance out of bounds ({L:.1f}%)"
+
+        min_clearance = 999.0
+        min_dist_to_receiver = 999.0
+
+        for d in defenders:
+            d_x = float(d.get("x_pct", 50.0))
+            d_y = float(d.get("y_pct", 50.0))
+            d_name = d.get("name") or d.get("name_pos") or "Defender"
+            d_id = int(d.get("track_id", -1))
+
+            # 1. Receiver marking check: opponent within tight marking radius of receiver
+            dist_to_rx = math.hypot(d_x - tm_x, d_y - tm_y)
+            min_dist_to_receiver = min(min_dist_to_receiver, dist_to_rx)
+            if dist_to_rx < 5.0:
+                return False, 0.0, f"Receiver tightly marked by {d_name} (dist={dist_to_rx:.1f}%)"
+
+            V_x = d_x - cat_x
+            V_y = d_y - cat_y
+            dist_to_cat = math.hypot(V_x, V_y)
+
+            dot = V_x * P_x + V_y * P_y
+            t = dot / L_sq if L_sq > 0 else 0
+
+            # 2. Immediate carrier pressing cone check (within 14% distance and within ~36 deg angle of pass line)
+            if dist_to_cat < 14.0 and L > 0:
+                cos_theta = dot / (dist_to_cat * L)
+                if cos_theta > 0.80:
+                    return False, 0.0, f"Immediate carrier press by {d_name} (dist={dist_to_cat:.1f}%, cos={cos_theta:.2f})"
+
+            # 3. Passing lane corridor check for defender current position
+            if 0.02 <= t <= 0.98:
+                proj_x = cat_x + t * P_x
+                proj_y = cat_y + t * P_y
+                d_perp = math.hypot(d_x - proj_x, d_y - proj_y)
+                min_clearance = min(min_clearance, d_perp)
+
+                safe_clearance = 5.5 + 2.0 * t
+                if d_perp < safe_clearance:
+                    return False, d_perp, f"Pass lane intercepted by {d_name} (t={t:.2f}, clearance={d_perp:.1f}% < {safe_clearance:.1f}%)"
+
+            # 4. Check defender future position if pressing run vector exists
+            if pressing_runs and d_id in pressing_runs:
+                to_x, to_y = pressing_runs[d_id]
+                V_fut_x = to_x - cat_x
+                V_fut_y = to_y - cat_y
+                dot_fut = V_fut_x * P_x + V_fut_y * P_y
+                t_fut = dot_fut / L_sq if L_sq > 0 else 0
+                if 0.02 <= t_fut <= 0.98:
+                    proj_fut_x = cat_x + t_fut * P_x
+                    proj_fut_y = cat_y + t_fut * P_y
+                    d_perp_fut = math.hypot(to_x - proj_fut_x, to_y - proj_fut_y)
+                    if d_perp_fut < 5.0:
+                        return False, d_perp_fut, f"Pass lane intercepted by pressing run of {d_name} (clearance={d_perp_fut:.1f}%)"
+
+        safety_score = min_clearance + 0.5 * min_dist_to_receiver
+        return True, safety_score, f"Safe (min_clearance={min_clearance:.1f}%, rx_space={min_dist_to_receiver:.1f}%)"
+
+    @staticmethod
     def sanitize_v3_telestration(
         cause_tel: Dict[str, Any],
         tracks_at_freeze: List[Dict[str, Any]],
@@ -3574,50 +3661,7 @@ TASKS:
         pressing_run_vectors: List[Dict[str, Any]] = []
 
         if not is_corner_clip:
-            # 1. Candidate passing options to open teammates (up to 2-3 passing options)
-            min_turf_val = 20.0
-            candidate_teammates = [
-                t for t in tracks_at_freeze
-                if isinstance(t, dict)
-                and int(t.get("track_id", -1)) not in (cat_id, 22)
-                and (t.get("team") == attacking_team or t.get("jersey_class") == attacking_jersey)
-                and t.get("jersey_class") not in ("REFEREE", defending_jersey)
-                and float(t.get("y_pct", 50.0)) >= min_turf_val
-            ]
-
-            executed_target_x, executed_target_y = landing_pt
-            viable_teammates = []
-            for tm in candidate_teammates:
-                tm_id = int(tm.get("track_id", -1))
-                tm_x = float(tm.get("x_pct", 50.0))
-                tm_y = float(tm.get("y_pct", 50.0))
-                d_to_carrier = math.hypot(tm_x - cat_x, tm_y - cat_y)
-                d_to_target = math.hypot(tm_x - executed_target_x, tm_y - executed_target_y)
-                # Exclude if receiver of executed pass (by distance to landing target or matching runner_id)
-                if d_to_target <= 8.5 or (runner_id is not None and tm_id == runner_id):
-                    continue
-                if 8.0 <= d_to_carrier <= 65.0:
-                    viable_teammates.append((d_to_carrier, tm))
-
-            viable_teammates.sort(key=lambda item: item[0])
-            for _, tm in viable_teammates[:3]:
-                tm_id = int(tm.get("track_id", -1))
-                tm_x = float(tm.get("x_pct", 50.0))
-                tm_y = float(tm.get("y_pct", 50.0))
-                tm_name = tm.get("name") or tm.get("name_pos") or "OPTION"
-                option_vectors.append({
-                    "type": "PASS_OPTION_DASHED",
-                    "from_track_id": cat_id,
-                    "to_track_id": tm_id,
-                    "from_pct": [round(cat_x, 1), round(cat_y, 1)],
-                    "to_pct": [round(tm_x, 1), round(tm_y, 1)],
-                    "name_pos": tm_name,
-                    "was_taken": False,
-                    "is_option": True,
-                    "color": "rgba(255, 255, 255, 0.65)",
-                })
-
-            # 2. Pressing run vectors from opposition pressers
+            # 1. Pressing run vectors from opposition pressers closing down the carrier
             close_defenders = [
                 d for d in def_cands
                 if math.hypot(float(d.get("x_pct", 50.0)) - cat_x, float(d.get("y_pct", 50.0)) - cat_y) <= 28.0
@@ -3626,6 +3670,7 @@ TASKS:
 
             existing_press_arrow_ids = {int(a.get("from_track_id", -999)) for a in cause_tel.get("pressing_arrows", []) if isinstance(a, dict)}
             active_press_ids = []
+            active_pressing_runs_map: Dict[int, List[float]] = {}
             pass_v = cause_tel.get("pass_vector") or {}
             has_pass_v = pass_v.get("from_x") is not None and pass_v.get("to_x") is not None
             p_fx = float(pass_v.get("from_x", 0)) if has_pass_v else 0.0
@@ -3675,9 +3720,60 @@ TASKS:
                     "is_pressing": True,
                 })
                 active_press_ids.append(pid)
+                active_pressing_runs_map[pid] = [round(p_to_x, 1), round(p_to_y, 1)]
 
             if active_press_ids:
                 cause_tel["pressing_track_ids"] = list(dict.fromkeys((cause_tel.get("pressing_track_ids") or []) + active_press_ids))
+
+            # 2. Candidate passing options: Strictly show ONLY genuine, un-occluded, safe passing lanes
+            min_turf_val = 20.0
+            candidate_teammates = [
+                t for t in tracks_at_freeze
+                if isinstance(t, dict)
+                and int(t.get("track_id", -1)) not in (cat_id, 22)
+                and (t.get("team") == attacking_team or t.get("jersey_class") == attacking_jersey)
+                and t.get("jersey_class") not in ("REFEREE", defending_jersey)
+                and float(t.get("y_pct", 50.0)) >= min_turf_val
+            ]
+
+            executed_target_x, executed_target_y = landing_pt
+            viable_teammates = []
+            for tm in candidate_teammates:
+                tm_id = int(tm.get("track_id", -1))
+                tm_x = float(tm.get("x_pct", 50.0))
+                tm_y = float(tm.get("y_pct", 50.0))
+                d_to_target = math.hypot(tm_x - executed_target_x, tm_y - executed_target_y)
+                # Exclude if receiver of executed pass (by distance to landing target or matching runner_id)
+                if d_to_target <= 8.5 or (runner_id is not None and tm_id == runner_id):
+                    continue
+
+                is_safe, safety_score, reason = TacticalVisionEngine.evaluate_passing_lane_safety(
+                    carrier_pt=(cat_x, cat_y),
+                    teammate_pt=(tm_x, tm_y),
+                    defenders=def_cands,
+                    pressing_runs=active_pressing_runs_map,
+                )
+                if is_safe:
+                    viable_teammates.append((safety_score, tm))
+
+            # Rank by safety score descending: safest, most open options first (up to top 2 genuine options)
+            viable_teammates.sort(key=lambda item: item[0], reverse=True)
+            for _, tm in viable_teammates[:2]:
+                tm_id = int(tm.get("track_id", -1))
+                tm_x = float(tm.get("x_pct", 50.0))
+                tm_y = float(tm.get("y_pct", 50.0))
+                tm_name = tm.get("name") or tm.get("name_pos") or "OPTION"
+                option_vectors.append({
+                    "type": "PASS_OPTION_DASHED",
+                    "from_track_id": cat_id,
+                    "to_track_id": tm_id,
+                    "from_pct": [round(cat_x, 1), round(cat_y, 1)],
+                    "to_pct": [round(tm_x, 1), round(tm_y, 1)],
+                    "name_pos": tm_name,
+                    "was_taken": False,
+                    "is_option": True,
+                    "color": "rgba(255, 255, 255, 0.65)",
+                })
 
             if option_vectors:
                 cause_tel["vectors"].extend(option_vectors)
