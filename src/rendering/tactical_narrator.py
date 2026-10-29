@@ -119,12 +119,13 @@ CRITICAL BROADCAST RULES:
 6. Output ONLY the valid JSON object.
 7. When referring to the ball carrier or tactical actors, use their verified name ({catalyst_info}, etc.) rather than generic placeholder words ('BALL CARRIER'). Never invent or hallucinate players outside the verified roster.
 8. For corner kicks (CORNER_SET_PIECE) and deep buildup (DEEP_BUILDUP_PROGRESSION), focus on box marking/delivery zone or passing structure vs first pressing line, and NEVER claim a shot or goal conversion when none occurred.
-9. VISUAL CUE TAGS & TELEMETRY CUES (CRITICAL):
+9. VISUAL CUE TAGS & TELEMETRY CUES (CRITICAL - OBLIGATED TO SHOW PLAYER/MATCH DATA):
    You MUST inject inline visual cue tags at the precise moments visual elements should appear:
    - [candidate_passes]: Insert when discussing possible passing directions or alternative avenues (e.g. "options open out wide [candidate_passes]"). By default, pass options are hidden and will only appear when this tag is spoken!
    - [run_vectors]: Insert when describing off-ball runs or pressing movements (e.g. "watch the pressing run [run_vectors] behind the defense").
    - [highlight:<PlayerName|#Number|Role>]: Insert whenever naming or analyzing a player (e.g. "[highlight:Konaté] holds possession" or "[highlight:#16]" or "[highlight:CDM]"). They will be spotlighted with an animated glowing beam and elevated badge.
-   - [stat_card:<PlayerName>], [sofascore:<PlayerName>], [heatmap:<PlayerName>], or [average_position:<PlayerName>]: Insert when analyzing a player's match rating, passing percentage, duels, heatmap, or average position (e.g. "[stat_card:Konaté] completing 93% of his passes today"). This triggers their authentic SofaScore HUD and pitch heatmap at the bottom of the screen.
+   - [heatmap:<PlayerName>], [average_position:<PlayerName>], or [heatmap_comparison:<Player1>:<Player2>]: OBLIGATORY DATA PROOF. You MUST include at least one data tag in Beat 2 to support your tactical claim (e.g. "[heatmap:Mbappé] drifting out to the left flank rather than occupying the box"). This pauses and blurs the footage for up to 10 seconds, displaying a rich broadcast SofaScore pitch heatmap and telemetry proving your positional claim.
+   - [stat_card:<PlayerName>] or [sofascore:<PlayerName>]: Insert when analyzing a player's match rating, passing percentage, duels, or key metrics.
 10. SPEED SEGMENT CLASSIFICATION:
     Divide the full clip timeline between freeze-frames into continuous speed_segments with no gaps:
     - FAST_TRANSIT (rate: 1.25-1.35): long ball transit or uncontested rolling.
@@ -672,6 +673,15 @@ class TacticalNarrator:
         if "beat_2_steps" in res and isinstance(res["beat_2_steps"], dict):
             for sk in res["beat_2_steps"]:
                 res["beat_2_steps"][sk] = _sub(str(res["beat_2_steps"][sk]))
+
+        # Guarantee empirical player data / heatmap tag in Beat 2 to support tactical claims
+        b2_str = str(res.get("beat_2_cause", ""))
+        has_data_tag = any(k in b2_str for k in ("[heatmap", "[stat_card", "[sofascore", "[average_position", "[data_card"))
+        if not has_data_tag and cat_spoken:
+            res["beat_2_cause"] = f"{b2_str.rstrip('.')} [heatmap:{cat_spoken}]."
+            if "beat_2_steps" in res and isinstance(res["beat_2_steps"], dict):
+                s2 = res["beat_2_steps"].get("step_2", "")
+                res["beat_2_steps"]["step_2"] = f"{s2.rstrip('.')} [heatmap:{cat_spoken}]."
 
         return res
 

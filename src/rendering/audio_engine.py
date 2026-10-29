@@ -403,7 +403,11 @@ class AudioEngine:
             if t["type"] in ("candidate_passes", "pass_options", "run_vectors", "vectors", "player_runs"):
                 t["duration_frames"] = max(30, (cause_frame_idx + freeze_frames) - t["start_frame"])
                 t["end_frame"] = cause_frame_idx + freeze_frames
-            elif any(k in t["type"] for k in ("stat", "sofascore", "heatmap", "average_position", "position")):
+            elif any(k in t["type"] for k in ("heatmap", "average_position", "data_card", "comparison")):
+                # Extended pause/blur modal display for ~8-10 seconds
+                t["duration_frames"] = max(180, (cause_frame_idx + freeze_frames) - t["start_frame"])
+                t["end_frame"] = cause_frame_idx + freeze_frames
+            elif any(k in t["type"] for k in ("stat", "sofascore", "position")):
                 t["duration_frames"] = 90
                 t["end_frame"] = min(cause_frame_idx + freeze_frames, t["start_frame"] + t["duration_frames"])
             elif t["type"] in ("mistake_flash", "red_flash", "mistake"):
@@ -431,12 +435,27 @@ class AudioEngine:
         for t in all_cue_tags:
             tgt = t.get("target")
             if tgt:
-                p_stats = stats_provider.get_player_stats(tgt)
-                if p_stats:
-                    t["player_stats"] = p_stats
-                    t["player_name"] = p_stats.get("playerName")
-                    t["player_number"] = p_stats.get("number")
-                    t["player_role"] = p_stats.get("role")
+                if ":" in tgt:
+                    p1_name, p2_name = [x.strip() for x in tgt.split(":", 1)]
+                    p1_stats = stats_provider.get_player_stats(p1_name)
+                    p2_stats = stats_provider.get_player_stats(p2_name)
+                    if p1_stats:
+                        t["player_stats"] = p1_stats
+                        t["player_name"] = p1_stats.get("playerName")
+                        t["heat_points"] = p1_stats.get("heatPoints")
+                        t["country_flag"] = p1_stats.get("countryFlagEmoji")
+                    if p2_stats:
+                        t["comparison_player"] = p2_stats
+                else:
+                    p_stats = stats_provider.get_player_stats(tgt)
+                    if p_stats:
+                        t["player_stats"] = p_stats
+                        t["player_name"] = p_stats.get("playerName")
+                        t["player_number"] = p_stats.get("number")
+                        t["player_role"] = p_stats.get("role")
+                        t["heat_points"] = p_stats.get("heatPoints")
+                        t["country_flag"] = p_stats.get("countryFlagEmoji")
+                        t["tactical_note"] = p_stats.get("tacticalNote")
 
         post_roll_frames = None
         total_composition_frames = None
