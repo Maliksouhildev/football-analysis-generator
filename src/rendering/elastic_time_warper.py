@@ -416,28 +416,62 @@ class ElasticTimeWarper:
         freeze_start_frame = warped_cause_idx
         freeze_end_frame = warped_cause_idx + freeze_frames
 
+        # Collect key track IDs (catalyst player, runners, focal tracks) to backward-stabilize pre-roll
+        key_track_ids = set()
+        if cause_telestration:
+            cat_p = cause_telestration.get("catalyst_player", {})
+            if cat_p and cat_p.get("track_id") is not None:
+                key_track_ids.add(str(cat_p["track_id"]))
+            if "focal_track_ids" in cause_telestration and isinstance(cause_telestration["focal_track_ids"], list):
+                for fid in cause_telestration["focal_track_ids"]:
+                    key_track_ids.add(str(fid))
+            if "vectors" in cause_telestration and isinstance(cause_telestration["vectors"], list):
+                for v in cause_telestration["vectors"]:
+                    if v.get("from_track_id") is not None:
+                        key_track_ids.add(str(v["from_track_id"]))
+                    if v.get("to_track_id") is not None:
+                        key_track_ids.add(str(v["to_track_id"]))
+
+        earliest_detections: Dict[str, Dict[str, Any]] = {}
+        for k_id in key_track_ids:
+            for s_f in sorted(source_frame_keys):
+                t_list = tracks_per_frame.get(str(s_f), [])
+                found = next((t for t in t_list if str(t.get("track_id")) == k_id), None)
+                if found:
+                    earliest_detections[k_id] = dict(found)
+                    break
+
         for f_out in range(N_out):
             if freeze_start_frame <= f_out < freeze_end_frame:
                 # During freeze: lock strictly to cause_frame_idx detections
                 f_key = str(cause_frame_idx)
                 if f_key in tracks_per_frame:
-                    warped_tracks[str(f_out)] = tracks_per_frame[f_key]
+                    base_list = list(tracks_per_frame[f_key])
                 elif source_frame_keys:
                     closest_k = min(source_frame_keys, key=lambda k: abs(k - cause_frame_idx))
-                    warped_tracks[str(f_out)] = tracks_per_frame.get(str(closest_k), [])
+                    base_list = list(tracks_per_frame.get(str(closest_k), []))
                 else:
-                    warped_tracks[str(f_out)] = []
+                    base_list = []
             else:
                 t_src = out_frame_to_source_time_sec[f_out]
                 f_src = int(round(t_src * source_fps))
                 f_key = str(f_src)
                 if f_key in tracks_per_frame:
-                    warped_tracks[str(f_out)] = tracks_per_frame[f_key]
+                    base_list = list(tracks_per_frame[f_key])
                 elif source_frame_keys:
                     closest_k = min(source_frame_keys, key=lambda k: abs(k - f_src))
-                    warped_tracks[str(f_out)] = tracks_per_frame.get(str(closest_k), [])
+                    base_list = list(tracks_per_frame.get(str(closest_k), []))
                 else:
-                    warped_tracks[str(f_out)] = []
+                    base_list = []
+
+            # Backward-extend key tracks if they haven't appeared yet in early pre-roll frames
+            if f_out < freeze_start_frame and earliest_detections:
+                present_ids = {str(t.get("track_id")) for t in base_list if t.get("track_id") is not None}
+                for k_id, e_track in earliest_detections.items():
+                    if k_id not in present_ids:
+                        base_list.append(e_track)
+
+            warped_tracks[str(f_out)] = base_list
 
         # 2. Remap landmarks and vectors if present
         remapped_tel = dict(cause_telestration) if cause_telestration else {}
