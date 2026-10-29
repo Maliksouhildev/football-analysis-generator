@@ -175,9 +175,13 @@ def ensure_clip_visual_cue_tags(sc: dict, vis: dict, cid: str) -> list:
         frac = (t["word_index"] / max(1, t.get("total_words", 1)))
         local_f = int(round(frac * dur2 * fps))
         t["start_frame"] = K + local_f
-        if t["type"] in ("candidate_passes", "pass_options", "run_vectors", "vectors", "player_runs"):
-            t["duration_frames"] = max(30, (K + f_frames) - t["start_frame"])
-            t["end_frame"] = K + f_frames
+        if t["type"] in ("candidate_passes", "pass_options"):
+            opt_duration = min(int(f_frames * 0.40), max(30, int((K + f_frames - t["start_frame"]) * 0.45)))
+            t["duration_frames"] = opt_duration
+            t["end_frame"] = t["start_frame"] + opt_duration
+        elif t["type"] in ("run_vectors", "vectors", "player_runs"):
+            t["duration_frames"] = min(int(f_frames * 0.50), max(30, (K + f_frames) - t["start_frame"]))
+            t["end_frame"] = t["start_frame"] + t["duration_frames"]
         elif any(k in t["type"] for k in ("stat", "sofascore", "heatmap", "average_position")):
             t["duration_frames"] = 90
             t["end_frame"] = min(K + f_frames, t["start_frame"] + t["duration_frames"])
@@ -234,14 +238,26 @@ def ensure_clip_visual_cue_tags(sc: dict, vis: dict, cid: str) -> list:
     vecs = c_tel.get("vectors") or []
     has_pass_opts = any(v.get("type") == "PASS_OPTION_DASHED" for v in vecs) or c_tel.get("pass_vector")
     if has_pass_opts:
+        opt_duration = min(int(f_frames * 0.40), max(36, int(f_frames * 0.38)))
         default_tags.append({
             "type": "candidate_passes",
             "target": "pass_options",
             "start_frame": K + 15,
-            "duration_frames": max(45, f_frames - 15),
-            "end_frame": K + f_frames,
+            "duration_frames": opt_duration,
+            "end_frame": K + 15 + opt_duration,
             "beat": "beat_2_cause",
         })
+        has_exec_pass = any(v.get("was_taken") is not False and v.get("type") in ("GROUND_PASS_SOLID", "AERIAL_BALL_ARC") for v in vecs) or c_tel.get("pass_vector")
+        if has_exec_pass:
+            exec_start = K + 15 + opt_duration + 6
+            default_tags.append({
+                "type": "executed_pass",
+                "target": "executed_pass",
+                "start_frame": exec_start,
+                "duration_frames": max(30, (K + f_frames) - exec_start),
+                "end_frame": K + f_frames,
+                "beat": "beat_2_cause",
+            })
 
     has_runs = any(v.get("type") in ("PRESSING_RUN", "PRESSING_ARROW", "PLAYER_RUN_DASHED") for v in vecs)
     if has_runs:

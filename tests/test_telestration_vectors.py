@@ -181,3 +181,44 @@ class TestTelestrationVectors:
         assert run_v.get("color") != "#ef4444", "Player run vector must not default to harsh red #ef4444"
         assert run_v.get("color") == "#ffffff", f"Player run vector should default to #ffffff, got {run_v.get('color')}"
 
+    def test_pass_options_and_executed_pass_mutually_exclusive(self):
+        """Verifies that candidate passing options and executed real pass tags are phased and mutually exclusive."""
+        from render_final import ensure_clip_visual_cue_tags
+
+        sc = {
+            "beats": {
+                "beat_1_setup": {"duration_sec": 2.0},
+                "beat_2_cause": {"duration_sec": 8.0, "freeze_frames": 240},
+                "beat_3_effect": {"duration_sec": 3.0},
+            },
+            "cause_frame_idx": 60,
+        }
+        vis = {
+            "cause_telestration": {
+                "catalyst_player": {"name": "Konaté"},
+                "vectors": [
+                    {"type": "GROUND_PASS_SOLID", "was_taken": True, "to_track_id": 1},
+                    {"type": "PASS_OPTION_DASHED", "was_taken": False, "to_track_id": 5},
+                ]
+            }
+        }
+
+        tags = ensure_clip_visual_cue_tags(
+            sc=sc,
+            vis=vis,
+            cid="clip_01"
+        )
+
+        opt_tag = next((t for t in tags if t["type"] == "candidate_passes"), None)
+        exec_tag = next((t for t in tags if t["type"] == "executed_pass"), None)
+
+        assert opt_tag is not None, "Candidate passes tag should be generated"
+        assert exec_tag is not None, "Executed pass tag should be generated"
+
+        # Candidate options exploration phase must end before executed pass begins
+        assert opt_tag["end_frame"] <= exec_tag["start_frame"], (
+            f"Candidate pass options ({opt_tag['start_frame']}..{opt_tag['end_frame']}) "
+            f"must end before executed pass ({exec_tag['start_frame']}..{exec_tag['end_frame']}) begins!"
+        )
+
+
