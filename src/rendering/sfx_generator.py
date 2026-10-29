@@ -173,6 +173,42 @@ def synthesize_slow_focus_swell(sr: int = SAMPLE_RATE) -> np.ndarray:
     return _to_stereo_pcm16(mix, peak_norm=0.50)
 
 
+def synthesize_run_chevrons(sr: int = SAMPLE_RATE) -> np.ndarray:
+    """
+    Crisp high-velocity aerodynamic whoosh (140ms) layered with 4 rapid micro-ticks
+    synced to sequential chevron pops along player run paths.
+    """
+    duration = 0.20
+    n_samples = int(duration * sr)
+    t = np.linspace(0.0, duration, n_samples, endpoint=False)
+
+    # 1. Rising aerodynamic whoosh (bandpass sweep 380Hz -> 1600Hz)
+    noise = np.random.normal(0.0, 1.0, n_samples)
+    b, a = butter(2, [380.0 / (sr / 2.0), 1600.0 / (sr / 2.0)], btype="band")
+    filtered_noise = lfilter(b, a, noise)
+    env_whoosh = (np.sin(np.pi * (t / duration)) ** 1.8) * np.exp(-t / 0.12)
+    whoosh = filtered_noise * env_whoosh
+
+    # 2. Sequential micro-ticks (4 ticks spaced by 0.035s)
+    ticks = np.zeros_like(t)
+    tick_times = [0.015, 0.050, 0.085, 0.120]
+    for idx, t_tick in enumerate(tick_times):
+        dt = t - t_tick
+        mask = dt >= 0
+        freq = 1600.0 + idx * 250.0
+        decay = 0.005
+        tick_wave = np.sin(2.0 * np.pi * freq * dt) * np.exp(-dt / decay) * mask
+        ticks += 0.35 * tick_wave
+
+    mix = 0.65 * whoosh + 0.50 * ticks
+    max_val = np.max(np.abs(mix))
+    if max_val > 1e-6:
+        mix = mix * (0.65 / max_val)
+
+    pcm = np.int16(np.clip(mix, -1.0, 1.0) * 32767)
+    return np.column_stack((pcm, pcm))
+
+
 class ProceduralSFXGenerator:
     """Generates and caches all broadcast procedural sound effects."""
 
@@ -188,6 +224,7 @@ class ProceduralSFXGenerator:
             "sfx_goal_impact": out_p / "sfx_goal_impact.wav",
             "slow_focus_swell": out_p / "slow_focus_swell.wav",
             "sfx_slow_focus_swell": out_p / "sfx_slow_focus_swell.wav",
+            "sfx_run_chevrons": out_p / "sfx_run_chevrons.wav",
         }
 
         # Synthesize each sound
@@ -207,5 +244,8 @@ class ProceduralSFXGenerator:
         wavfile.write(str(sfx_files["slow_focus_swell"]), SAMPLE_RATE, swell_data)
         wavfile.write(str(sfx_files["sfx_slow_focus_swell"]), SAMPLE_RATE, swell_data)
 
-        logger.info(f"Synthesized 5 broadcast SFX files to: {out_p}")
+        chevrons_data = synthesize_run_chevrons()
+        wavfile.write(str(sfx_files["sfx_run_chevrons"]), SAMPLE_RATE, chevrons_data)
+
+        logger.info(f"Synthesized 6 broadcast SFX files to: {out_p}")
         return {k: str(v) for k, v in sfx_files.items()}
