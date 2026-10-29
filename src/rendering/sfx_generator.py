@@ -209,6 +209,46 @@ def synthesize_run_chevrons(sr: int = SAMPLE_RATE) -> np.ndarray:
     return np.column_stack((pcm, pcm))
 
 
+def synthesize_error_alarm(sr: int = SAMPLE_RATE) -> np.ndarray:
+    """
+    Punchy tactical error/alert sound effect (0.28s):
+    - Sub-bass thud (115Hz -> 48Hz exponential drop)
+    - Dissonant high-tech alert ping (dissonant tritone 440Hz + 466Hz damped chord)
+    - Rapid filtered warning noise burst (800Hz - 3200Hz).
+    """
+    duration = 0.28
+    n_samples = int(duration * sr)
+    t = np.linspace(0.0, duration, n_samples, endpoint=False)
+
+    # 1. Punchy low-end impact (115Hz -> 48Hz pitch drop)
+    k_pitch = 28.0
+    f_base = 48.0
+    f_delta = 67.0
+    phase_sub = 2.0 * np.pi * (f_base * t + (f_delta / k_pitch) * (1.0 - np.exp(-k_pitch * t)))
+    sub_thud = np.sin(phase_sub) * np.exp(-t / 0.08)
+
+    # 2. Dissonant broadcast warning alert transient (440Hz + 466Hz minor 2nd clash)
+    alert_wave = (
+        0.55 * np.sin(2.0 * np.pi * 440.0 * t)
+        + 0.45 * np.sin(2.0 * np.pi * 466.16 * t)
+        + 0.25 * np.sin(2.0 * np.pi * 880.0 * t)
+    )
+    env_alert = np.minimum(t / 0.005, 1.0) * np.exp(-t / 0.075)
+    alert_sound = alert_wave * env_alert
+
+    # 3. Filtered air warning transient burst (800Hz - 3200Hz)
+    noise = np.random.normal(0.0, 1.0, n_samples)
+    b, a = butter(2, [800.0 / (sr / 2.0), 3200.0 / (sr / 2.0)], btype="band")
+    filtered_noise = lfilter(b, a, noise)
+    sine_half = np.maximum(0.0, np.sin(np.pi * (t / 0.08)))
+    env_noise = (sine_half ** 1.5) * (t < 0.08)
+    noise_burst = filtered_noise * env_noise
+
+    # Layer: 55% sub thud + 45% alert ping + 25% noise burst
+    mix = 0.55 * sub_thud + 0.45 * alert_sound + 0.25 * noise_burst
+    return _to_stereo_pcm16(mix, peak_norm=0.72)
+
+
 class ProceduralSFXGenerator:
     """Generates and caches all broadcast procedural sound effects."""
 
@@ -225,6 +265,7 @@ class ProceduralSFXGenerator:
             "slow_focus_swell": out_p / "slow_focus_swell.wav",
             "sfx_slow_focus_swell": out_p / "sfx_slow_focus_swell.wav",
             "sfx_run_chevrons": out_p / "sfx_run_chevrons.wav",
+            "sfx_error_alarm": out_p / "sfx_error_alarm.wav",
         }
 
         # Synthesize each sound
@@ -247,5 +288,8 @@ class ProceduralSFXGenerator:
         chevrons_data = synthesize_run_chevrons()
         wavfile.write(str(sfx_files["sfx_run_chevrons"]), SAMPLE_RATE, chevrons_data)
 
-        logger.info(f"Synthesized 6 broadcast SFX files to: {out_p}")
+        alarm_data = synthesize_error_alarm()
+        wavfile.write(str(sfx_files["sfx_error_alarm"]), SAMPLE_RATE, alarm_data)
+
+        logger.info(f"Synthesized 7 broadcast SFX files to: {out_p}")
         return {k: str(v) for k, v in sfx_files.items()}

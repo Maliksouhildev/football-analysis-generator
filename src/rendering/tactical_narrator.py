@@ -237,6 +237,34 @@ class TacticalNarrator:
             t["total_words"] = total_words
             t["word_index"] = min(t["word_index"], total_words)
 
+        # Auto-detect tactical mistake keywords if not already tagged
+        negative_keywords = {
+            "wrong", "dangerous", "danger", "stupid", "fail", "fails", "failed", "failing", "failure",
+            "mistake", "mistakes", "mistaken", "error", "errors", "poor", "poorer", "poorly",
+            "costly", "disaster", "disastrous", "blunder", "blunders", "disjointed",
+            "punished", "punish", "punishes", "punishing", "exposed", "exposes", "exposing", "exposure",
+            "vulnerable", "vulnerability", "misplaced", "misplace", "misplaces",
+            "turnover", "lost", "loses", "losing", "struggle", "struggles", "struggling",
+            "trapped", "trap", "trapping", "caught", "hesitant", "hesitated", "hesitation",
+            "sloppy", "fatal", "unforgivable", "collapse", "collapses", "collapsing", "collapsed",
+            "crumbles", "crumbling", "crumbled", "broken", "breakdown", "fragmented", "isolated",
+        }
+        existing_mistake_indices = {t["word_index"] for t in tags if t.get("type") in ("mistake_flash", "red_flash", "mistake")}
+        last_tagged_w_idx = -99
+        for w_idx, w in enumerate(final_words):
+            clean_w = re.sub(r'[^a-zA-Z0-9]', '', w.lower())
+            if clean_w in negative_keywords:
+                # Minimum spacing of 4 words between auto-detected mistake tags
+                if w_idx not in existing_mistake_indices and (w_idx - last_tagged_w_idx) >= 4:
+                    tags.append({
+                        "type": "mistake_flash",
+                        "target": clean_w,
+                        "word_index": w_idx,
+                        "total_words": total_words,
+                        "raw": f"[mistake_flash:{clean_w}]",
+                    })
+                    last_tagged_w_idx = w_idx
+
         return cleaned, tags
 
     def generate_3beat_script(

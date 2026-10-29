@@ -390,7 +390,7 @@ class AudioEngine:
             t["offset_sec"] = round(frac * beat_1_duration_sec, 3)
             t["offset_ms"] = int(round(frac * dur_1_ms))
             t["start_frame"] = int(round(frac * beat_1_duration_sec * actual_fps))
-            t["duration_frames"] = 75
+            t["duration_frames"] = 18 if t.get("type") in ("mistake_flash", "red_flash", "mistake") else 75
             t["end_frame"] = t["start_frame"] + t["duration_frames"]
             t["beat"] = "beat_1_setup"
 
@@ -406,6 +406,9 @@ class AudioEngine:
             elif any(k in t["type"] for k in ("stat", "sofascore", "heatmap", "average_position", "position")):
                 t["duration_frames"] = 90
                 t["end_frame"] = min(cause_frame_idx + freeze_frames, t["start_frame"] + t["duration_frames"])
+            elif t["type"] in ("mistake_flash", "red_flash", "mistake"):
+                t["duration_frames"] = 18
+                t["end_frame"] = t["start_frame"] + 18
             else:
                 t["duration_frames"] = 75
                 t["end_frame"] = min(cause_frame_idx + freeze_frames, t["start_frame"] + t["duration_frames"])
@@ -418,7 +421,7 @@ class AudioEngine:
             t["offset_ms"] = int(round(frac * dur_3_ms))
             local_f = int(round(frac * beat_3_duration_sec * actual_fps))
             t["start_frame"] = b3_start_f + local_f
-            t["duration_frames"] = 75
+            t["duration_frames"] = 18 if t.get("type") in ("mistake_flash", "red_flash", "mistake") else 75
             t["end_frame"] = t["start_frame"] + t["duration_frames"]
             t["beat"] = "beat_3_effect"
 
