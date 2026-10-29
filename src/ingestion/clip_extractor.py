@@ -230,6 +230,91 @@ class ClipExtractor:
             except Exception as e:
                 logger.warn(f"Could not probe media duration: {e}")
 
+        self._tactical_scorer = None
+
+    def get_tactical_scorer(self) -> Any:
+        """Lazily initializes and returns the TacticalClipScorer."""
+        if self._tactical_scorer is None:
+            try:
+                from src.vision.tactical_clip_scorer import TacticalClipScorer
+                self._tactical_scorer = TacticalClipScorer(ffmpeg_bin=self.ffmpeg_bin)
+            except Exception as e:
+                logger.warning("Could not initialize TacticalClipScorer: %s", e)
+        return self._tactical_scorer
+
+    def score_and_extract_buildup_clips(
+        self,
+        media_source: Optional[str] = None,
+        top_k: int = 3,
+        attack_direction: str = "right",
+        candidate_peaks: Optional[List[float]] = None,
+        cut_video_clips: bool = True,
+    ) -> List[Dict[str, Any]]:
+        """
+        Scores match footage using TacticalClipScorer, extracts continuous buildup clips
+        and climax hook slices, and generates freeze-frame tactical keyframes.
+        """
+        src = str(media_source or self.media_source)
+        scorer = self.get_tactical_scorer()
+        if scorer is None:
+            logger.warning("TacticalClipScorer unavailable; cannot extract scored buildup clips")
+            return []
+
+        ranked_candidates = scorer.score_video(
+            media_path=src,
+            top_k=top_k,
+            attack_direction=attack_direction,
+            candidate_peaks=candidate_peaks,
+        )
+
+        extracted_clips: List[Dict[str, Any]] = []
+        for cand in ranked_candidates:
+            safe_id = f"buildup_rank{cand.rank}_{int(cand.t_peak)}"
+            buildup_clip_path = self.output_dir / f"clip_{safe_id}.mp4"
+            hook_clip_path = self.output_dir / f"hook_{safe_id}.mp4"
+            frame_path = self.frames_dir / f"frame_{safe_id}.jpg"
+
+            if cut_video_clips and Path(src).exists():
+                # 1. Slice continuous tactical buildup clip
+                self.cut_clip(
+                    start_pts=cand.buildup_start_sec,
+                    duration=cand.buildup_duration_sec,
+                    output_path=str(buildup_clip_path),
+                )
+
+                # 2. Slice 3.5s climax hook window [t_peak - 1.5s, t_peak + 2.0s]
+                hook_win = cand.climax_hook_window
+                self.cut_clip(
+                    start_pts=float(hook_win.get("start_sec", max(0.0, cand.t_peak - 1.5))),
+                    duration=float(hook_win.get("duration_sec", 3.5)),
+                    output_path=str(hook_clip_path),
+                )
+
+                # 3. Extract sharpest / tactical keyframe
+                tactical_info = self.extract_tactical_keyframe(
+                    clip_path=str(buildup_clip_path),
+                    output_path=str(frame_path),
+                )
+                if tactical_info is None:
+                    self.extract_sharpest_frame(
+                        clip_path=str(buildup_clip_path),
+                        target_offset_in_clip=min(4.0, cand.buildup_duration_sec / 2.0),
+                        output_path=str(frame_path),
+                    )
+
+            entry = cand.to_dict()
+            entry.update({
+                "clip_id": safe_id,
+                "clip_path": str(buildup_clip_path.resolve()),
+                "buildup_clip_path": str(buildup_clip_path.resolve()),
+                "climax_hook_path": str(hook_clip_path.resolve()),
+                "freeze_frame_path": str(frame_path.resolve()),
+                "source_media": src,
+            })
+            extracted_clips.append(entry)
+
+        return extracted_clips
+
     def extract_event_assets(
         self,
         match_minute: int,
@@ -240,6 +325,7 @@ class ClipExtractor:
         event_id: Optional[str] = None,
         fast_copy: bool = False,
         video_pts: Optional[float] = None,
+        use_tactical_scorer: bool = False,
     ) -> Dict[str, Any]:
         """
         Coordinates end-to-end tactical asset generation:
@@ -298,6 +384,13 @@ class ClipExtractor:
             freeze_frame_path = str(frame_path.resolve())
             is_tactical = False
 
+        climax_hook = {
+            "start_sec": max(0.0, round(pts - 1.5, 3)),
+            "end_sec": round(pts + 2.0, 3),
+            "duration_sec": 3.5,
+            "t_peak": round(pts, 3),
+        }
+
         return {
             "clip_path": str(clip_path.resolve()),
             "freeze_frame_path": freeze_frame_path,
@@ -308,6 +401,7 @@ class ClipExtractor:
             "match_time_display": match_time.display,
             "match_minute": match_minute,
             "stoppage_minute": stoppage_minute,
+            "climax_hook_window": climax_hook,
         }
 
     def cut_clip(
@@ -721,6 +815,13 @@ class ClipExtractor:
             self.extract_frame_at_index(str(clip_path), cause_frame_idx, str(cause_frame_path))
         self.extract_sharpest_frame(str(clip_path), effect_offset, str(effect_frame_path))
 
+        climax_hook = {
+            "start_sec": max(0.0, round(adj_cause_pts - 1.5, 3)),
+            "end_sec": round(adj_cause_pts + 2.0, 3),
+            "duration_sec": 3.5,
+            "t_peak": round(adj_cause_pts, 3),
+        }
+
         return {
             "clip_id": clip_id,
             "clip_path": str(clip_path),
@@ -738,6 +839,7 @@ class ClipExtractor:
             "video_freeze_frame": cause_frame_idx,
             "pre_roll_duration_frames": cause_frame_idx,
             "effect_frame_idx": effect_frame_idx,
+            "climax_hook_window": climax_hook,
         }
 
 

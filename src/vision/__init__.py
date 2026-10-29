@@ -46,6 +46,17 @@ from src.vision.pitch_homography_role_mapper import (
     SignalBFormationTopology,
     SignalCSetPieceLookup,
 )
+from src.vision.tactical_clip_scorer import (
+    AudioPeak,
+    BuildupCandidate,
+    KARUN_SINGH_XT_12x8,
+    TacticalClipScorer,
+    detect_audio_excitement_peaks,
+    evaluate_tactical_spatial_metrics,
+    find_continuous_tactical_buildup,
+    get_xt_value,
+    rank_buildup_candidates,
+)
 from src.vision.temporal_ground_truth import TemporalGroundTruthEngine
 from src.vision.match_roster_engine import (
     ActiveRosterState,
@@ -129,5 +140,15 @@ __all__ = [
     "TacticalLineType",
     "LineSegment",
     "Point2D",
+    # Tactical Buildup & Climax Hook Scorer
+    "TacticalClipScorer",
+    "AudioPeak",
+    "BuildupCandidate",
+    "KARUN_SINGH_XT_12x8",
+    "get_xt_value",
+    "detect_audio_excitement_peaks",
+    "find_continuous_tactical_buildup",
+    "evaluate_tactical_spatial_metrics",
+    "rank_buildup_candidates",
 ]
 
