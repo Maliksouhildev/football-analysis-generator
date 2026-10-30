@@ -300,6 +300,8 @@ class ActiveXIResolver:
         self,
         match_data: Optional[Dict[str, Any]] = None,
         match_data_path: Optional[Union[str, Path]] = None,
+        home_team: Optional[str] = None,
+        away_team: Optional[str] = None,
     ):
         self.match_data: Dict[str, Any] = {}
         if match_data:
@@ -307,7 +309,7 @@ class ActiveXIResolver:
         elif match_data_path:
             self.load_match_data_file(match_data_path)
         else:
-            self._load_default_fixture_data()
+            self._load_fixture_data(home_team=home_team, away_team=away_team)
 
     def load_match_data_file(self, file_path: Union[str, Path]) -> None:
         p = Path(file_path)
@@ -315,6 +317,174 @@ class ActiveXIResolver:
             raise FileNotFoundError(f"Match data JSON file not found: {p}")
         with open(p, "r", encoding="utf-8") as f:
             self.match_data = json.load(f)
+
+    def _load_fixture_data(self, home_team: Optional[str] = None, away_team: Optional[str] = None) -> None:
+        h_low = str(home_team or "").lower()
+        a_low = str(away_team or "").lower()
+        if "barcelona" in h_low or "barca" in h_low or "bar" in h_low or "barcelona" in a_low or "barca" in a_low:
+            self._load_barcelona_vs_real_madrid_data()
+        elif "roma" in h_low or "roma" in a_low:
+            self._load_default_fixture_data()
+        else:
+            self._load_barcelona_vs_real_madrid_data()
+
+    def _load_barcelona_vs_real_madrid_data(self) -> None:
+        """Initializes authentic Barcelona vs Real Madrid (El Clásico) matchday data."""
+        self.match_data = {
+            "match_id": "barcelona_vs_real_madrid_el_clasico",
+            "kickoff_timestamp_offset": 0.0,
+            "retired_legends": [
+                "Lionel Messi", "Cristiano Ronaldo", "Karim Benzema", "Sergio Busquets", "Jordi Alba",
+                "Gerard Piqué", "Xavi Hernández", "Andrés Iniesta", "Toni Kroos", "Marcelo", "Sergio Ramos",
+                "Casemiro", "Gareth Bale",
+            ],
+            "home_team": {
+                "name": "Barcelona",
+                "short_name": "BAR",
+                "formation": "4-2-3-1",
+                "starting_xi": [
+                    {
+                        "name": "Iñaki Peña", "number": 13, "role": "GK", "short_name": "Peña (GK)", "is_gk": True,
+                        "visual_traits": {"skin": "fair", "hair": "dark/short", "boots": "black"},
+                    },
+                    {
+                        "name": "Jules Koundé", "number": 23, "role": "RB", "short_name": "Koundé (RB)", "is_gk": False,
+                        "visual_traits": {"skin": "dark", "hair": "braids/short", "boots": "white"},
+                    },
+                    {
+                        "name": "Pau Cubarsí", "number": 2, "role": "RCB", "short_name": "Cubarsí (CB)", "is_gk": False,
+                        "visual_traits": {"skin": "fair", "hair": "brown/short", "boots": "white"},
+                    },
+                    {
+                        "name": "Iñigo Martínez", "number": 5, "role": "LCB", "short_name": "Iñigo Martínez (CB)", "is_gk": False,
+                        "visual_traits": {"skin": "fair", "hair": "dark/short", "boots": "white"},
+                    },
+                    {
+                        "name": "Alejandro Balde", "number": 3, "role": "LB", "short_name": "Balde (LB)", "is_gk": False,
+                        "visual_traits": {"skin": "dark", "hair": "dark/short", "boots": "pink/orange"},
+                    },
+                    {
+                        "name": "Marc Casadó", "number": 17, "role": "DM", "short_name": "Casadó (DM)", "is_gk": False,
+                        "visual_traits": {"skin": "fair", "hair": "dark/short", "boots": "white"},
+                    },
+                    {
+                        "name": "Pedri", "number": 8, "role": "CM", "short_name": "Pedri (CM)", "is_gk": False,
+                        "visual_traits": {"skin": "fair", "hair": "dark/short", "boots": "yellow/volt"},
+                    },
+                    {
+                        "name": "Dani Olmo", "number": 20, "role": "AM", "short_name": "Dani Olmo (AM)", "is_gk": False,
+                        "visual_traits": {"skin": "fair", "hair": "blonde/brown", "boots": "white"},
+                    },
+                    {
+                        "name": "Lamine Yamal", "number": 19, "role": "RW", "short_name": "Yamal (RW)", "is_gk": False,
+                        "visual_traits": {"skin": "dark", "hair": "dark/curly", "boots": "pink/orange"},
+                    },
+                    {
+                        "name": "Robert Lewandowski", "number": 9, "role": "CF", "short_name": "Lewandowski (CF)", "is_gk": False,
+                        "visual_traits": {"skin": "fair", "hair": "dark/short", "boots": "white"},
+                    },
+                    {
+                        "name": "Raphinha", "number": 11, "role": "LW", "short_name": "Raphinha (LW)", "is_gk": False,
+                        "is_captain": True,
+                        "visual_traits": {"skin": "dark", "hair": "dark/short", "boots": "yellow/volt"},
+                    },
+                ],
+                "substitutions": [
+                    {
+                        "minute": 45, "player_out": "Dani Olmo", "player_in": "Fermín López",
+                        "in_number": 16, "in_role": "AM", "in_short_name": "Fermín (AM)",
+                        "visual_traits": {"skin": "fair", "hair": "dark/short", "boots": "white"},
+                    },
+                    {
+                        "minute": 65, "player_out": "Marc Casadó", "player_in": "Frenkie de Jong",
+                        "in_number": 21, "in_role": "CM", "in_short_name": "De Jong (CM)",
+                        "visual_traits": {"skin": "fair", "hair": "blonde", "is_blonde": True, "boots": "white"},
+                    },
+                    {
+                        "minute": 77, "player_out": "Pedri", "player_in": "Gavi",
+                        "in_number": 6, "in_role": "CM", "in_short_name": "Gavi (CM)",
+                        "visual_traits": {"skin": "fair", "hair": "dark/short", "boots": "white"},
+                    },
+                ],
+                "role_shifts": [],
+                "red_cards": [],
+            },
+            "away_team": {
+                "name": "Real Madrid",
+                "short_name": "RMA",
+                "formation": "4-2-3-1",
+                "starting_xi": [
+                    {
+                        "name": "Thibaut Courtois", "number": 1, "role": "GK", "short_name": "Courtois (GK)", "is_gk": True,
+                        "visual_traits": {"skin": "fair", "hair": "dark/short", "boots": "white"},
+                    },
+                    {
+                        "name": "Lucas Vázquez", "number": 17, "role": "RB", "short_name": "Lucas Vázquez (RB)", "is_gk": False,
+                        "visual_traits": {"skin": "fair", "hair": "dark/short", "boots": "white"},
+                    },
+                    {
+                        "name": "Éder Militão", "number": 3, "role": "RCB", "short_name": "Militão (CB)", "is_gk": False,
+                        "visual_traits": {"skin": "dark", "hair": "dark/short", "boots": "white"},
+                    },
+                    {
+                        "name": "Antonio Rüdiger", "number": 22, "role": "LCB", "short_name": "Rüdiger (CB)", "is_gk": False,
+                        "visual_traits": {"skin": "dark", "hair": "dark/short", "boots": "white"},
+                    },
+                    {
+                        "name": "Ferland Mendy", "number": 23, "role": "LB", "short_name": "Mendy (LB)", "is_gk": False,
+                        "visual_traits": {"skin": "dark", "hair": "dark/short", "boots": "white"},
+                    },
+                    {
+                        "name": "Federico Valverde", "number": 8, "role": "CM", "short_name": "Valverde (CM)", "is_gk": False,
+                        "is_captain": True,
+                        "tactical_flags": ["box_to_box", "cover_flank"],
+                        "visual_traits": {"skin": "fair", "hair": "dark/short", "boots": "white"},
+                    },
+                    {
+                        "name": "Aurélien Tchouaméni", "number": 14, "role": "DM", "short_name": "Tchouaméni (DM)", "is_gk": False,
+                        "visual_traits": {"skin": "dark", "hair": "dark/short", "boots": "yellow/volt"},
+                    },
+                    {
+                        "name": "Eduardo Camavinga", "number": 6, "role": "CM", "short_name": "Camavinga (CM)", "is_gk": False,
+                        "visual_traits": {"skin": "dark", "hair": "dreadlocks", "boots": "white"},
+                    },
+                    {
+                        "name": "Jude Bellingham", "number": 5, "role": "AM", "short_name": "Bellingham (AM)", "is_gk": False,
+                        "tactical_flags": ["roaming", "free_role"],
+                        "visual_traits": {"skin": "dark", "hair": "dark/short", "boots": "black"},
+                    },
+                    {
+                        "name": "Vinícius Júnior", "number": 7, "role": "LW", "short_name": "Vinícius Jr (LW)", "is_gk": False,
+                        "tactical_flags": ["wing_swap"],
+                        "visual_traits": {"skin": "dark", "hair": "dark/short", "boots": "yellow/volt"},
+                    },
+                    {
+                        "name": "Kylian Mbappé", "number": 9, "role": "CF", "short_name": "Mbappé (CF)", "is_gk": False,
+                        "tactical_flags": ["roaming", "left_channel_drift"],
+                        "visual_traits": {"skin": "dark", "hair": "dark/short", "boots": "pink/orange"},
+                    },
+                ],
+                "substitutions": [
+                    {
+                        "minute": 63, "player_out": "Aurélien Tchouaméni", "player_in": "Luka Modrić",
+                        "in_number": 10, "in_role": "CM", "in_short_name": "Modrić (CM)",
+                        "visual_traits": {"skin": "fair", "hair": "blonde/long", "boots": "white"},
+                    },
+                    {
+                        "minute": 77, "player_out": "Eduardo Camavinga", "player_in": "Brahim Díaz",
+                        "in_number": 21, "in_role": "AM", "in_short_name": "Brahim (AM)",
+                        "visual_traits": {"skin": "fair", "hair": "dark/short", "boots": "white"},
+                    },
+                    {
+                        "minute": 86, "player_out": "Jude Bellingham", "player_in": "Arda Güler",
+                        "in_number": 15, "in_role": "AM", "in_short_name": "Arda Güler (AM)",
+                        "visual_traits": {"skin": "fair", "hair": "dark/short", "boots": "white"},
+                    },
+                ],
+                "role_shifts": [],
+                "red_cards": [],
+            },
+        }
 
     def _load_default_fixture_data(self) -> None:
         """Initializes default AS Roma vs Real Madrid (Oct 14, 2026 UCL Round 2) fixture data with authentic rosters, traits, subs, and role shifts."""
@@ -426,11 +596,11 @@ class ActiveXIResolver:
                         "visual_traits": {"skin": "fair", "hair": "dark/short", "boots": "white"},
                     },
                     {
-                        "name": "Denzel Dumfries", "number": 24, "role": "RB", "short_name": "Dumfries (RB)", "is_gk": False,
-                        "visual_traits": {"skin": "dark", "hair": "dark/short", "boots": "white"},
+                        "name": "Lucas Vázquez", "number": 17, "role": "RB", "short_name": "Lucas Vázquez (RB)", "is_gk": False,
+                        "visual_traits": {"skin": "fair", "hair": "dark/short", "boots": "white"},
                     },
                     {
-                        "name": "Ibrahima Konaté", "number": 16, "role": "RCB", "short_name": "Konaté (CB)", "is_gk": False,
+                        "name": "Éder Militão", "number": 3, "role": "RCB", "short_name": "Militão (CB)", "is_gk": False,
                         "visual_traits": {"skin": "dark", "hair": "dark/short", "boots": "white"},
                     },
                     {
@@ -438,8 +608,8 @@ class ActiveXIResolver:
                         "visual_traits": {"skin": "dark", "hair": "dark/short", "boots": "white"},
                     },
                     {
-                        "name": "Marc Cucurella", "number": 17, "role": "LB", "short_name": "Cucurella (LB)", "is_gk": False,
-                        "visual_traits": {"skin": "fair", "hair": "curly_afro", "is_curly_afro": True, "boots": "white"},
+                        "name": "Ferland Mendy", "number": 23, "role": "LB", "short_name": "Mendy (LB)", "is_gk": False,
+                        "visual_traits": {"skin": "dark", "hair": "dark/short", "boots": "white"},
                     },
                     {
                         "name": "Federico Valverde", "number": 8, "role": "CM", "short_name": "Valverde (CM)", "is_gk": False,
@@ -452,8 +622,8 @@ class ActiveXIResolver:
                         "visual_traits": {"skin": "dark", "hair": "dark/short", "boots": "yellow/volt"},
                     },
                     {
-                        "name": "Yan Diomande", "number": 25, "role": "RW", "short_name": "Diomande (RW)", "is_gk": False,
-                        "visual_traits": {"skin": "dark", "hair": "dark/short", "boots": "pink/orange"},
+                        "name": "Eduardo Camavinga", "number": 6, "role": "CM", "short_name": "Camavinga (CM)", "is_gk": False,
+                        "visual_traits": {"skin": "dark", "hair": "dreadlocks", "boots": "white"},
                     },
                     {
                         "name": "Jude Bellingham", "number": 5, "role": "AM", "short_name": "Bellingham (AM)", "is_gk": False,
@@ -466,7 +636,7 @@ class ActiveXIResolver:
                         "visual_traits": {"skin": "dark", "hair": "dark/short", "boots": "yellow/volt"},
                     },
                     {
-                        "name": "Kylian Mbappé", "number": 10, "role": "CF", "short_name": "Mbappé (CF)", "is_gk": False,
+                        "name": "Kylian Mbappé", "number": 9, "role": "CF", "short_name": "Mbappé (CF)", "is_gk": False,
                         "tactical_flags": ["roaming", "left_channel_drift"],
                         "visual_traits": {"skin": "dark", "hair": "dark/short", "boots": "pink/orange"},
                     },

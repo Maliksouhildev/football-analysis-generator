@@ -422,19 +422,31 @@ def main():
             continue
 
 
-        K_video = K_VIDEO_MAP.get(cid, 66)
+        if ext_path.is_file():
+            try:
+                with open(ext_path, "r", encoding="utf-8") as f_ext:
+                    ext = json.load(f_ext)
+            except Exception:
+                ext = {}
+        else:
+            ext = {}
 
-        ext = {
-            "clip_id": cid,
-            "clip_path": f"F:/DockerRenders/assets/clips/{cid}.mp4",
-            "cause_frame_path": f"F:/DockerRenders/assets/frames/{cid}_cause.jpg",
-            "effect_frame_path": f"F:/DockerRenders/assets/frames/{cid}_effect.jpg",
-            "fps": 30,
-            "cause_frame_idx": K_video,
-            "video_freeze_frame": K_video,
-            "pre_roll_duration_frames": K_video,
-            "effect_frame_idx": 240,
-        }
+        K_video = (
+            ext.get("cause_frame_idx")
+            or ext.get("video_freeze_frame")
+            or ext.get("freeze_frame")
+            or K_VIDEO_MAP.get(cid, 66)
+        )
+
+        ext.setdefault("clip_id", cid)
+        ext.setdefault("clip_path", f"F:/DockerRenders/assets/clips/{cid}.mp4")
+        ext.setdefault("cause_frame_path", f"F:/DockerRenders/assets/frames/{cid}_cause.jpg")
+        ext.setdefault("effect_frame_path", f"F:/DockerRenders/assets/frames/{cid}_effect.jpg")
+        ext.setdefault("fps", 30)
+        ext["cause_frame_idx"] = K_video
+        ext["video_freeze_frame"] = K_video
+        ext["pre_roll_duration_frames"] = K_video
+        ext.setdefault("effect_frame_idx", 240)
 
         clip_theses = {
             "clip_01_left_wing": "Real Madrid escaping AS Roma's high press through Ibrahima Konaté bypassing blocked passing lanes to play a composed safety back-pass to Thibaut Courtois",
@@ -598,7 +610,12 @@ def main():
             except Exception:
                 actual_video_frames = 0
 
-        K_video = K_VIDEO_MAP.get(cid, 66)
+        K_video = (
+            sc.get("cause_frame_idx")
+            or sc.get("video_freeze_frame")
+            or sc.get("freeze_frame")
+            or K_VIDEO_MAP.get(cid, 66)
+        )
         b1_ms = beats.get("beat_1_setup", {}).get("duration_ms", 2000) if isinstance(beats.get("beat_1_setup"), dict) else 2000
         b2_ms = beats.get("beat_2_cause", {}).get("duration_ms", 5400) if isinstance(beats.get("beat_2_cause"), dict) else 5400
         b3_ms = beats.get("beat_3_effect", {}).get("duration_ms", 4200) if isinstance(beats.get("beat_3_effect"), dict) else 4200
@@ -706,15 +723,12 @@ def main():
             if c_orig is not None and str(c_orig) in t_map and str(K) not in t_map:
                 t_map[str(K)] = t_map[str(c_orig)]
             realign_cause_telestration(cause_tel, t_map, K, clip_id=cid)
-            if "clip_05" in cid:
+            if sc.get("is_set_piece_or_long_ball") or sc.get("is_set_piece"):
                 cause_tel["is_set_piece_or_long_ball"] = True
                 cause_tel["is_set_piece"] = True
-            elif "clip_03" in cid:
-                cause_tel["is_set_piece_or_long_ball"] = True
-                cause_tel["is_set_piece"] = True
-            elif "clip_01" in cid:
-                cause_tel["is_set_piece_or_long_ball"] = True
-                cause_tel["is_set_piece"] = True
+            is_tactical = sc.get("is_tactical", True)
+            cause_tel["is_tactical"] = is_tactical
+            cause_tel["isTactical"] = is_tactical
 
             # Remap tracks_per_frame and cause_telestration through source_frame_to_out_frame
             remapped_vis = elastic_warper.remap_vision_coordinates(
@@ -752,6 +766,8 @@ def main():
             "warpedVideoUrl": clip_url,
             "is_warped": is_warped_ready,
             "isWarped": is_warped_ready,
+            "is_tactical": is_tactical,
+            "isTactical": is_tactical,
             "speed_segments": speed_segments,
             "speedSegments": speed_segments,
             "freezeFrameUrl": freeze_frame_url,

@@ -390,7 +390,7 @@ class CVPlayerDetector:
                 })
 
         minute = int(event_ctx.get("match_minute", 0))
-        home_team_name = str(event_ctx.get("home_team", "AS Roma")).lower()
+        home_team_name = str(event_ctx.get("home_team", "Barcelona")).lower()
         away_team_name = str(event_ctx.get("away_team", "Real Madrid")).lower()
         acting_team = str(event_ctx.get("team", home_team_name)).lower()
         focal_player_name = str(event_ctx.get("players_involved", [""])[0] if event_ctx.get("players_involved") else "").strip()

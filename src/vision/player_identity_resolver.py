@@ -824,6 +824,8 @@ Return pure JSON:
         clip_id: str,
         tracks_at_freeze: List[Dict[str, Any]],
         active_state: Any,
+        home_team: str = "",
+        away_team: str = "",
     ) -> Tuple[Dict[int, Dict[str, Any]], Optional[Dict[str, Any]]]:
         """
         Mathematical coordinate matcher that maps detected screenshot coordinates (x_pct, y_pct)
@@ -831,6 +833,13 @@ Return pure JSON:
         against the live Active XI at match_minute.
         """
         cid = str(clip_id or "").lower()
+        h_low = str(home_team or "").lower()
+        a_low = str(away_team or "").lower()
+        is_roma = "roma" in h_low or "roma" in a_low
+        if not is_roma:
+            # Strictly NEVER apply AS Roma mock coordinate telemetry to other matches!
+            return {}, None
+
         telemetry_spec = None
         for k, spec in cls.TIMESTAMPED_PITCH_COORDINATE_TELEMETRY.items():
             if k in cid:
@@ -939,7 +948,7 @@ Return pure JSON:
         self,
         frame: Optional[np.ndarray],
         tracks_at_freeze: List[Dict[str, Any]],
-        home_team: str = "AS Roma",
+        home_team: str = "Barcelona",
         away_team: str = "Real Madrid",
         match_minute: int = 0,
         period: int = 1,
@@ -983,7 +992,7 @@ Return pure JSON:
             period = 1
 
         # 2. Fetch Active Squad Roster with chronological substitutions, red cards, and role shifts applied
-        roster_resolver = ActiveXIResolver()
+        roster_resolver = ActiveXIResolver(home_team=home_team, away_team=away_team)
         active_state = roster_resolver.get_active_players(
             match_minute=match_minute, match_second=clk_res.match_second
         )
@@ -1019,6 +1028,8 @@ Return pure JSON:
             clip_id=cid,
             tracks_at_freeze=tracks_at_freeze,
             active_state=active_state,
+            home_team=home_team,
+            away_team=away_team,
         )
 
         # 4. Partition Tracks by Role & Kit (excluding referees, coaches in technical area, and spectators)

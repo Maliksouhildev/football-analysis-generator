@@ -648,8 +648,8 @@ TASKS:
         track["torso_hsv"] = [med_h, med_s, med_v]
 
         # 1. Reject Referee:
-        # Referees wear kits distinct from outfield players (e.g. fluorescent cyan, neon yellow, bright pink)
-        if (med_b - med_r > 32) or (med_g - med_r > 32) or (78 <= med_h <= 135 and med_s >= 45):
+        # Referees wear kits distinct from outfield players (e.g. fluorescent cyan, neon yellow, light blue, bright pink)
+        if (med_b - med_r > 20 and med_b >= med_g - 15) or (med_g - med_r > 28) or (75 <= med_h <= 135 and med_s >= 25):
             track["jersey_class"] = "REFEREE"
             track["team"] = "referee"
             return "REFEREE"
@@ -3019,6 +3019,41 @@ TASKS:
         # Multi-cue player identity resolution engine
         identity_assignments: Dict[int, Dict[str, Any]] = cause_tel.get("player_identities") or {}
         has_identities = sum(1 for t in tracks_at_freeze if isinstance(t, dict) and bool(t.get("name_pos") or t.get("name"))) >= 4
+
+        # Strict Firewall: Check if existing identities contain foreign/mock fixture names
+        mock_names = {"malen", "konaté", "konate", "de roon", "mancini", "hermoso", "soulé", "soule", "pisilli", "dybala", "gollini", "ndicka", "cucurella", "dumfries", "diomande"}
+        h_team = str(ctx.get("home_team") or cause_tel.get("home_team") or "").lower()
+        a_team = str(ctx.get("away_team") or cause_tel.get("away_team") or "").lower()
+        is_roma_match = ("roma" in h_team or "roma" in a_team) and not ("barca" in h_team or "barcelona" in h_team or "barca" in a_team or "barcelona" in a_team or "bar" in h_team)
+
+        has_mock_names = False
+        if not is_roma_match:
+            for t in tracks_at_freeze:
+                if isinstance(t, dict):
+                    nm = str(t.get("name_pos") or t.get("name") or "").lower()
+                    if any(mn in nm for mn in mock_names):
+                        has_mock_names = True
+                        break
+            if not has_mock_names and isinstance(cause_tel.get("players"), list):
+                for p in cause_tel["players"]:
+                    if isinstance(p, dict):
+                        nm = str(p.get("name") or p.get("label") or "").lower()
+                        if any(mn in nm for mn in mock_names):
+                            has_mock_names = True
+                            break
+
+        if has_mock_names:
+            # Wipe out corrupted foreign names so resolver re-assigns authentic match squads
+            for t in tracks_at_freeze:
+                if isinstance(t, dict):
+                    t["name_pos"] = ""
+                    t["name"] = ""
+                    t["label"] = ""
+                    t["role"] = ""
+            cause_tel["player_identities"] = {}
+            cause_tel["players"] = []
+            has_identities = False
+
         res_info: Dict[str, Any] = {"assignments": identity_assignments, "ball_carrier": cause_tel.get("catalyst_player")}
         if not has_identities:
             try:
@@ -3051,6 +3086,8 @@ TASKS:
                     clip_id=cid,
                     tracks_at_freeze=tracks_at_freeze,
                     active_state=None,
+                    home_team=ctx.get("home_team") or cause_tel.get("home_team") or "Home Team",
+                    away_team=ctx.get("away_team") or cause_tel.get("away_team") or "Away Team",
                 )
                 if telem_carrier:
                     res_info["ball_carrier"] = telem_carrier
@@ -3833,8 +3870,10 @@ TASKS:
         if runner_id is not None and runner_name:
             add_focal_player(runner_id, runner_name, runner_name, rx_now, ry_now, priority=90)
 
-        # Priority 3: Clip-specific Ground-Truth Contesting Protagonists
-        if "clip_01" in cid:
+        # Priority 3: Clip-specific Ground-Truth Contesting Protagonists (Strictly for AS Roma fixture ONLY)
+        is_roma_fixture = "roma" in str(ctx.get("home_team") or cause_tel.get("home_team") or "").lower() or "roma" in str(ctx.get("away_team") or cause_tel.get("away_team") or "").lower()
+
+        if is_roma_fixture and "clip_01" in cid:
             # Ibrahima Konaté (RCB carrier), Antonio Rüdiger (LCB option), Cucurella (LB option), Dumfries (RB), Malen (presser)
             add_focal_player(cat_id, "Konaté (CB)", "Konaté (CB)", cat_x, cat_y, priority=100)
             rudiger_tr = next((t for t in tracks_at_freeze if "rüdiger" in str(t.get("name", "")).lower() or int(t.get("track_id", -1)) == 1), None)
@@ -3852,7 +3891,7 @@ TASKS:
             deroon_tr = next((t for t in tracks_at_freeze if "de roon" in str(t.get("name", "")).lower() or int(t.get("track_id", -1)) == 3), None)
             if deroon_tr:
                 add_focal_player(int(deroon_tr["track_id"]), "De Roon (DM)", "De Roon (DM)", float(deroon_tr.get("x_pct", 21.4)), float(deroon_tr.get("y_pct", 38.8)), priority=70)
-        elif "clip_02" in cid:
+        elif is_roma_fixture and "clip_02" in cid:
             # Mbappé (#10 carrier), Dybala (#21 turnover interceptor), Ndicka (#5 CB), Valverde (#8 CM), De Roon (#15 DM)
             add_focal_player(cat_id, "Mbappé (CF)", "Mbappé (CF)", cat_x, cat_y, priority=100)
             dybala_tr = next((t for t in tracks_at_freeze if "dybala" in str(t.get("name", "")).lower() or int(t.get("track_id", -1)) == 11), None)
@@ -3867,7 +3906,7 @@ TASKS:
             deroon_tr = next((t for t in tracks_at_freeze if "de roon" in str(t.get("name", "")).lower() or int(t.get("track_id", -1)) == 12), None)
             if deroon_tr:
                 add_focal_player(int(deroon_tr["track_id"]), "De Roon (DM)", "De Roon (DM)", float(deroon_tr.get("x_pct", 53.9)), float(deroon_tr.get("y_pct", 33.3)), priority=75)
-        elif "clip_03" in cid:
+        elif is_roma_fixture and "clip_03" in cid:
             # Courtois (#1 GK carrier), Malen (#CF presser), Konaté (#CB short option), Rüdiger (#CB short option), De Roon (#DM midfield)
             add_focal_player(cat_id, "Courtois (GK)", "Courtois (GK)", cat_x, cat_y, priority=100)
             malen_tr = next((t for t in tracks_at_freeze if "malen" in str(t.get("name", "")).lower() or int(t.get("track_id", -1)) == 4), None)
@@ -3882,9 +3921,8 @@ TASKS:
             deroon_tr = next((t for t in tracks_at_freeze if "de roon" in str(t.get("name", "")).lower() or int(t.get("track_id", -1)) in (6, 7)), None)
             if deroon_tr:
                 add_focal_player(int(deroon_tr["track_id"]), "De Roon (DM)", "De Roon (DM)", float(deroon_tr.get("x_pct", 66.3)), float(deroon_tr.get("y_pct", 36.3)), priority=75)
-        elif "clip_04" in cid:
+        elif is_roma_fixture and "clip_04" in cid:
             # Ndicka (#5 CB carrier), Rodrigo Mora (#86 AM runner), Jude Bellingham (#5 AM center circle), Mancini (#23 CB), De Roon (#15 DM)
-            # User mandate: Exclude idle spectators Mbappé and Malen who do not participate in this sequence
             add_focal_player(cat_id, "Ndicka (CB)", "Ndicka (CB)", cat_x, cat_y, priority=100)
             mora_tr = next((t for t in tracks_at_freeze if "mora" in str(t.get("name", "")).lower() or int(t.get("track_id", -1)) == 7), None)
             if mora_tr:
@@ -3898,7 +3936,7 @@ TASKS:
             deroon_tr = next((t for t in tracks_at_freeze if "de roon" in str(t.get("name", "")).lower() or int(t.get("track_id", -1)) == 6), None)
             if deroon_tr:
                 add_focal_player(int(deroon_tr["track_id"]), "De Roon (DM)", "De Roon (DM)", float(deroon_tr.get("x_pct", 41.7)), float(deroon_tr.get("y_pct", 29.1)), priority=75)
-        elif "clip_05" in cid:
+        elif is_roma_fixture and "clip_05" in cid:
             # Mbappé (#10 corner taker), Arda Güler (#15 short receiver), Rüdiger (#22 edge of box), Carlos Espí (#19 box ST), Koulierakis (#3 box CB)
             add_focal_player(cat_id, "Mbappé (CF)", "Mbappé (CF)", cat_x, cat_y, priority=100)
             guler_tr = next((t for t in tracks_at_freeze if "güler" in str(t.get("name", "")).lower() or "guler" in str(t.get("name", "")).lower() or int(t.get("track_id", -1)) == 4), None)
@@ -3917,6 +3955,9 @@ TASKS:
             close_defs = sorted(def_cands, key=lambda d: math.hypot(float(d.get("x_pct", 50)) - cat_x, float(d.get("y_pct", 50)) - cat_y))[:2]
             for cd in close_defs:
                 add_focal_player(int(cd["track_id"]), cd.get("name", "Defender"), cd.get("role", "Defender"), float(cd.get("x_pct", 50)), float(cd.get("y_pct", 50)), priority=75)
+            close_atts = [t for t in cands_att if int(t.get("track_id", -1)) not in (cat_id, runner_id if runner_id is not None else -1)][:2]
+            for ca in close_atts:
+                add_focal_player(int(ca["track_id"]), ca.get("name", "Attacker"), ca.get("role", "Attacker"), float(ca.get("x_pct", 50)), float(ca.get("y_pct", 50)), priority=70)
 
         cause_tel["players"] = focal_players
         cause_tel["focal_track_ids"] = focal_track_ids

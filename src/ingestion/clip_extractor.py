@@ -791,15 +791,44 @@ class ClipExtractor:
         cause_offset = min(pre_roll_sec, max(0.0, actual_dur - 0.5))
         effect_offset = max(cause_offset + 3.0, min(actual_dur - 0.5, actual_dur * 0.80))
 
-        if event_schema.get("video_freeze_frame") is not None or event_schema.get("freeze_frame") is not None or event_schema.get("cause_frame_idx") is not None:
-            c_override = int(event_schema.get("video_freeze_frame") or event_schema.get("freeze_frame") or event_schema.get("cause_frame_idx"))
-            cause_offset = max(0.0, min(actual_dur - 0.5, c_override / float(actual_fps)))
+        cause_frame_path = self.frames_dir / f"{clip_id}_cause.jpg"
+        effect_frame_path = self.frames_dir / f"{clip_id}_effect.jpg"
+
+        # Autonomous High-Terrain Tactical Keyframe Selector:
+        # Evaluates candidate frames across the entire clip using CameraShotClassifier and discrete Laplacian sharpness.
+        # Rejects low-angle replays, player face close-ups, coaches complaining on bench, and motion blur.
+        tactical_info = self.extract_tactical_keyframe(
+            clip_path=str(clip_path),
+            output_path=str(cause_frame_path),
+            min_turf=0.40,
+            min_players=4,
+            max_player_height=0.22,
+            min_sharpness=55.0,
+        )
+
+        is_wide_tactical = False
+        if tactical_info and tactical_info.get("offset_in_clip") is not None:
+            cause_offset = float(tactical_info["offset_in_clip"])
+            is_wide_tactical = True
+            logger.info(
+                f"Autonomous tactical keyframe selected for {clip_id} at {cause_offset:.2f}s "
+                f"(score={tactical_info.get('tactical_score')}, sharpness={tactical_info.get('sharpness_score')})"
+            )
+        else:
+            if event_schema.get("video_freeze_frame") is not None or event_schema.get("freeze_frame") is not None or event_schema.get("cause_frame_idx") is not None:
+                c_override = int(event_schema.get("video_freeze_frame") or event_schema.get("freeze_frame") or event_schema.get("cause_frame_idx"))
+                cause_offset = max(0.0, min(actual_dur - 0.5, c_override / float(actual_fps)))
+
+            self.extract_frame_at_index(str(clip_path), round(cause_offset * actual_fps), str(cause_frame_path))
+            try:
+                from src.vision.shot_classifier import CameraShotClassifier, ShotType
+                st, m = CameraShotClassifier.classify(str(cause_frame_path))
+                is_wide_tactical = (st == ShotType.WIDE_TACTICAL)
+            except Exception:
+                is_wide_tactical = cause_is_wide
 
         cause_frame_idx = round(cause_offset * actual_fps)
         effect_frame_idx = round(effect_offset * actual_fps)
-
-        cause_frame_path = self.frames_dir / f"{clip_id}_cause.jpg"
-        effect_frame_path = self.frames_dir / f"{clip_id}_effect.jpg"
 
         # Extract 5 reference frames across the Multi-Frame Temporal Window [t-2.0s to t+4.5s]
         temporal_burst = self.extract_temporal_burst(
@@ -836,7 +865,7 @@ class ClipExtractor:
             "t_effect_pts": adj_effect_pts,
             "cause_grass_ratio": cause_grass,
             "effect_grass_ratio": effect_grass,
-            "is_tactical": cause_is_wide and effect_is_wide,
+            "is_tactical": is_wide_tactical,
             "fps": actual_fps,
             "cause_frame_idx": cause_frame_idx,
             "video_freeze_frame": cause_frame_idx,
@@ -885,8 +914,8 @@ class ClipExtractor:
             pass
 
         if sample_offsets is None:
-            # Sample candidates across the action window: 0.8s, 1.5s, 2.2s, 3.0s, 3.8s, 4.5s
-            sample_offsets = [round(t, 2) for t in np.arange(0.8, min(dur - 0.4, 5.5), 0.7)]
+            # Sample candidate high-terrain frames across the entire clip with fine 0.45s resolution
+            sample_offsets = [round(t, 2) for t in np.arange(0.6, max(1.2, dur - 0.6), 0.45)]
             if not sample_offsets:
                 sample_offsets = [min(dur / 2.0, 1.5)]
 

@@ -1169,19 +1169,43 @@ class MatchLineupResolver:
     @classmethod
     def _generate_default_starters(cls, team_name: str, is_home: bool) -> List[Dict[str, Any]]:
         t_low = str(team_name).lower()
+        if "barcelona" in t_low or "barca" in t_low or "bar" in t_low or "fcb" in t_low:
+            barca_players = [
+                ("Iñaki Peña", 13, "GK", True),
+                ("Jules Koundé", 23, "RB", False),
+                ("Pau Cubarsí", 2, "RCB", False),
+                ("Iñigo Martínez", 5, "LCB", False),
+                ("Alejandro Balde", 3, "LB", False),
+                ("Marc Casadó", 17, "DM", False),
+                ("Pedri", 8, "CM", False),
+                ("Dani Olmo", 20, "AM", False),
+                ("Lamine Yamal", 19, "RW", False),
+                ("Robert Lewandowski", 9, "CF", False),
+                ("Raphinha", 11, "LW", False),
+            ]
+            return [
+                {
+                    "name": name,
+                    "short_name": f"{name.split()[-1]} ({role})",
+                    "number": num,
+                    "role": role,
+                    "is_gk": is_gk,
+                }
+                for name, num, role, is_gk in barca_players
+            ]
         if "madrid" in t_low or "rma" in t_low:
             madrid_players = [
                 ("Thibaut Courtois", 1, "GK", True),
-                ("Denzel Dumfries", 24, "RB", False),
-                ("Ibrahima Konaté", 16, "RCB", False),
+                ("Lucas Vázquez", 17, "RB", False),
+                ("Éder Militão", 3, "RCB", False),
                 ("Antonio Rüdiger", 22, "LCB", False),
-                ("Marc Cucurella", 17, "LB", False),
+                ("Ferland Mendy", 23, "LB", False),
                 ("Federico Valverde", 8, "CM", False),
                 ("Aurélien Tchouaméni", 14, "DM", False),
-                ("Yan Diomande", 25, "RW", False),
+                ("Eduardo Camavinga", 6, "CM", False),
                 ("Jude Bellingham", 5, "AM", False),
+                ("Kylian Mbappé", 9, "CF", False),
                 ("Vinícius Júnior", 7, "LW", False),
-                ("Kylian Mbappé", 10, "CF", False),
             ]
             return [
                 {

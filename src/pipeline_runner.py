@@ -54,6 +54,7 @@ from src.vision.tactical_vision_engine import TacticalVisionEngine
 from src.rendering.tactical_narrator import TacticalNarrator
 from src.rendering.player_asset_manager import PlayerAssetManager
 from src.rendering.audio_engine import AudioEngine
+from src.ingestion.parse_tracking_data import generate_optical_fallback_radar
 
 logging.basicConfig(
     level=logging.INFO,
@@ -1062,6 +1063,15 @@ class TacticalPipelineRunner:
                 "step_boundaries_frames": step_bounds_frames,
                 "beat_2_steps": b2_steps,
             }
+
+            # Inject 2D Tactical Minimap Radar Data
+            try:
+                radar_data = generate_optical_fallback_radar(sc)
+                seg["minimap_radar"] = radar_data
+                seg["minimapRadar"] = radar_data
+            except Exception as radar_err:
+                logger.warning(f"Minimap radar generation warning for {cid}: {radar_err}")
+
             active_segments.append(seg)
 
             # Synchronized voiceover tracks with exact beat start points
@@ -1106,6 +1116,35 @@ class TacticalPipelineRunner:
             "durationInSeconds": round(current_time, 2),
         }
 
+        # Generate word-level dynamic subtitles from timeline commentaries
+        all_subtitles = []
+        highlight_keywords = {
+            "GOAL", "PASS", "SPACE", "BEHIND", "DEFENSE", "PRESS", "CHANCE", "SHOT",
+            "CROSS", "BLOCK", "COUNTER", "OVERLOAD", "TACKLE", "DECISION", "MBAPPÉ",
+            "MBAPPE", "VINÍCIUS", "VINICIUS", "BELLINGHAM", "RODRYGO", "YAMAL",
+            "LEWANDOWSKI", "PEDRI", "GAVI", "KOUNDÉ", "KOUNDE", "VALVERDE", "MODRIC"
+        }
+        for comm in timeline_commentaries:
+            c_text = comm.get("text", "")
+            c_start = comm.get("startTime", 0.0)
+            c_dur = comm.get("duration", 3.0)
+            words = c_text.split()
+            if not words:
+                continue
+            w_dur = c_dur / len(words)
+            for idx_w, w in enumerate(words):
+                clean_w = w.strip(".,!?:;\"'()[]")
+                w_start = int((c_start + idx_w * w_dur) * 1000)
+                w_end = int((c_start + (idx_w + 1) * w_dur) * 1000)
+                is_hi = clean_w.upper() in highlight_keywords or (clean_w.isupper() and len(clean_w) > 2)
+                all_subtitles.append({
+                    "word": w.upper(),
+                    "startMs": w_start,
+                    "endMs": w_end,
+                    "highlight": is_hi,
+                })
+        payload["subtitles"] = all_subtitles
+
         # Synthesize composite masterclass audio track only if individual choreographed beats are NOT present
         has_choreographed_beats = any(bool(seg.get("beats")) for seg in active_segments)
         if timeline_commentaries and not has_choreographed_beats:
@@ -1141,9 +1180,13 @@ class TacticalPipelineRunner:
                 }
                 if wait:
                     render_res = self.poll_render(job_id)
-                    render_result["status"] = render_res.get("status", "done")
+                    render_status = render_res.get("status", "done")
+                    render_result["status"] = render_status
                     render_result["outputPath"] = render_res.get("outputPath")
                     render_result["video_url"] = f"http://localhost:3008/video/{job_id}"
+                    if render_status != "done":
+                        error_msg = render_res.get("error", f"Render failed with status: {render_status}")
+                        raise RuntimeError(f"Remotion render job {job_id} failed: {error_msg}")
 
                 render_path = match_checkpoint_dir / "remotion_render.json"
                 self.state_tracker.record_checkpoint(
@@ -1251,6 +1294,12 @@ class TacticalPipelineRunner:
             tracks_at_freeze=tracks_at_freeze,
             clip_id=clip_id,
             freeze_frame_img=f_img,
+            event_context={
+                "home_team": cause_tel.get("home_team") or "Barcelona",
+                "away_team": cause_tel.get("away_team") or "Real Madrid",
+                "match_minute": cause_tel.get("match_minute", 0),
+                "period": cause_tel.get("period", 1),
+            },
             tracks_per_frame=tracks_per_frame,
             freeze_frame=freeze_frame,
             homographies=homographies,
