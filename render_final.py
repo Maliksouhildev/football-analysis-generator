@@ -212,11 +212,11 @@ def ensure_clip_visual_cue_tags(sc: dict, vis: dict, cid: str) -> list:
             elif t["type"] in ("run_vectors", "vectors", "player_runs"):
                 t["duration_frames"] = min(int(f_frames * 0.50), max(30, (K + f_frames) - t["start_frame"]))
                 t["end_frame"] = t["start_frame"] + t["duration_frames"]
-            elif any(k in t["type"] for k in ("stat", "sofascore", "heatmap", "average_position")):
-                t["duration_frames"] = 90
-                t["end_frame"] = min(K + f_frames, t["start_frame"] + t["duration_frames"])
+            elif any(k in t["type"] for k in ("stat", "sofascore", "heatmap", "average_position", "match_heatmap", "data_card")):
+                t["duration_frames"] = max(180, (K + f_frames) - t["start_frame"])
+                t["end_frame"] = K + f_frames
             else:
-                t["duration_frames"] = 75
+                t["duration_frames"] = min(150, max(120, (K + f_frames) - t["start_frame"]))
                 t["end_frame"] = min(K + f_frames, t["start_frame"] + t["duration_frames"])
             t["beat"] = "beat_2_cause"
             extracted_tags.append(t)
@@ -318,14 +318,14 @@ def ensure_clip_visual_cue_tags(sc: dict, vis: dict, cid: str) -> list:
     has_data_tag = any(t.get("type") in ("match_heatmap", "heatmap", "stat_card", "sofascore", "average_position") for t in extracted_tags)
     if not has_data_tag and cat_clean:
         opt_start = K + int(f_frames * 0.35)
-        opt_dur = min(90, max(30, int(f_frames * 0.55)))
+        opt_dur = max(180, (K + f_frames) - opt_start)
         extracted_tags.append({
             "type": "match_heatmap",
             "target": cat_clean,
             "player_name": cat_clean,
             "start_frame": opt_start,
             "duration_frames": opt_dur,
-            "end_frame": opt_start + opt_dur,
+            "end_frame": K + f_frames,
             "beat": "beat_2_cause",
         })
 

@@ -407,14 +407,14 @@ class AudioEngine:
                 # Extended pause/blur modal display for ~8-10 seconds
                 t["duration_frames"] = max(180, (cause_frame_idx + freeze_frames) - t["start_frame"])
                 t["end_frame"] = cause_frame_idx + freeze_frames
-            elif any(k in t["type"] for k in ("stat", "sofascore", "position")):
-                t["duration_frames"] = 90
-                t["end_frame"] = min(cause_frame_idx + freeze_frames, t["start_frame"] + t["duration_frames"])
+            elif any(k in t["type"] for k in ("stat", "sofascore", "position", "player_stats", "match_heatmap")):
+                t["duration_frames"] = max(180, (cause_frame_idx + freeze_frames) - t["start_frame"])
+                t["end_frame"] = cause_frame_idx + freeze_frames
             elif t["type"] in ("mistake_flash", "red_flash", "mistake"):
                 t["duration_frames"] = 18
                 t["end_frame"] = t["start_frame"] + 18
             else:
-                t["duration_frames"] = 75
+                t["duration_frames"] = min(150, max(120, (cause_frame_idx + freeze_frames) - t["start_frame"]))
                 t["end_frame"] = min(cause_frame_idx + freeze_frames, t["start_frame"] + t["duration_frames"])
             t["beat"] = "beat_2_cause"
 
