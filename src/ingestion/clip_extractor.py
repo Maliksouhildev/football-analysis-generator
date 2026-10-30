@@ -822,12 +822,15 @@ class ClipExtractor:
             "t_peak": round(adj_cause_pts, 3),
         }
 
+        # Exclude raw ndarray image objects to maintain JSON serializability
+        serializable_burst = {k: v for k, v in temporal_burst.items() if k != "frames"}
+
         return {
             "clip_id": clip_id,
             "clip_path": str(clip_path),
             "cause_frame_path": str(cause_frame_path),
             "effect_frame_path": str(effect_frame_path),
-            "temporal_burst": temporal_burst,
+            "temporal_burst": serializable_burst,
             "temporal_burst_paths": temporal_burst.get("paths", {}),
             "t_cause_pts": adj_cause_pts,
             "t_effect_pts": adj_effect_pts,

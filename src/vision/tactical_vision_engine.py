@@ -45,8 +45,8 @@ logger = logging.getLogger("vision.tactical_vision_engine")
 
 SUPPORTED_VISION_MODELS = [
     "gemini-flash-lite-latest",
+    "gemini-2.5-flash",
     "gemini-3.1-flash-lite",
-    "gemini-3.5-flash-lite",
 ]
 
 TACTICAL_TELESTRATION_SYSTEM_PROMPT = """You are a World-Class Football Tactical Telestrator and Match Analyst for UEFA Champions League and Sky Sports broadcasts.
@@ -4645,6 +4645,7 @@ TASKS:
                 mask_grass = cv2.inRange(hsv, np.array([28, 30, 30]), np.array([88, 255, 255]))
                 hull = get_pitch_convex_hull(frame)
 
+                safe_fallback = last_valid_shot_frame if last_valid_shot_frame is not None else cause_frame_img
                 # Capture temporal burst reference frames strictly within continuous shot
                 if current_idx == prev_target_idx:
                     temporal_burst_frames["frame_prev"] = frame.copy()
@@ -4652,12 +4653,12 @@ TASKS:
                     cause_frame_img = frame.copy()
                     temporal_burst_frames["frame_freeze"] = cause_frame_img
                 if current_idx == next1_target_idx:
-                    outcome_frame_img = frame.copy() if not cut_after_freeze_detected else (last_valid_shot_frame or cause_frame_img)
+                    outcome_frame_img = frame.copy() if not cut_after_freeze_detected else safe_fallback
                     temporal_burst_frames["frame_next_1"] = outcome_frame_img
                 if current_idx == next2_target_idx:
-                    temporal_burst_frames["frame_next_2"] = frame.copy() if not cut_after_freeze_detected else (last_valid_shot_frame or cause_frame_img)
+                    temporal_burst_frames["frame_next_2"] = frame.copy() if not cut_after_freeze_detected else safe_fallback
                 if current_idx == next3_target_idx:
-                    temporal_burst_frames["frame_next_3"] = frame.copy() if not cut_after_freeze_detected else (last_valid_shot_frame or cause_frame_img)
+                    temporal_burst_frames["frame_next_3"] = frame.copy() if not cut_after_freeze_detected else safe_fallback
 
                 frame_tracks: List[Dict[str, Any]] = []
 

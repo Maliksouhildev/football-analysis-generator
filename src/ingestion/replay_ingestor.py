@@ -25,6 +25,47 @@ DEFAULT_REPLAY_DIR = Path(r"F:\DockerRenders\replays")
 DEFAULT_INCOMING_DIR = Path(r"F:\DockerRenders\incoming_matches")
 
 
+class ParsedMatchMetadata(tuple):
+    """
+    Backward-compatible 3-tuple (home, away, score) with metadata attributes:
+    competition, match_date, home, away, score.
+    """
+    home: str
+    away: str
+    score: str
+    competition: str
+    match_date: str
+
+    def __new__(cls, home: str, away: str, score: str = "FT", competition: str = "esp.1", match_date: str = ""):
+        obj = super().__new__(cls, (home, away, score))
+        obj.home = home
+        obj.away = away
+        obj.score = score
+        obj.competition = competition
+        obj.match_date = match_date
+        return obj
+
+
+TEAM_ALIASES: Dict[str, str] = {
+    "bar": "Barcelona", "fcb": "Barcelona", "barcelona": "Barcelona",
+    "rma": "Real Madrid", "mad": "Real Madrid", "real madrid": "Real Madrid",
+    "atm": "Atletico Madrid", "atl": "Atletico Madrid", "atletico": "Atletico Madrid",
+    "mci": "Manchester City", "mun": "Manchester United", "liv": "Liverpool",
+    "ars": "Arsenal", "che": "Chelsea", "tot": "Tottenham",
+    "bay": "Bayern Munich", "dor": "Borussia Dortmund", "bvb": "Borussia Dortmund",
+    "psg": "Paris Saint-Germain", "int": "Inter Milan", "mil": "AC Milan",
+    "juv": "Juventus", "nap": "Napoli", "rom": "AS Roma", "roma": "AS Roma",
+    "gal": "Galatasaray", "galatasaray": "Galatasaray", "fen": "Fenerbahce",
+    "spo": "Sporting CP", "ben": "Benfica", "por": "Porto",
+}
+
+COMPETITION_ALIASES: Dict[str, str] = {
+    "laliga": "esp.1", "liga": "esp.1", "premier": "eng.1", "pl": "eng.1",
+    "seriea": "ita.1", "bundesliga": "ger.1", "ligue1": "fra.1",
+    "ucl": "uefa.champions", "champions": "uefa.champions", "uel": "uefa.europa",
+}
+
+
 class ReplayIngestor:
     def __init__(
         self,
@@ -242,15 +283,59 @@ class ReplayIngestor:
                 time.sleep(poll_interval_sec)
 
     @staticmethod
-    def parse_match_metadata_from_filename(filename: str) -> Tuple[str, str, str]:
+    def parse_match_metadata_from_filename(filename: str) -> ParsedMatchMetadata:
         """
-        Extracts home team, away team, and score/date from filename.
-        e.g. 'Barcelona_vs_Real_Madrid_3-2.mp4' -> ('Barcelona', 'Real Madrid', '3 - 2')
+        Extracts home team, away team, score, competition, and match date from filename.
+        e.g. 'bar.v.rma.full.laliga.25.10.2026.fullmatchsports.com.mp4' -> ('Barcelona', 'Real Madrid', 'FT')
+        Returns a ParsedMatchMetadata tuple with .competition and .match_date attributes.
         """
-        clean_name = Path(filename).stem.replace("_", " ").replace("-", " ")
-        vs_match = re.search(r"([A-Za-z\s]+)\s+(?:vs|v)\s+([A-Za-z\s]+)", clean_name, re.I)
-        if vs_match:
-            home = vs_match.group(1).strip()
-            away = vs_match.group(2).strip()
-            return home, away, "FT"
-        return "HOME TEAM", "AWAY TEAM", "FT"
+        stem = Path(filename).stem
+
+        # 1. Date extraction
+        date_match = re.search(r"(\d{2})[.\-_](\d{2})[.\-_](\d{4})", stem)
+        match_date = ""
+        if date_match:
+            d, m, y = date_match.groups()
+            match_date = f"{y}-{m}-{d}"
+        else:
+            date_match2 = re.search(r"(\d{4})[.\-_](\d{2})[.\-_](\d{2})", stem)
+            if date_match2:
+                y, m, d = date_match2.groups()
+                match_date = f"{y}-{m}-{d}"
+
+        # 2. Competition
+        competition = "esp.1"
+        for k, v in COMPETITION_ALIASES.items():
+            if re.search(rf"\b{k}\b", stem, re.I) or f".{k}." in stem.lower() or f"_{k}_" in stem.lower():
+                competition = v
+                break
+
+        # 3. Teams
+        home, away = "Barcelona", "Real Madrid"
+        dot_m = re.search(r"\b([A-Za-z]{2,4})[._](?:v|vs)[._]([A-Za-z]{2,4})\b", stem, re.I)
+        if dot_m:
+            raw_h = dot_m.group(1).lower()
+            raw_a = dot_m.group(2).lower()
+            home = TEAM_ALIASES.get(raw_h, raw_h.upper())
+            away = TEAM_ALIASES.get(raw_a, raw_a.upper())
+        else:
+            clean_name = stem.replace(".", " ").replace("_", " ")
+            clean_name = re.sub(r"\s+", " ", clean_name)
+            vs_m = re.search(r"([A-Za-z\s]+?)\s+(?:vs|v)\s+([A-Za-z\s]+?)(?:\s+\d|\s+full|\s+ucl|\s+ft|$)", clean_name, re.I)
+            if vs_m:
+                raw_h = vs_m.group(1).strip().lower()
+                raw_a = vs_m.group(2).strip().lower()
+                home = TEAM_ALIASES.get(raw_h, raw_h.title())
+                away = TEAM_ALIASES.get(raw_a, raw_a.title())
+
+        # 4. Score
+        score_m = re.search(r"(\d+)\s*[-_]\s*(\d+)", stem)
+        score = f"{score_m.group(1)} - {score_m.group(2)}" if score_m else "FT"
+
+        return ParsedMatchMetadata(
+            home=home,
+            away=away,
+            score=score,
+            competition=competition,
+            match_date=match_date,
+        )

@@ -30,7 +30,6 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from tests.e2e.fixtures.match_feed_fixtures import RAW_MATCH_FEED_FULL
 from src.ingestion import (
     ClipExtractor,
     MatchTimeIndexer,
@@ -45,6 +44,8 @@ from src.scraper import (
     EvidenceMatcher,
     MatchLineupResolver,
 )
+from src.scraper.autonomous_match_resolver import AutonomousMatchResolver
+from src.ingestion.sparse_clock_indexer import SparseClockIndexer
 from src.vision import (
     GeminiVisionClient,
     extract_tactical_telestration,
@@ -139,8 +140,24 @@ class PipelineStateTracker:
             p = Path(json_payload_path)
             p.parent.mkdir(parents=True, exist_ok=True)
             temp_path = p.with_suffix(".tmp")
+
+            def _json_serial(obj):
+                if hasattr(obj, "tolist"):
+                    return obj.tolist()
+                try:
+                    import numpy as np
+                    if isinstance(obj, (np.integer, np.int64, np.int32)):
+                        return int(obj)
+                    if isinstance(obj, (np.floating, np.float64, np.float32)):
+                        return float(obj)
+                    if isinstance(obj, np.ndarray):
+                        return None
+                except ImportError:
+                    pass
+                return str(obj)
+
             with open(temp_path, "w", encoding="utf-8") as f:
-                json.dump(payload, f, indent=2, ensure_ascii=False)
+                json.dump(payload, f, indent=2, ensure_ascii=False, default=_json_serial)
             temp_path.replace(p)
             payload_path_str = str(p.resolve())
 
@@ -248,6 +265,9 @@ class TacticalPipelineRunner:
         self.player_asset_mgr = PlayerAssetManager(output_dir=str(self.output_dir / "assets" / "players"))
         self.audio_engine = AudioEngine()
         self.evidence_matcher = EvidenceMatcher()
+        self.match_resolver = AutonomousMatchResolver()
+        self.sparse_indexer = SparseClockIndexer()
+        self.time_indexer = None
         self._vision_engine = None
 
     @property
@@ -271,6 +291,19 @@ class TacticalPipelineRunner:
         reddit_comments: Optional[List[str]] = None,
         force_refresh: bool = False,
     ) -> Dict[str, Any]:
+        # Parse metadata automatically from local video path if available
+        match_date = ""
+        competition = "esp.1"
+        if video_path and Path(video_path).is_file():
+            meta = ReplayIngestor.parse_match_metadata_from_filename(Path(video_path).name)
+            if home_team == "Barcelona" and away_team == "Atletico Madrid":
+                home_team = meta.home
+                away_team = meta.away
+                if score == "2 - 1":
+                    score = meta.score
+            match_date = getattr(meta, "match_date", "")
+            competition = getattr(meta, "competition", "esp.1")
+
         match_id = fixture_id or f"{home_team}_vs_{away_team}".lower().replace(" ", "_")
         match_checkpoint_dir = self.checkpoints_dir / match_id
         match_checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -285,7 +318,7 @@ class TacticalPipelineRunner:
                 return cached_render
 
         # -------------------------------------------------------------
-        # Stage 1: CONSENSUS_SCRAPED
+        # Stage 1: CONSENSUS_SCRAPED (Autonomous Multi-Provider Resolution)
         # -------------------------------------------------------------
         logger.info(f"[Stage 1/5] Checking consensus scraping for match '{match_id}'...")
         event_windows: List[Dict[str, Any]] = []
@@ -294,8 +327,17 @@ class TacticalPipelineRunner:
             event_windows = self.state_tracker.load_payload(match_id, "__all__", STAGE_CONSENSUS_SCRAPED) or []
             logger.info(f"[Idempotent Resume] Loaded {len(event_windows)} event windows from cache for {match_id}.")
         else:
-            logger.info("[Step 1/5] Scraping crowd consensus, lineup rosters & generating tactical event windows...")
-            comments = reddit_comments or [
+            logger.info(f"[Step 1/5] Autonomously resolving official match data & timeline for {home_team} vs {away_team}...")
+            
+            resolved_match = self.match_resolver.resolve(
+                home=home_team,
+                away=away_team,
+                date=match_date,
+                league=competition,
+            )
+            if resolved_match.get("score") and resolved_match["score"] != "FT":
+                score = resolved_match["score"]
+            comments = reddit_comments or resolved_match.get("reddit_comments") or [
                 f"{home_team} aggressive front-three press disrupted {away_team} buildup continuously.",
                 f"Defensive block was repeatedly stretched laterally due to aggressive flank overload.",
                 f"Defensive line held high allowing lethal progressive vertical transition passes.",
@@ -305,69 +347,114 @@ class TacticalPipelineRunner:
             crowd_result = CrowdConsensusScraper.analyze(comments)
             logger.info(f"Crowd consensus tone: {crowd_result.narrative_tone}")
 
-            if "roma" in home_team.lower() and "real madrid" in away_team.lower():
-                raw_events = [
-                    {"id": "evt_001", "period": 1, "minute": 10, "second": 15, "type": "high_press", "team": "Roma", "player": "Matías Soulé", "description": "Soulé progressive midfield setup & high press recovery", "pitch_x": 45, "pitch_y": 50, "xg": 0.05, "expected_score": 75, "should_retain": True, "video_pts": 45.0},
-                    {"id": "evt_002", "period": 1, "minute": 20, "second": 42, "type": "goal", "team": "Roma", "player": "Lorenzo Pellegrini", "description": "GOAL! Pellegrini low strike from edge of box (1-0)", "pitch_x": 82, "pitch_y": 48, "xg": 0.38, "expected_score": 98, "should_retain": True, "video_pts": 164.0},
-                    {"id": "evt_003", "period": 1, "minute": 25, "second": 10, "type": "goal", "team": "Real Madrid", "player": "Kylian Mbappé", "description": "GOAL! Tchouaméni line-cutting transition unleashes Mbappé on break (1-1)", "pitch_x": 88, "pitch_y": 52, "xg": 0.65, "expected_score": 99, "should_retain": True, "video_pts": 215.0},
-                    {"id": "evt_004", "period": 1, "minute": 38, "second": 30, "type": "transition", "team": "Roma", "player": "Artem Dovbyk", "description": "Tactical overload down right flank stretching Madrid defense", "pitch_x": 65, "pitch_y": 80, "xg": 0.12, "expected_score": 80, "should_retain": True, "video_pts": 305.0},
-                    {"id": "evt_005", "period": 2, "minute": 51, "second": 18, "type": "goal", "team": "Roma", "player": "Artem Dovbyk", "description": "GOAL! Dovbyk clinical finish after Tchouaméni central turnover in transition (2-1)", "pitch_x": 86, "pitch_y": 38, "xg": 0.45, "expected_score": 97, "should_retain": True, "video_pts": 406.0},
-                    {"id": "evt_006", "period": 2, "minute": 57, "second": 55, "type": "goal", "team": "Roma", "player": "Artem Dovbyk", "description": "GOAL! Dovbyk doubles tally on defensive rebound (3-1)", "pitch_x": 91, "pitch_y": 46, "xg": 0.72, "expected_score": 98, "should_retain": True, "video_pts": 466.0},
-                    {"id": "evt_007", "period": 2, "minute": 70, "second": 20, "type": "counter_press", "team": "Real Madrid", "player": "Endrick", "description": "Madrid tactical switch: ultra-high offensive line & counter-press", "pitch_x": 58, "pitch_y": 45, "xg": 0.10, "expected_score": 82, "should_retain": True, "video_pts": 545.0},
-                    {"id": "evt_008", "period": 2, "minute": 83, "second": 12, "type": "goal", "team": "Real Madrid", "player": "Jude Bellingham", "description": "GOAL! Bellingham towering header into top corner (3-2)", "pitch_x": 93, "pitch_y": 50, "xg": 0.52, "expected_score": 96, "should_retain": True, "video_pts": 598.0},
-                    {"id": "evt_009", "period": 2, "minute": 85, "second": 40, "type": "goal", "team": "Real Madrid", "player": "Endrick", "description": "GOAL! Endrick explosive half-volley stunner equalizes (3-3)", "pitch_x": 84, "pitch_y": 55, "xg": 0.35, "expected_score": 99, "should_retain": True, "video_pts": 668.0},
-                    {"id": "evt_010", "period": 2, "minute": 90, "second": 25, "type": "goal", "team": "Real Madrid", "player": "Antonio Rüdiger", "description": "GOAL! Antonio Rüdiger dramatic 90th minute stoppage-time winner (3-4)", "pitch_x": 94, "pitch_y": 49, "xg": 0.60, "expected_score": 100, "should_retain": True, "video_pts": 728.0},
-                ]
-            elif "galatasaray" in home_team.lower() and "barcelona" in away_team.lower():
-                raw_events = [
-                    {"id": "gal_001", "period": 1, "minute": 10, "second": 15, "type": "high_press", "team": "Galatasaray", "player": "Lucas Torreira", "description": "Galatasaray aggressive front-three press disrupting Barca buildup", "pitch_x": 42, "pitch_y": 50, "xg": 0.05, "expected_score": 75, "should_retain": True, "video_pts": 880.0},
-                    {"id": "gal_002", "period": 1, "minute": 20, "second": 33, "type": "transition", "team": "Barcelona", "player": "Pedri", "description": "Pedri line-breaking half-turn dissecting Istanbul midfield block", "pitch_x": 55, "pitch_y": 48, "xg": 0.12, "expected_score": 82, "should_retain": True, "video_pts": 1495.0},
-                    {"id": "gal_003", "period": 1, "minute": 28, "second": 10, "type": "goal", "team": "Galatasaray", "player": "Aleksey Batrakov", "description": "GOAL! Aleksey Batrakov clinical finish past Ter Stegen into bottom corner (1-0)", "pitch_x": 86, "pitch_y": 45, "xg": 0.58, "expected_score": 99, "should_retain": True, "video_pts": 1950.0},
-                    {"id": "gal_004", "period": 1, "minute": 36, "second": 45, "type": "counter_press", "team": "Barcelona", "player": "Lamine Yamal", "description": "Yamal 1v1 isolation dribble creating inside overload on right flank", "pitch_x": 75, "pitch_y": 82, "xg": 0.18, "expected_score": 84, "should_retain": True, "video_pts": 2468.0},
-                    {"id": "gal_005", "period": 1, "minute": 43, "second": 20, "type": "goal", "team": "Barcelona", "player": "João Cancelo", "description": "GOAL! João Cancelo sublime curling equalizer inside far post (1-1)", "pitch_x": 84, "pitch_y": 32, "xg": 0.32, "expected_score": 98, "should_retain": True, "video_pts": 2838.0},
-                    {"id": "gal_006", "period": 2, "minute": 50, "second": 15, "type": "goal", "team": "Barcelona", "player": "Fermín López", "description": "GOAL! Fermín López leaping header off Yamal inswinging delivery (1-2)", "pitch_x": 92, "pitch_y": 50, "xg": 0.48, "expected_score": 98, "should_retain": True, "video_pts": 3675.0},
-                    {"id": "gal_007", "period": 2, "minute": 53, "second": 40, "type": "goal", "team": "Barcelona", "player": "Lamine Yamal", "description": "GOAL! Yamal surgical pass & finish capping explosive 3-minute turnaround (1-3)", "pitch_x": 88, "pitch_y": 54, "xg": 0.62, "expected_score": 99, "should_retain": True, "video_pts": 3880.0},
-                    {"id": "gal_008", "period": 2, "minute": 65, "second": 10, "type": "goal", "team": "Barcelona", "player": "Karim Adeyemi", "description": "GOAL! Rapid counter-attacking strike sealing emphatic UCL road victory (1-4)", "pitch_x": 90, "pitch_y": 44, "xg": 0.65, "expected_score": 100, "should_retain": True, "video_pts": 4555.0},
-                    {"id": "gal_009", "period": 2, "minute": 72, "second": 12, "type": "tactical_sub", "team": "Galatasaray", "player": "Mauro Icardi", "description": "Late tactical repositioning shifting to high vertical 4-2-4 offensive siege", "pitch_x": 68, "pitch_y": 52, "xg": 0.15, "expected_score": 78, "should_retain": True, "video_pts": 4995.0},
-                ]
-            else:
-                raw_events = RAW_MATCH_FEED_FULL
+            canonical_events = resolved_match.get("events", [])
+            raw_events: List[Dict[str, Any]] = []
 
-            try:
-                event_windows = self.evidence_matcher.generate_event_windows(
-                    crowd_result=crowd_result,
-                    events=raw_events,
-                    matchday_data=matchday_data,
-                    home_team=home_team,
-                    away_team=away_team,
-                )
-            except Exception as e:
-                logger.warning(f"EvidenceMatcher generation error: {e}. Falling back to high-impact events.")
-                event_windows = []
+            for ev in canonical_events:
+                p_name = ev.primary_player.name if ev.primary_player else f"{ev.team.name if ev.team else ''} Player"
+                t_name = ev.team.name if ev.team else home_team
+                ev_type = ev.event_type.value if hasattr(ev.event_type, "value") else str(ev.event_type)
+                is_goal = (ev_type == "goal")
+
+                raw_events.append({
+                    "id": ev.id,
+                    "period": ev.period,
+                    "minute": ev.minute,
+                    "second": ev.second,
+                    "type": ev_type,
+                    "team": t_name,
+                    "player": p_name,
+                    "description": ev.description or f"{ev_type.upper()} at minute {ev.minute}'",
+                    "pitch_x": ev.pitch_x,
+                    "pitch_y": ev.pitch_y,
+                    "xg": ev.xg,
+                    "expected_score": 100 if is_goal else (88 if ev.is_big_chance else 72),
+                    "should_retain": True if (is_goal or ev.is_big_chance) else False,
+                })
+
+            # Check local match video file for sparse clock indexing
+            actual_video_file = Path(video_path) if video_path and Path(video_path).is_file() else None
+            if not actual_video_file:
+                actual_video_file = self.ingestor.find_local_match_video(home_team, away_team)
+
+            time_indexer = None
+            if actual_video_file and Path(actual_video_file).is_file():
+                try:
+                    logger.info(f"[SparseClockIndexer] Sampling scoreboard clocks from {actual_video_file.name}...")
+                    time_indexer = self.sparse_indexer.build_time_indexer(str(actual_video_file))
+                    self.time_indexer = time_indexer
+                    for evt in raw_events:
+                        p = evt.get("period", 1 if evt.get("minute", 0) <= 45 else 2)
+                        m = evt.get("minute", 0)
+                        s = evt.get("second", 0)
+                        try:
+                            pts = time_indexer.get_pts_for_match_minute(match_minute=m, second=s, period=p)
+                            evt["video_pts"] = round(pts, 1)
+                        except Exception as pts_err:
+                            logger.warning(f"Could not map minute {m}' to PTS: {pts_err}")
+                except Exception as index_err:
+                    logger.warning(f"SparseClockIndexer error: {index_err}")
+
+            target_duration = max(180.0, float(duration)) if duration else 600.0
+            target_clip_count = max(10, int(math.ceil(target_duration / 26.0)))
+
+            # Priority Ranking: Every goal first, then big chances, shots, and tactical turns spread across both halves
+            goals = [e for e in raw_events if e.get("type") == "goal"]
+            others = [e for e in raw_events if e.get("type") != "goal"]
+            others.sort(key=lambda e: (e.get("should_retain", False), e.get("expected_score", 0)), reverse=True)
+
+            selected_events = goals + others[:max(0, target_clip_count - len(goals))]
+            selected_events.sort(key=lambda e: (e.get("period", 1), e.get("minute", 0), e.get("second", 0)))
+
+            for idx, evt in enumerate(selected_events):
+                m = evt.get("minute", 10)
+                s = evt.get("second", 0)
+                cause_m = max(0, m - 1) if s < 15 else m
+                cause_s = (s - 15) % 60
+                event_windows.append({
+                    "clip_id": f"clip_{idx+1:02d}_{evt.get('type', 'tactical')}",
+                    "period": evt.get("period", 1 if m <= 45 else 2),
+                    "t_cause_clock": f"{cause_m:02d}:{cause_s:02d}",
+                    "t_effect_clock": f"{m:02d}:{s:02d}",
+                    "narrative_tone": crowd_result.narrative_tone,
+                    "thesis": evt.get("description", f"Tactical transition breakdown at minute {m}'"),
+                    "crowd_evidence": f"Crowd consensus: {evt.get('description', '')}",
+                    "active_roster": {
+                        "home": [{"num": 10, "name": evt.get("player", f"{home_team} Player"), "role": "FW"}],
+                        "away": [{"num": 4, "name": f"{away_team} Defender", "role": "CB"}],
+                    },
+                    "video_pts": evt.get("video_pts"),
+                    "raw_event": evt,
+                })
 
             if not event_windows:
-                target_duration = max(180.0, float(duration)) if duration else 180.0
-                target_clip_count = max(10, int(math.ceil(target_duration / 20.0)))
-                high_impact = [e for e in raw_events if e.get("should_retain", True) or e.get("expected_score", 0) >= 60]
-                for idx, evt in enumerate(high_impact[:target_clip_count]):
-                    m = evt.get("minute", 10)
-                    s = evt.get("second", 0)
-                    cause_m = max(0, m - 1) if s < 15 else m
-                    cause_s = (s - 15) % 60
+                # Spaced tactical sampling across 90 minutes if zero events were scraped
+                logger.warning("[AutonomousResolver] Generating fallback event windows across match intervals.")
+                interval_min = 90.0 / float(target_clip_count + 1)
+                for idx in range(target_clip_count):
+                    m = int(round((idx + 1) * interval_min))
+                    p = 1 if m <= 45 else 2
+                    s = 0
+                    pts = None
+                    if time_indexer:
+                        try:
+                            pts = time_indexer.get_pts_for_match_minute(match_minute=m, second=s, period=p)
+                        except Exception:
+                            pass
                     event_windows.append({
-                        "clip_id": f"clip_{idx+1:02d}_{evt.get('type', 'tactical')}",
-                        "period": evt.get("period", 1 if m <= 45 else 2),
-                        "t_cause_clock": f"{cause_m:02d}:{cause_s:02d}",
-                        "t_effect_clock": f"{m:02d}:{s:02d}",
+                        "clip_id": f"clip_{idx+1:02d}_tactical",
+                        "period": p,
+                        "t_cause_clock": f"{m:02d}:00",
+                        "t_effect_clock": f"{m:02d}:15",
                         "narrative_tone": crowd_result.narrative_tone,
-                        "thesis": evt.get("description", f"Tactical transition breakdown at minute {m}'"),
-                        "crowd_evidence": f"Crowd consensus: {evt.get('description', '')}",
+                        "thesis": f"Tactical duel and spatial overload analysis at minute {m}'",
+                        "crowd_evidence": f"Tactical analysis at minute {m}'",
                         "active_roster": {
-                            "home": [{"num": 10, "name": evt.get("player", f"{home_team} Player"), "role": "FW"}],
+                            "home": [{"num": 10, "name": f"{home_team} Player", "role": "FW"}],
                             "away": [{"num": 4, "name": f"{away_team} Defender", "role": "CB"}],
                         },
-                        "video_pts": evt.get("video_pts"),
-                        "raw_event": evt,
+                        "video_pts": pts,
+                        "raw_event": {"minute": m, "second": 0, "type": "tactical", "period": p},
                     })
 
             for win in event_windows:
@@ -462,9 +549,12 @@ class TacticalPipelineRunner:
             if not extracted_clip:
                 logger.info(f"[Stage 2/5] Extracting video clip for {cid}...")
                 try:
-                    time_indexer = MatchTimeIndexer()
+                    active_indexer = self.time_indexer
+                    if active_indexer is None and actual_video_file and Path(actual_video_file).is_file():
+                        active_indexer = self.sparse_indexer.build_time_indexer(str(actual_video_file))
+                        self.time_indexer = active_indexer
                     clip_extractor = ClipExtractor(
-                        time_indexer=time_indexer,
+                        time_indexer=active_indexer or MatchTimeIndexer(),
                         media_source=str(actual_video_file) if actual_video_file else "",
                         output_dir=str(self.clips_dir),
                         frames_dir=str(self.frames_dir),
@@ -802,23 +892,23 @@ class TacticalPipelineRunner:
             vid_name = Path(vid_path).name if vid_path else f"{cid}.mp4"
             clip_url = f"http://127.0.0.1:3000/assets/clips/{vid_name}"
 
-            freeze_b64 = sc.get("freeze_frame_b64") or (sc.get("freezeFrameUrl") if str(sc.get("freezeFrameUrl", "")).startswith("data:") else None)
-            if not freeze_b64 and vid_path and Path(vid_path).is_file():
+            frame_path = sc.get("cause_frame_path") or sc.get("frame_path")
+            frame_name = Path(frame_path).name if frame_path else f"{cid}_cause.jpg"
+            target_frame_disk = self.frames_dir / frame_name
+
+            if not target_frame_disk.is_file() and vid_path and Path(vid_path).is_file():
                 try:
                     cap = cv2.VideoCapture(str(vid_path))
                     if cap.isOpened():
                         cap.set(cv2.CAP_PROP_POS_FRAMES, freeze_frame)
                         ret_f, f_img = cap.read()
                         if ret_f and f_img is not None:
-                            _, buffer = cv2.imencode(".jpg", f_img, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
-                            freeze_b64 = f"data:image/jpeg;base64,{base64.b64encode(buffer).decode('utf-8')}"
+                            cv2.imwrite(str(target_frame_disk), f_img, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
                         cap.release()
                 except Exception:
                     pass
 
-            frame_path = sc.get("cause_frame_path") or sc.get("frame_path")
-            frame_name = Path(frame_path).name if frame_path else f"{cid}_cause.jpg"
-            freeze_frame_url = freeze_b64 or f"http://127.0.0.1:3000/assets/frames/{frame_name}"
+            freeze_frame_url = f"http://127.0.0.1:3000/assets/frames/{frame_name}"
             fg_mask_url = sc.get("fg_mask_url") or f"http://127.0.0.1:3000/assets/frames/{cid}_fg_mask.png"
 
             cause_tel = dict(sc.get("cause_telestration", {}))
@@ -913,6 +1003,11 @@ class TacticalPipelineRunner:
                 "id": f"seg_{cid}",
                 "type": "clip",
                 "url": clip_url,
+                "videoUrl": clip_url,
+                "is_warped": True,
+                "isWarped": True,
+                "warped_video_url": clip_url,
+                "warpedVideoUrl": clip_url,
                 "freezeFrameUrl": freeze_frame_url,
                 "freeze_frame_url": freeze_frame_url,
                 "telestration": {
@@ -1178,7 +1273,7 @@ class TacticalPipelineRunner:
             logger.error(f"Failed to dispatch render to Remotion server: {e}")
             raise
 
-    def poll_render(self, job_id: str, timeout_sec: int = 1200, poll_interval: int = 5) -> Dict[str, Any]:
+    def poll_render(self, job_id: str, timeout_sec: int = 5400, poll_interval: int = 5) -> Dict[str, Any]:
         url = f"{self.remotion_host}/status/{job_id}"
         start_time = time.time()
         last_progress = -1
@@ -1224,16 +1319,26 @@ if __name__ == "__main__":
     parser.add_argument("--video", type=str, help="Local match video file (.mp4/.mkv)")
     parser.add_argument("--download-url", type=str, help="Full match replay URL to download via yt-dlp")
     parser.add_argument("--watch", action="store_true", help="Start watched folder daemon for F:\\DockerRenders\\incoming_matches")
-    parser.add_argument("--home", type=str, default="Barcelona", help="Home Team")
-    parser.add_argument("--away", type=str, default="Atletico Madrid", help="Away Team")
-    parser.add_argument("--score", type=str, default="2 - 1", help="Match Score")
-    parser.add_argument("--duration", type=float, default=180.0, help="Duration in Seconds (default: 180s = 3 min)")
+    parser.add_argument("--home", type=str, default=None, help="Home Team (auto-parsed from video filename if omitted)")
+    parser.add_argument("--away", type=str, default=None, help="Away Team (auto-parsed from video filename if omitted)")
+    parser.add_argument("--score", type=str, default=None, help="Match Score (auto-parsed if omitted)")
+    parser.add_argument("--duration", type=float, default=600.0, help="Duration in Seconds (default: 600s = 10 min)")
     parser.add_argument("--wait", action="store_true", help="Wait for render completion and poll progress")
     parser.add_argument("--no-render", action="store_true", help="Prepare payload without rendering")
     parser.add_argument("--fixture-id", type=str, help="Unique fixture or match identifier")
     parser.add_argument("--db-path", type=str, default=None, help="Custom SQLite pipeline_state.db path")
     parser.add_argument("--force-refresh", action="store_true", help="Force re-run stages ignoring cached state")
     args = parser.parse_args()
+
+    # Automatically extract teams and score if --video is provided without explicit teams
+    parsed_home = args.home
+    parsed_away = args.away
+    parsed_score = args.score
+    if args.video and Path(args.video).is_file():
+        meta = ReplayIngestor.parse_match_metadata_from_filename(Path(args.video).name)
+        parsed_home = parsed_home or meta.home
+        parsed_away = parsed_away or meta.away
+        parsed_score = parsed_score or meta.score
 
     runner = TacticalPipelineRunner(db_path=args.db_path)
     if args.watch:
@@ -1243,9 +1348,9 @@ if __name__ == "__main__":
             video_path=args.video,
             download_url=args.download_url,
             fixture_id=args.fixture_id,
-            home_team=args.home,
-            away_team=args.away,
-            score=args.score,
+            home_team=parsed_home or "Barcelona",
+            away_team=parsed_away or "Real Madrid",
+            score=parsed_score or "FT",
             duration=args.duration,
             render=not args.no_render,
             wait=args.wait,
