@@ -10,12 +10,15 @@ Executes reverse-timeline tactical football analysis:
 
 import base64
 import json
+import logging
 import math
 import os
 import time
 from typing import Dict, List, Optional, Tuple, Any
 import requests
 from PIL import Image
+
+logger = logging.getLogger("vision_pipeline.hybrid_engine")
 
 from vision_pipeline.local_detector import LocalPlayerDetector
 from vision_pipeline.montage_builder import MontageBuilder
@@ -300,6 +303,18 @@ Return JSON:
         """Analyzes setup frame T0 and predicts pass vector using T1 ground truth."""
         home_name = fixture["home_team"]["name"]
         away_name = fixture["away_team"]["name"]
+
+        # Camera Framing & Field Geometry Gate (TVCalib): reject zoomed-in frames lacking pitch context
+        try:
+            from src.vision.tvcalib_frame_filter import TVCalibCameraFilter
+            calib_res = TVCalibCameraFilter().evaluate_frame(frame_path)
+            if calib_res.skip_tactical_analysis:
+                logger.info("TVCalib: Skipping zoomed-in frame %s for tactical freeze-frame analysis: %s", Path(frame_path).name, calib_res.reasons)
+                detection["skipped"] = True
+                detection["skip_reason"] = "zoomed_in_shot"
+                detection["calibration_reasons"] = calib_res.reasons
+        except Exception as e:
+            logger.debug("TVCalib check notice: %s", e)
 
         # Extract T1 receiver ground truth
         t1_receiver = None

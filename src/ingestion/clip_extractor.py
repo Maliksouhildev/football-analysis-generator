@@ -104,6 +104,17 @@ def is_wide_tactical_cam(
     if not check_players or h < 300 or w < 300:
         return True, grass_ratio
 
+    # Run TVCalib field lines and homography gate to reject zoomed-in action shots
+    try:
+        from src.vision.tvcalib_frame_filter import TVCalibCameraFilter
+        tv_filter = TVCalibCameraFilter(min_turf_ratio=grass_threshold, max_player_height_threshold=max_median_height_ratio)
+        tv_res = tv_filter.evaluate_frame(bgr)
+        if tv_res.skip_tactical_analysis:
+            logger.debug("is_wide_tactical_cam: TVCalib rejected frame as zoomed-in: %s", tv_res.reasons)
+            return False, grass_ratio
+    except Exception as e:
+        logger.debug("TVCalib check in is_wide_tactical_cam notice: %s", e)
+
     model = yolo_model or get_camera_gate_yolo()
     if model is None:
         return True, grass_ratio
