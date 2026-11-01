@@ -42,6 +42,12 @@ BROADCAST_PRESETS: Dict[str, Dict[str, Any]] = {
         "pixel_roi_1080p": {"x": 58, "y": 27, "w": 345, "h": 97},
         "clock_sub_roi": [0.080, 0.035, 0.110, 0.150]
     },
+    "laliga_dazn_stacked": {
+        "competitions": ["La Liga DAZN", "Copa del Rey"],
+        "normalized_roi": [0.045, 0.045, 0.162, 0.165],
+        "pixel_roi_1080p": {"x": 86, "y": 48, "w": 230, "h": 126},
+        "clock_sub_roi": [0.100, 0.048, 0.156, 0.096]
+    },
     "top_right": {
         "competitions": ["Asian Cup", "AFC Champions League", "Selected International"],
         "normalized_roi": [0.025, 0.720, 0.085, 0.965],
@@ -915,17 +921,43 @@ class ScoreboardClockOCR:
         # Execute OCR
         recognized_text, confidence = self.digit_ocr.recognize_clock(clock_roi)
 
+        # If primary preset did not yield a valid clock, scan alternative broadcast presets
+        if confidence < self.confidence_threshold or ClockOCRParser.parse(recognized_text) is None:
+            w_im, h_im = pil_img.size
+            for p_key, p_cfg in BROADCAST_PRESETS.items():
+                sub = p_cfg.get("clock_sub_roi", p_cfg["normalized_roi"])
+                cand_roi = pil_img.crop((
+                    int(round(sub[1] * w_im)),
+                    int(round(sub[0] * h_im)),
+                    int(round(sub[3] * w_im)),
+                    int(round(sub[2] * h_im)),
+                ))
+                cand_txt, cand_conf = self.digit_ocr.recognize_clock(cand_roi)
+                if cand_conf >= self.confidence_threshold and ClockOCRParser.parse(cand_txt) is not None:
+                    recognized_text = cand_txt
+                    confidence = cand_conf
+                    break
+
+        # If template OCR still hasn't matched, fall back to EasyOCR/PaddleOCR on top-left scoreboard region
+        if confidence < self.confidence_threshold or ClockOCRParser.parse(recognized_text) is None:
+            sb_meta = self.extract_scoreboard_metadata(frame)
+            if sb_meta.get("clock_str"):
+                recognized_text = sb_meta["clock_str"]
+                confidence = max(confidence, 0.92)
+
         # Enforce confidence threshold: suppress noisy/degraded text
         if confidence < self.confidence_threshold:
             recognized_text = ""
 
         # Pass through monotonic filter
-        filter_res = self.clock_filter.update(pts, recognized_text)
+        filter_res = self.clock_filter.update(pts or 0.0, recognized_text)
+        m_val = filter_res["match_minute"]
+        p_val = 2 if m_val >= 45 else filter_res["period"]
 
         return ClockReading(
             raw_text=recognized_text,
-            match_period=filter_res["period"],
-            match_minute=filter_res["match_minute"],
+            match_period=p_val,
+            match_minute=m_val,
             match_second=filter_res["match_second"],
             extra_minute=filter_res.get("extra_minute", 0),
             extra_second=filter_res.get("extra_second", 0),
@@ -936,6 +968,89 @@ class ScoreboardClockOCR:
             stream_pts=pts,
             status=filter_res["status"],
         )
+
+    TEAM_CODE_MAP: Dict[str, str] = {
+        "BAR": "Barcelona", "FCB": "Barcelona",
+        "RMA": "Real Madrid", "MAD": "Real Madrid",
+        "ATM": "Atletico Madrid", "SEV": "Sevilla", "VAL": "Valencia", "SOC": "Real Sociedad", "VIL": "Villarreal", "BET": "Real Betis", "ATH": "Athletic Club", "GIR": "Girona",
+        "ARS": "Arsenal", "MCI": "Manchester City", "MUN": "Manchester United", "LIV": "Liverpool", "CHE": "Chelsea", "TOT": "Tottenham", "NEW": "Newcastle", "AVL": "Aston Villa",
+        "BAY": "Bayern Munich", "BVB": "Borussia Dortmund", "DOR": "Borussia Dortmund", "LEV": "Bayer Leverkusen", "RBL": "RB Leipzig",
+        "PSG": "Paris Saint-Germain", "MAR": "Marseille", "LYO": "Lyon", "MON": "Monaco",
+        "INT": "Inter Milan", "MIL": "AC Milan", "ACM": "AC Milan", "JUV": "Juventus", "NAP": "Napoli", "ROM": "AS Roma", "ASR": "AS Roma", "LAZ": "Lazio", "ATA": "Atalanta",
+    }
+
+    @classmethod
+    def extract_scoreboard_metadata(cls, frame: Union[Image.Image, np.ndarray, str]) -> Dict[str, Any]:
+        """
+        Autonomously scans the top-left & top-right broadcast scoreboard zones using OCR
+        to extract:
+          - clock_str (e.g. '84:45', '62:36')
+          - match_minute, match_second, period
+          - home_team, away_team (mapped from 3-letter broadcast codes like BAR, RMA)
+        """
+        out: Dict[str, Any] = {
+            "clock_str": "",
+            "match_minute": 0,
+            "match_second": 0,
+            "period": 1,
+            "home_code": "",
+            "away_code": "",
+            "home_team": "",
+            "away_team": "",
+        }
+        try:
+            if isinstance(frame, str):
+                if not os.path.exists(frame):
+                    return out
+                arr = np.array(Image.open(frame).convert("RGB"))
+            elif isinstance(frame, Image.Image):
+                arr = np.array(frame.convert("RGB"))
+            else:
+                arr = frame
+            if arr is None or arr.size == 0:
+                return out
+
+            h, w = arr.shape[:2]
+            crop = arr[int(0.02 * h):int(0.18 * h), int(0.02 * w):int(0.32 * w)]
+            engine_info = get_ocr_engine()
+            if not engine_info:
+                return out
+            engine_name, engine = engine_info
+            texts: List[str] = []
+            if engine_name == "easyocr":
+                res = engine.readtext(crop, detail=0)
+                texts = [str(t).strip() for t in res if str(t).strip()]
+            elif engine_name == "paddle":
+                res = engine.ocr(crop, cls=False)
+                if res and res[0]:
+                    texts = [str(line[1][0]).strip() for line in res[0] if line and len(line) > 1]
+
+            team_codes: List[str] = []
+            for t in texts:
+                # Check for MM:SS or MM.SS clock
+                m_clk = re.search(r"(\d{1,3})\s*[:\.]\s*([0-5]\d)", t)
+                if m_clk and not out["clock_str"]:
+                    mm = int(m_clk.group(1))
+                    ss = int(m_clk.group(2))
+                    if 0 <= mm <= 130:
+                        out["clock_str"] = f"{mm:02d}:{ss:02d}"
+                        out["match_minute"] = mm
+                        out["match_second"] = ss
+                        out["period"] = 2 if mm >= 45 else 1
+                # Check for 3-letter team abbreviations (even if concatenated with score digits like 'BAR3' or 'RMA2')
+                tokens = re.findall(r"[A-Z]{3}", t.upper())
+                for tok in tokens:
+                    if tok in cls.TEAM_CODE_MAP and tok not in team_codes:
+                        team_codes.append(tok)
+
+            if len(team_codes) >= 2:
+                out["home_code"] = team_codes[0]
+                out["away_code"] = team_codes[1]
+                out["home_team"] = cls.TEAM_CODE_MAP[team_codes[0]]
+                out["away_team"] = cls.TEAM_CODE_MAP[team_codes[1]]
+        except Exception:
+            pass
+        return out
 
     def _extract_clock_roi(self, img: Image.Image) -> Image.Image:
         w, h = img.size

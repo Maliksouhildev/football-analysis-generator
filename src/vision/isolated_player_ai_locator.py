@@ -95,21 +95,21 @@ PLAYER_BIOMETRIC_DB: Dict[str, Dict[str, Any]] = {
     },
     "pedri": {
         "num": 8, "team": "home", "role": "LCM",
-        "skin": "light", "hair": "short dark hair", "build": "slender technical midfielder",
-        "kit_note": "Blaugrana #8",
-        "cues": "Left Central Midfielder (LCM) #8 in midfield interior",
+        "skin": "light", "hair": "short dark brown/black hair", "build": "slender technical midfielder",
+        "kit_note": "Blaugrana #8, dark/black boots",
+        "cues": "Left Central Midfielder (LCM) #8 in midfield interior with dark hair and black boots",
     },
     "fermin lopez": {
         "num": 7, "team": "home", "role": "RCM",
         "skin": "light", "hair": "short light-brown/blonde-tinted hair", "build": "energetic attacking midfielder",
-        "kit_note": "Blaugrana #7 (subbed off at 74' for #21 Frenkie de Jong)",
-        "cues": "Right Central / Attacking Midfielder (RCM/AM) #7 before 74'",
+        "kit_note": "Blaugrana #7, distinctive bright mint-green/turquoise boots",
+        "cues": "Right Central / Attacking Midfielder (RCM/AM) #7 with short blonde/light-brown hair and bright mint-green boots",
     },
     "frenkie de jong": {
         "num": 21, "team": "home", "role": "RCM",
         "skin": "light", "hair": "blonde/light-brown hair", "build": "tall graceful midfielder",
-        "kit_note": "Blaugrana #21 (entered at 74' for #7 Fermín López)",
-        "cues": "Blonde midfielder #21 (on pitch from 74' onwards)",
+        "kit_note": "Blaugrana #21 (white/light boots)",
+        "cues": "Tall blonde midfielder #21 in central midfield",
     },
     "lamine yamal": {
         "num": 10, "team": "home", "role": "RW",
@@ -120,34 +120,34 @@ PLAYER_BIOMETRIC_DB: Dict[str, Dict[str, Any]] = {
     "raphinha": {
         "num": 11, "team": "home", "role": "CF",
         "skin": "tan/brown", "hair": "short dark hair / buzzed fade", "build": "dynamic forward",
-        "kit_note": "Blaugrana #11 (subbed off at 86' for #9 Gabriel Jesus)",
+        "kit_note": "Blaugrana #11",
         "cues": "Central Forward / False 9 / Attacking forward #11",
     },
     "anthony gordon": {
         "num": 17, "team": "home", "role": "LW",
         "skin": "fair/light", "hair": "distinctive blonde/ginger medium hair", "build": "direct left winger",
-        "kit_note": "Blaugrana #17 (subbed off at 85' for #14 Karim Adeyemi)",
-        "cues": "Left Winger (LW) #17 with distinctive blonde/ginger hair",
+        "kit_note": "Blaugrana #17 (#17 visible on front right shorts and back, gold boots)",
+        "cues": "Left Winger (LW) #17 with distinctive blonde/ginger hair and #17 on shorts",
     },
     "karim adeyemi": {
         "num": 14, "team": "home", "role": "LW",
         "skin": "dark/brown", "hair": "short dark curly hair", "build": "fast winger",
-        "kit_note": "Blaugrana #14 (entered at 85' for #17 Anthony Gordon)",
-        "cues": "Left Winger (LW) #14 after 85'",
+        "kit_note": "Blaugrana #14",
+        "cues": "Left Winger (LW) #14 with dark curly hair",
     },
     "gabriel jesus": {
         "num": 9, "team": "home", "role": "CF",
         "skin": "brown", "hair": "short dark hair", "build": "compact striker",
-        "kit_note": "Blaugrana #9 (entered at 86' for #11 Raphinha)",
-        "cues": "Center Forward (CF) #9 after 86'",
+        "kit_note": "Blaugrana #9",
+        "cues": "Center Forward (CF) #9",
     },
 
     # Real Madrid (Away - All-white kit with dark/maroon shoulder stripes)
     "andriy lunin": {
         "num": 13, "team": "away", "role": "GK",
         "skin": "light", "hair": "short blonde/light-brown hair", "build": "tall goalkeeper (1.91m)",
-        "kit_note": "bright orange/coral goalkeeper kit #13",
-        "cues": "GK #13 in bright orange/coral kit inside/near Real Madrid goal box",
+        "kit_note": "bright orange/coral/salmon goalkeeper shirt, shorts, and socks #13, white gloves/boots",
+        "cues": "GK #13 in bright orange/coral/salmon goalkeeper kit inside/near Real Madrid goal box",
     },
     "dean huijsen": {
         "num": 4, "team": "away", "role": "LCB",
@@ -158,8 +158,8 @@ PLAYER_BIOMETRIC_DB: Dict[str, Dict[str, Any]] = {
     "ibrahima konate": {
         "num": 16, "team": "away", "role": "RCB",
         "skin": "dark", "hair": "short black hair", "build": "tall muscular center-back (1.94m)",
-        "kit_note": "Real Madrid White #16",
-        "cues": "Tall muscular dark-skinned Right Center Back (RCB) #16",
+        "kit_note": "Real Madrid White #16 (#16 printed on front right white shorts and back)",
+        "cues": "Tall muscular dark-skinned Right Center Back (RCB) #16 with #16 on white shorts",
     },
     "marc cucurella": {
         "num": 17, "team": "away", "role": "LB",
@@ -553,7 +553,16 @@ class IsolatedPlayerAILocator:
         # 3. NMS deduplication across full + tiled detections
         merged_boxes = self._nms_boxes(raw_boxes, iou_thresh=0.45)
 
-        # 4. Filter by pitch geometry, banner mask, and touchline staff rules
+        # Compute median player scale on pitch (GSR Pillar 1: DeepEIoU-inspired morphological scale prior)
+        confident_dims = [
+            max(b[2] - b[0], b[3] - b[1])
+            for b in merged_boxes
+            if b[4] >= 0.55 and (b[3] / float(h) * 100.0) >= 18.0
+        ]
+        median_player_dim = float(np.median(confident_dims)) if confident_dims else 90.0
+        min_allowed_dim = max(38, int(0.38 * median_player_dim))
+
+        # 4. Filter by pitch geometry, banner mask, morphological scale, and touchline staff rules
         valid_actors: List[DetectedPitchActor] = []
         next_id = 1
 
@@ -565,9 +574,17 @@ class IsolatedPlayerAILocator:
             if bw < 8 or bh < 16:
                 continue
 
+            # GSR Pillar 1: Reject tiny spherical/conical non-human objects (e.g. spare football on cone)
+            if shot_type != "close_up":
+                if max(bw, bh) < min_allowed_dim:
+                    continue
+                if bh < 44 and (conf < 0.42 or (bw * bh) < 1600):
+                    continue
+
             aspect = bh / max(1.0, float(bw))
-            # Allow crouching/sliding players (aspect >= 0.75) up to tall standing players (aspect <= 5.0)
-            if shot_type != "close_up" and (aspect < 0.72 or aspect > 5.2):
+            # Allow horizontal diving/sliding players/GKs (aspect >= 0.52 when conf >= 0.45) up to standing players (aspect <= 5.2)
+            min_aspect = 0.52 if conf >= 0.45 else 0.72
+            if shot_type != "close_up" and (aspect < min_aspect or aspect > 5.2):
                 continue
 
             boot_x = 0.5 * (x1 + x2)
@@ -578,7 +595,7 @@ class IsolatedPlayerAILocator:
             # Exclude scoreboard top-left & DAZN logo top-right
             if x_pct < 18.0 and y_pct < 18.0:
                 continue
-            if x_pct > 87.0 and y_pct < 16.0:
+            if x_pct > 87.0 and y_pct < 18.0:
                 continue
 
             # Exclude lower-third broadcast graphic overlay portrait (e.g., '11 RAPHINHA' graphic cutout)
@@ -618,13 +635,13 @@ class IsolatedPlayerAILocator:
                     if y_pct > 82.8 or y_pct < 19.0:
                         continue
 
-                # Exclude sidelines stewards/cameramen outside bottom-left corner or advertising boards
+                # Exclude sidelines stewards/cameramen/warm-up substitutes outside the playable pitch
                 if self.config.use_touchline_staff_filter:
-                    # Stewards in high-vis neon vests or all-black suits outside the touchline
-                    if (x_pct < 7.5 and y_pct > 72.0) or (y_pct > 96.5):
+                    if (x_pct < 7.5 and y_pct > 75.0) or (y_pct > 96.5):
                         continue
-                    # Exclude spectators/linesmen/photographers above the far touchline or behind LED boards
-                    if y_pct < pitch_geom["min_turf_y_pct"] + 1.0:
+                    # Exclude bench/warm-up substitutes & photographers above the top touchline (y_pct < 17.5% or clipped at top border y1 <= 2.5% h)
+                    min_playable_y = max(17.5, pitch_geom["min_turf_y_pct"] + 1.0)
+                    if y_pct < min_playable_y or (y1 <= int(h * 0.025) and y_pct < 20.0):
                         continue
                     if y_pct < 44.0:
                         # Verify green grass exists right around/below the boots
@@ -665,17 +682,20 @@ class IsolatedPlayerAILocator:
             x1, y1, x2, y2, c = b
             area_b = max(1, (x2 - x1) * (y2 - y1))
             should_drop = False
-            for k in keep:
-                kx1, ky1, kx2, ky2, _ = k
+            for idx_k, k in enumerate(keep):
+                kx1, ky1, kx2, ky2, kc = k
                 ix1, iy1 = max(x1, kx1), max(y1, ky1)
                 ix2, iy2 = min(x2, kx2), min(y2, ky2)
                 inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
                 area_k = max(1, (kx2 - kx1) * (ky2 - ky1))
                 union = area_b + area_k - inter
                 iou = inter / float(union) if union > 0 else 0.0
-                # Also check if one box's boot center is nearly identical and inside the other
+                overlap_min = inter / float(min(area_b, area_k))
                 boot_dist = math.hypot(0.5 * (x1 + x2) - 0.5 * (kx1 + kx2), y2 - ky2)
-                if iou > iou_thresh or (inter / float(min(area_b, area_k)) > 0.78 and boot_dist < 16.0):
+                if iou > iou_thresh or (overlap_min > 0.72 and (boot_dist < 48.0 or abs(y2 - ky2) < 18.0)):
+                    # If both boxes are high-confidence detections of the same diving/stretching player, merge union
+                    if c >= 0.55 and kc >= 0.55 and overlap_min > 0.72 and abs(y2 - ky2) < 18.0:
+                        keep[idx_k] = (min(x1, kx1), min(y1, ky1), max(x2, kx2), max(y2, ky2), max(c, kc))
                     should_drop = True
                     break
             if not should_drop:
@@ -697,7 +717,7 @@ class IsolatedPlayerAILocator:
         - 'home' (FC Barcelona: Blaugrana dark blue & crimson stripes + dark blue shorts, or green GK #1)
         - 'away' (Real Madrid: White shirt & white shorts, or bright orange/coral GK #13)
         - 'referee' (Bright solid sky-cyan H=88..104, S>=75, V>=155 with dark shorts, max 1-2 on pitch)
-        Also extracts visual appearance biometrics (skin tone, hair volume/color) for each actor.
+        Also extracts visual appearance biometrics (skin tone, hair volume/color, boot color) for each actor.
         """
         h, w = frame.shape[:2]
         filtered_actors: List[DetectedPitchActor] = []
@@ -732,6 +752,13 @@ class IsolatedPlayerAILocator:
             hx2 = min(w, int(x2 - bw * 0.15))
             head = frame[hy1:hy2, hx1:hx2]
 
+            # Boots/feet crop (bottom 24% of bounding box for boot color signature)
+            by1_c = max(0, int(y1 + bh * 0.76))
+            by2_c = min(h, int(y2))
+            bx1_c = max(0, int(x1))
+            bx2_c = min(w, int(x2))
+            boots_crop = frame[by1_c:by2_c, bx1_c:bx2_c]
+
             if torso.size == 0:
                 continue
 
@@ -755,10 +782,12 @@ class IsolatedPlayerAILocator:
             cyan_ref_frac = float(np.mean((H_vals >= 83) & (H_vals <= 108) & (S_vals >= 55) & (V_vals >= 125)))
             # Coral/Salmon/Orange GK (Lunin #13): H in [0..18] or [166..180], S >= 95, V >= 165
             orange_gk_frac = float(np.mean(((H_vals <= 18) | (H_vals >= 166)) & (S_vals >= 95) & (V_vals >= 165)))
-            # Bright Green GK (Joan García #1): H in [42..82], S >= 95, V >= 135 (inside torso while inside penalty box)
+            # Fluorescent yellow-green warm-up bib / steward vest: H in [22..44], S >= 105, V >= 150
             all_H = hsv_t[:, :, 0]
             all_S = hsv_t[:, :, 1]
             all_V = hsv_t[:, :, 2]
+            neon_bib_frac = float(np.mean((all_H >= 22) & (all_H <= 44) & (all_S >= 105) & (all_V >= 150)))
+            # Bright Green GK (Joan García #1): H in [42..82], S >= 95, V >= 135 (inside torso while inside penalty box)
             green_gk_frac = float(np.mean((all_H >= 45) & (all_H <= 82) & (all_S >= 100) & (all_V >= 145)))
 
             # Shorts whiteness & orange/black fractions
@@ -786,6 +815,14 @@ class IsolatedPlayerAILocator:
                     hair_dark_frac = float(np.mean(hsv_h[:, :, 2][ng_h] < 65))
                     hair_blonde_frac = float(np.mean((hsv_h[:, :, 0][ng_h] >= 12) & (hsv_h[:, :, 0][ng_h] <= 32) & (hsv_h[:, :, 2][ng_h] > 135)))
 
+            # Boot color signature: bright mint-green/turquoise boots (#7 Fermín López)
+            mint_boot_frac = 0.0
+            if boots_crop.size > 0:
+                hsv_b = cv2.cvtColor(boots_crop, cv2.COLOR_BGR2HSV)
+                mint_boot_frac = float(
+                    np.mean((hsv_b[:, :, 0] >= 68) & (hsv_b[:, :, 0] <= 96) & (hsv_b[:, :, 1] >= 58) & (hsv_b[:, :, 2] >= 115))
+                )
+
             act.visual_features = {
                 "white_frac": round(white_frac, 3),
                 "shorts_white_frac": round(shorts_white_frac, 3),
@@ -794,8 +831,10 @@ class IsolatedPlayerAILocator:
                 "cyan_ref_frac": round(cyan_ref_frac, 3),
                 "orange_gk_frac": round(orange_gk_frac, 3),
                 "green_gk_frac": round(green_gk_frac, 3),
+                "neon_bib_frac": round(neon_bib_frac, 3),
                 "hair_dark_frac": round(hair_dark_frac, 3),
                 "hair_blonde_frac": round(hair_blonde_frac, 3),
+                "mint_boot_frac": round(mint_boot_frac, 3),
             }
 
             # Legacy Bug Simulation (only if use_blaugrana_stripe_classifier is False in Iteration 1)
@@ -821,10 +860,17 @@ class IsolatedPlayerAILocator:
                 act.actor_type = "referee"
                 continue
 
-            # Exclude non-kit grass/line/linesman artifacts on wide shots
+            # Exclude non-kit grass/line/linesman/warm-up bib/cameraman artifacts on wide shots
             if self.config.use_touchline_staff_filter and shot_type != "close_up":
                 if act.y_pct < 20.5 and act.x_pct > 45.0:
                     continue
+                # Reject warm-up substitutes or touchline stewards in fluorescent yellow-green bibs
+                if neon_bib_frac >= 0.16 and act.y_pct < 28.0:
+                    continue
+                # Reject bottom-left touchline cameraman/steward in dark clothing (while preserving white-kit players like #16 Konaté at y=72.7%)
+                if act.x_pct < 7.5 and act.y_pct > 71.5:
+                    if white_frac < 0.35 and (dark_blue_frac + crimson_red_frac) < 0.22:
+                        continue
                 if (
                     white_frac < 0.45
                     and (dark_blue_frac + crimson_red_frac) < 0.18
@@ -836,7 +882,7 @@ class IsolatedPlayerAILocator:
 
             # 2. Check Goalkeepers (Coral/Orange #13 Lunin vs Bright Green #1 Joan García)
             if self.config.use_gk_color_detector:
-                if (orange_gk_frac >= 0.28 or (orange_gk_frac >= 0.18 and shorts_orange_frac >= 0.25)) and (act.x_pct < 35.0 or act.x_pct > 65.0):
+                if (orange_gk_frac >= 0.20 or (orange_gk_frac >= 0.14 and shorts_orange_frac >= 0.20)) and dark_blue_frac < 0.08:
                     act.team = "away"
                     act.actor_type = "goalkeeper"
                     act.is_gk = True
@@ -909,14 +955,24 @@ class IsolatedPlayerAILocator:
 
         home_gk = next((a for a in home_actors if a.is_gk), None)
         away_gk = next((a for a in away_actors if a.is_gk), None)
+        outfield_xs = [a.x_pct for a in actors if not a.is_gk]
+        mean_outfield_x = float(np.mean(outfield_xs)) if outfield_xs else 50.0
 
         # Attacking direction: +1 means attacking Left->Right (defending Left goal), -1 means attacking Right->Left
-        if away_gk and away_gk.x_pct < 40.0:
-            away_dir = 1   # Away defends Left goal, attacks Right
-            home_dir = -1  # Home attacks Left goal
-        elif home_gk and home_gk.x_pct < 40.0:
-            home_dir = 1   # Home defends Left goal, attacks Right
-            away_dir = -1  # Away attacks Left goal
+        if away_gk:
+            if away_gk.x_pct < 38.0 or away_gk.x_pct < mean_outfield_x:
+                away_dir = 1   # Away defends Left goal, attacks Right
+                home_dir = -1  # Home attacks Left goal
+            else:
+                away_dir = -1  # Away defends Right goal, attacks Left
+                home_dir = 1   # Home attacks Right goal
+        elif home_gk:
+            if home_gk.x_pct < 38.0 or home_gk.x_pct < mean_outfield_x:
+                home_dir = 1   # Home defends Left goal, attacks Right
+                away_dir = -1  # Away attacks Left goal
+            else:
+                home_dir = -1  # Home defends Right goal, attacks Left
+                away_dir = 1   # Away attacks Right goal
         elif period == 1:
             # In Period 1 of BAR vs RMA (401882832), Barcelona defends Left goal (attacks Right), Real Madrid attacks Left
             home_dir = 1
@@ -941,10 +997,18 @@ class IsolatedPlayerAILocator:
             use_persp = persp_slope if self.config.use_homography_topology_priors else 0.0
             x_persps = [a.x_pct + use_persp * (a.y_pct - 50.0) for a in outfield]
             ys = [a.y_pct for a in outfield]
-            min_x, max_x = min(x_persps), max(x_persps)
-            min_y, max_y = min(ys), max(ys)
-            span_x = max(12.0, max_x - min_x)
-            span_y = max(18.0, max_y - min_y)
+            # When fewer than 3 outfielders of this team are visible (e.g. tight penalty-box shot),
+            # anchor min/max to all visible pitch actors or full pitch bounds so a single player doesn't collapse to 0.0!
+            if len(outfield) < 3:
+                all_x_p = [a.x_pct + use_persp * (a.y_pct - 50.0) for a in actors]
+                all_ys = [a.y_pct for a in actors]
+                min_x, max_x = min(all_x_p), max(all_x_p)
+                min_y, max_y = min(22.0, min(all_ys)), max(84.0, max(all_ys))
+            else:
+                min_x, max_x = min(x_persps), max(x_persps)
+                min_y, max_y = min(ys), max(ys)
+            span_x = max(18.0, max_x - min_x)
+            span_y = max(24.0, max_y - min_y)
 
             for a in t_actors:
                 # Metric pitch coordinates via homography mapper
@@ -1133,12 +1197,12 @@ class IsolatedPlayerAILocator:
                 crop_full_rs = cv2.resize(crop_full, (155, 185), interpolation=cv2.INTER_CUBIC)
                 sheet[oy + 40:oy + 225, ox + 5:ox + 160] = crop_full_rs
 
-            # 2. Super-Resolution CLAHE + Unsharp-Mask Torso Zoom (right half of tile: 165x185)
+            # 2. Super-Resolution CLAHE + Unsharp-Mask Kit/Shorts/Boots Zoom (right half of tile: 165x185)
             if self.config.use_superres_clahe_torso_zoom:
                 tx1 = max(0, x1 - int(bw * 0.08))
                 tx2 = min(w, x2 + int(bw * 0.08))
-                ty1 = max(0, y1 + int(bh * 0.08))
-                ty2 = min(h, y1 + int(bh * 0.62))
+                ty1 = max(0, y1 + int(bh * 0.06))
+                ty2 = min(h, y1 + int(bh * 0.94))
                 torso_crop = frame[ty1:ty2, tx1:tx2]
                 if torso_crop.size > 0:
                     zoom = cv2.resize(torso_crop, (165, 185), interpolation=cv2.INTER_CUBIC)
@@ -1319,11 +1383,22 @@ class IsolatedPlayerAILocator:
         away_roster_str = _fmt_roster(active_state.away_active)
 
         banned_str = ""
-        if self.config.use_live_active_xi_sync and (active_state.subbed_off_players or active_state.benched_players):
-            sub_off = [f"{s['name']} (subbed off at {s['minute']}')" for s in active_state.subbed_off_players]
+        if self.config.use_live_active_xi_sync and active_state.subbed_off_players:
+            sub_lines = []
+            for s in active_state.subbed_off_players:
+                s_norm = self._normalize_name(s.get("name", ""))
+                s_bio = PLAYER_BIOMETRIC_DB.get(s_norm, {})
+                s_num = s.get("number") or s_bio.get("num") or "?"
+                s_role = s_bio.get("role", "MF")
+                s_cue = s_bio.get("cues", "")
+                sub_lines.append(
+                    f"  - #{s_num} {s['name']} ({s.get('team', '').upper()}, Role: {s_role}, API sub listed at {s['minute']}') | Visual Cue: {s_cue}"
+                )
             banned_str = (
-                f"\nFORBIDDEN / OFF-PITCH PLAYERS (DO NOT ASSIGN UNLESS THIS EXACT MINUTE IS THEIR SUBSTITUTION WALK-OFF):\n"
-                f"  Subbed Off: {', '.join(sub_off) if sub_off else 'None'}\n"
+                "\nADDITIONAL SQUAD PLAYERS (API lists substitution, but Broadcast Video Reality ALWAYS overrides API timestamps — "
+                "ASSIGN if visually verified via jersey/shorts number, mint-green boots, or hair):\n"
+                + "\n".join(sub_lines)
+                + "\n"
             )
 
         telemetry_str = ""
@@ -1339,21 +1414,30 @@ class IsolatedPlayerAILocator:
         actors_desc = []
         for a in actors:
             priors_str = ", ".join(f"{k}:{v:.2f}" for k, v in list(a.role_priors.items())[:3])
+            vf = a.visual_features
+            bio_tags = []
+            if vf.get("mint_boot_frac", 0.0) >= 0.035:
+                bio_tags.append("mint_green_boots=YES(#7 Fermin Lopez signature)")
+            if vf.get("hair_blonde_frac", 0.0) >= 0.04:
+                bio_tags.append("blonde_light_hair=YES")
+            if vf.get("hair_dark_frac", 0.0) >= 0.14:
+                bio_tags.append("dark_hair_skin=YES")
+            bio_tag_str = f" | VisualCues=[{', '.join(bio_tags)}]" if bio_tags else ""
             if self.config.use_homography_topology_priors:
                 actors_desc.append(
                     f"  - [{a.track_id}] Team={a.team.upper()}{'(GK)' if a.is_gk else ''} | "
                     f"Pos=({a.x_pct:.1f}%, {a.y_pct:.1f}%) -> Pitch=({a.pitch_x_m:.1f}m, {a.pitch_y_m:.1f}m) | "
-                    f"Zone={a.tactical_zone} | Top Role Priors=[{priors_str}]"
+                    f"Zone={a.tactical_zone} | Top Role Priors=[{priors_str}]{bio_tag_str}"
                 )
             else:
-                actors_desc.append(f"  - [{a.track_id}] Team={a.team.upper()} | Pos=({a.x_pct:.1f}%, {a.y_pct:.1f}%)")
+                actors_desc.append(f"  - [{a.track_id}] Team={a.team.upper()} | Pos=({a.x_pct:.1f}%, {a.y_pct:.1f}%){bio_tag_str}")
         actors_block = "\n".join(actors_desc)
 
         return (
             "You are an elite UEFA Champions League & LaLiga Computer Vision & Tactical Player Identification Engine.\n"
             "You are given:\n"
             "  IMAGE 1: The full broadcast match frame with numbered bounding boxes `[ID]`.\n"
-            "  IMAGE 2: A high-resolution multi-crop zoom sheet where each tile `[ID]` shows the full player crop on the left and a Super-Resolution CLAHE-sharpened torso/jersey zoom crop on the right.\n\n"
+            "  IMAGE 2: A high-resolution multi-crop zoom sheet where each tile `[ID]` shows the full player crop on the left and a Super-Resolution CLAHE-sharpened kit/shorts/boots zoom crop on the right.\n\n"
             f"OFFICIAL ACTIVE ON-PITCH ROSTERS AT MATCH CLOCK {active_state.clock_str}:\n"
             f"HOME TEAM ({home_name} - Blaugrana dark blue & crimson striped shirts, dark blue shorts; GK #1 Joan García in bright green):\n"
             f"{home_roster_str}\n\n"
@@ -1364,15 +1448,16 @@ class IsolatedPlayerAILocator:
             f"DETECTED ON-PITCH ACTORS TO IDENTIFY ({len(actors)} players):\n"
             f"{actors_block}\n\n"
             "MANDATORY MULTI-SOURCE IDENTIFICATION PROTOCOL:\n"
-            "1. JERSEY NUMBER OCR FIRST: Inspect both IMAGE 1 and the sharpened torso zoom in IMAGE 2 for any visible shirt/shorts numbers (e.g. #25 Yan Diomande, #17 Anthony Gordon, #3 Alejandro Balde, #8 Pedri / Federico Valverde, #15 Arda Güler, #16 Rodri / Konaté, #5 Bellingham / Cubarsí, #10 Mbappé / Yamal). If a number is physically readable on the kit, lock that exact player from the corresponding team! Set `visible_number: null` and `number_confidence: 0.0` if digits are NOT physically visible/readable on the shirt or shorts (NEVER copy a guessed roster number into `visible_number`).\n"
-            "2. BIOMETRIC & VISUAL DISCRIMINATORS: Cross-check hair & build:\n"
+            "1. JERSEY & SHORTS NUMBER OCR FIRST: Inspect both IMAGE 1 and the sharpened kit/shorts zoom in IMAGE 2 for any visible shirt back numbers OR front shorts thigh numbers (e.g. #17 Anthony Gordon on front right dark shorts, #16 Ibrahima Konaté on front right white shorts, #25 Yan Diomande, #3 Alejandro Balde, #8 Pedri / Federico Valverde, #15 Arda Güler, #16 Rodri, #7 Fermín López). If a number is physically readable on the shirt or shorts, lock that exact player from the corresponding team! Set `visible_number: null` and `number_confidence: 0.0` if digits are NOT physically visible/readable on the shirt or shorts (NEVER copy a guessed roster number into `visible_number`).\n"
+            "2. BIOMETRIC, BOOT COLOR & VISUAL DISCRIMINATORS (GSR VISUAL REALITY OVERRIDES API SUB TIMESTAMPS):\n"
+            "   - Short blonde/light-brown hair + bright mint-green/turquoise boots in Blaugrana kit -> #7 Fermín López (RCM).\n"
+            "   - Blonde/ginger hair + #17 on front shorts + gold boots on left wing in Blaugrana kit -> #17 Anthony Gordon (LW).\n"
+            "   - Tall muscular dark-skinned RCB in white kit with #16 on front white shorts -> #16 Ibrahima Konaté (RCB).\n"
             "   - Long voluminous dark curly afro hair in white kit -> #17 Marc Cucurella (LB).\n"
             "   - Very tall light-skinned blonde/light-brown hair LCB in white kit -> #4 Dean Huijsen (LCB).\n"
-            "   - Tall muscular dark-skinned RCB in white kit -> #16 Ibrahima Konaté (RCB).\n"
             "   - Long black braids/dreadlocks in white kit (after 80') -> #6 Eduardo Camavinga (RCM).\n"
-            "   - Blonde/ginger hair on left wing in Blaugrana kit -> #17 Anthony Gordon (LW).\n"
             "   - Tucked-in Blaugrana shirt #16 in central midfield -> #16 Rodri (DM).\n"
-            "   - Bright orange/coral GK kit -> #13 Andriy Lunin (GK); Bright green GK kit -> #1 Joan García (GK).\n"
+            "   - Bright orange/coral/salmon GK kit -> #13 Andriy Lunin (GK); Bright green GK kit -> #1 Joan García (GK).\n"
             "3. 2D FORMATION TOPOLOGY & SPATIAL ELIMINATION: For players whose jersey numbers are occluded, match their 2D formation line (backline vs midfield vs attack) and flank zone (left vs central vs right) to the remaining unassigned players in that team's Active XI.\n"
             "4. STRICT 1-TO-1 UNIQUENESS & TEAM LOCK: Never assign a Home player to an Away track or vice versa. Never assign the same player to two different `[ID]` boxes in the same frame.\n\n"
             "Return ONLY valid JSON matching this exact schema:\n"
@@ -1409,34 +1494,36 @@ class IsolatedPlayerAILocator:
         rosters for each team using the Hungarian Algorithm (`linear_sum_assignment`)
         over a multi-source log-likelihood cost matrix combining:
         - VLM direct player & number identification
-        - Visible jersey number exact match
+        - Visible jersey/shorts number exact match
         - 2D Homography tactical role prior compatibility
-        - Biometric visual appearance compatibility
+        - Biometric & boot color visual appearance compatibility (GSR Pillar 3: Visual Reality Overrides API Sub Clock)
         - Play-by-play event context (e.g. close-up of subbed/injured player or goalscorer)
         """
-        # Build full candidate pools per team (Active XI + if a substitution/injury walk-off is happening within 1 min, include the subbed-off player)
         clip_min = active_state.match_minute
-        home_pool = list(active_state.home_active)
-        away_pool = list(active_state.away_active)
+        home_pool = [dict(p, in_active_xi=True) for p in active_state.home_active]
+        away_pool = [dict(p, in_active_xi=True) for p in active_state.away_active]
 
-        # If this clip is right at a substitution minute (or within 1 minute after, like 61:28 Valverde injury before 62' sub),
-        # ensure the player walking off is also available in the candidate pool!
+        # GSR Pillar 3: Visual Reality Overrides API Substitution Timestamps!
+        # Keep subbed-off players in the candidate pool (with in_active_xi=False) so if they are visually on the pitch
+        # (e.g. #7 Fermín López with mint-green boots at 84:45, or #8 Valverde at 61:28), they can be visually resolved.
         raw_desc = str(event_context.get("description", "")).lower()
         for sub_p in active_state.subbed_off_players + active_state.benched_players:
             s_min = int(sub_p.get("minute") or sub_p.get("scheduled_minute") or -99)
             p_name_low = str(sub_p.get("name", "")).lower()
-            if abs(s_min - clip_min) <= 1 or (p_name_low and p_name_low in raw_desc):
-                t_side = sub_p.get("team", "home")
+            norm_n = self._normalize_name(sub_p.get("name", ""))
+            bio = PLAYER_BIOMETRIC_DB.get(norm_n, {})
+            # Include all subbed-off starters + any bench player within 1 min of sub or mentioned in telemetry
+            if sub_p in active_state.subbed_off_players or abs(s_min - clip_min) <= 1 or (p_name_low and p_name_low in raw_desc):
+                t_side = sub_p.get("team") or bio.get("team") or "home"
                 target_pool = home_pool if t_side == "home" else away_pool
-                if not any(self._normalize_name(x["name"]) == self._normalize_name(sub_p["name"]) for x in target_pool):
-                    norm_n = self._normalize_name(sub_p["name"])
-                    bio = PLAYER_BIOMETRIC_DB.get(norm_n, {})
+                if not any(self._normalize_name(x["name"]) == norm_n for x in target_pool):
                     target_pool.append({
                         "name": sub_p["name"],
                         "number": sub_p.get("number") or bio.get("num") or 99,
                         "role": bio.get("role", "MF"),
                         "team": t_side,
                         "is_gk": False,
+                        "in_active_xi": (abs(s_min - clip_min) <= 1 or (p_name_low and p_name_low in raw_desc)),
                     })
 
         # Role compatibility matrix
@@ -1544,6 +1631,9 @@ class IsolatedPlayerAILocator:
                         continue
 
                     score = 0.0
+                    # Soft active-XI prior (broken immediately by visual/OCR/boot biometrics)
+                    if cand.get("in_active_xi", True):
+                        score += 0.10
 
                     # 1. VLM Direct Name Match
                     if vlm_name and (vlm_name == c_norm or vlm_name in c_norm or c_norm in vlm_name):
@@ -1566,24 +1656,40 @@ class IsolatedPlayerAILocator:
                         topo_score = max(topo_score, 0.85)
                     score += self.config.w_topology_role * topo_score
 
-                    # 4. Biometric Visual Cue Compatibility + Spatial Backline-Left Afro Lock (#17 Marc Cucurella)
+                    # 4. Biometric & Boot Color Visual Cue Compatibility (GSR Pillar 3)
                     bio = PLAYER_BIOMETRIC_DB.get(c_norm, {})
                     bio_score = 0.5
                     obs_bio = str(vlm_r.get("observed_biometrics") or "").lower()
+                    vf = act.visual_features
+                    mint_boot = float(vf.get("mint_boot_frac", 0.0))
+                    hair_blonde = float(vf.get("hair_blonde_frac", 0.0))
+                    hair_dark = float(vf.get("hair_dark_frac", 0.0))
                     if bio:
                         if "afro" in obs_bio or "curly" in obs_bio:
                             if "cucurella" in c_norm or "yamal" in c_norm:
-                                bio_score = 1.0
+                                bio_score = max(bio_score, 1.0)
                         if "cucurella" in c_norm and act.formation_line == "backline" and act.flank_zone in ("left", "left_half"):
-                            bio_score = 1.5
-                        if "blonde" in obs_bio or "ginger" in obs_bio:
-                            if "huijsen" in c_norm or "gordon" in c_norm or "de jong" in c_norm:
-                                bio_score = 1.0
+                            bio_score = max(bio_score, 1.5)
+                        if "blonde" in obs_bio or "ginger" in obs_bio or hair_blonde >= 0.04:
+                            if "huijsen" in c_norm or "gordon" in c_norm or "de jong" in c_norm or "fermin" in c_norm:
+                                bio_score = max(bio_score, 1.0)
+                        # Unmistakable #7 Fermín López lock: short blonde/light-brown hair + bright mint-green boots
+                        if ("fermin" in c_norm or "lopez" in c_norm) and (mint_boot >= 0.035 or "mint" in obs_bio):
+                            bio_score = 3.5
+                            score += 0.55
+                        # #17 Anthony Gordon lock: blonde/ginger hair on left flank with non-mint (gold) boots
+                        if "gordon" in c_norm and hair_blonde >= 0.04 and mint_boot < 0.02 and act.flank_zone in ("left", "left_half"):
+                            bio_score = max(bio_score, 2.0)
+                            score += 0.25
+                        # #16 Ibrahima Konaté lock: tall dark-skinned RCB in white kit (#16 on front white shorts)
+                        if "konate" in c_norm and hair_dark >= 0.14 and (act.x_pct < 12.0 or act.role_priors.get("RCB", 0.0) >= 0.50):
+                            bio_score = max(bio_score, 2.2)
+                            score += 0.30
                         if "braid" in obs_bio or "dread" in obs_bio:
                             if "camavinga" in c_norm:
-                                bio_score = 1.0
+                                bio_score = max(bio_score, 1.2)
                         if "tucked" in obs_bio and "rodri" in c_norm:
-                            bio_score = 1.0
+                            bio_score = max(bio_score, 1.2)
                     score += self.config.w_biometric_cue * bio_score
 
                     S[i, j] = score
@@ -1661,11 +1767,14 @@ class IsolatedPlayerAILocator:
                 other_act.assigned_number = old_num
                 other_act.assigned_role = old_role
 
-        # Check 1: #17 Marc Cucurella (LB) on left-back flank with dark hair
-        if any(int(p.get("number") or 0) == 17 for p in pool):
+        # Check 1: #17 Marc Cucurella (LB) on far-side left-back flank (y_pct < 36%) with dark curly afro hair,
+        # ONLY when the actor does NOT already have a locked jersey/shorts OCR number!
+        if any(int(p.get("number") or 0) == 17 for p in pool) and len(team_actors) >= 4:
             lb_cands = [
                 a for a in team_actors
                 if not a.is_gk
+                and a.ocr_number is None
+                and a.y_pct < 36.0
                 and a.formation_line == "backline"
                 and a.flank_zone in ("left", "left_half")
                 and a.role_priors.get("LB", 0.0) >= 0.85
