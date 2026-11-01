@@ -679,16 +679,77 @@ class TacticalPipelineRunner:
                         else:
                             raise
 
-                    # Physical video freeze frame index (right before contact, synchronized to K = K_video)
+                    # Physical video freeze frame index (verified by Autonomous Tactical Frame Intelligence Gate)
                     b1_val = locked_beats.get("beat_1_setup")
                     b1_ms = b1_val.get("duration_ms", 2000) if isinstance(b1_val, dict) else 2000
                     b1_sec = b1_ms / 1000.0
                     fps_val = vision_data.get("fps", 30) or 30
                     beat_1_frames = int(math.ceil((b1_sec + 0.15) * fps_val))
 
-                    K_video = getattr(TacticalVisionEngine, "CLIP_TARGETS", {}).get(cid, {}).get("k_video", beat_1_frames)
+                    # Prefer the verified tactical frame from ClipExtractor / VisionEngine over blind beat_1_frames
+                    K_video = int(
+                        extracted_clip.get("cause_frame_idx")
+                        or vision_data.get("cause_frame_idx")
+                        or getattr(TacticalVisionEngine, "CLIP_TARGETS", {}).get(cid, {}).get("k_video", beat_1_frames)
+                    )
+                    is_clip_tactical = bool(extracted_clip.get("is_tactical", vision_data.get("is_tactical", True)))
 
-                    # Set T_preroll and V_freeze to physical contact frame K = K_video
+                    cause_frame_path = (
+                        extracted_clip.get("cause_frame_path")
+                        or vision_data.get("cause_frame_path")
+                        or str(self.frames_dir / f"{cid}_cause.jpg")
+                    )
+
+                    # Verify that frame K_video passes the Tactical Frame Intelligence Gate; if not, scan clip for best wide frame
+                    from src.vision.shot_classifier import CameraShotClassifier, ShotType
+                    freeze_frame_b64 = None
+                    if vid_file and Path(vid_file).is_file() and cause_frame_path:
+                        cap = cv2.VideoCapture(str(vid_file))
+                        if cap.isOpened():
+                            cap.set(cv2.CAP_PROP_POS_FRAMES, K_video)
+                            ret_f, f_img = cap.read()
+                            cap.release()
+                            if ret_f and f_img is not None:
+                                st_k, metrics_k = CameraShotClassifier.classify(f_img)
+                                if st_k == ShotType.CLOSE_UP:
+                                    logger.warning(
+                                        f"[Tactical Intelligence Gate] Frame {K_video} in {cid} rejected ({metrics_k.get('rejection_reasons')}). "
+                                        f"Scanning clip for highest-interest wide tactical frame..."
+                                    )
+                                    temp_ext = ClipExtractor(
+                                        time_indexer=self.time_indexer or MatchTimeIndexer(),
+                                        media_source=str(vid_file),
+                                        output_dir=str(self.clips_dir),
+                                        frames_dir=str(self.frames_dir),
+                                    )
+                                    best_tac = temp_ext.extract_tactical_keyframe(
+                                        clip_path=str(vid_file),
+                                        output_path=str(cause_frame_path),
+                                    )
+                                    if best_tac and best_tac.get("frame_idx") is not None:
+                                        K_video = int(best_tac["frame_idx"])
+                                        is_clip_tactical = True
+                                        f_img = cv2.imread(str(cause_frame_path))
+                                    else:
+                                        is_clip_tactical = False
+                                        logger.warning(
+                                            f"[Tactical Intelligence Gate] No valid wide tactical frame exists in {cid}. "
+                                            f"Disabling freeze & telestration for {cid}."
+                                        )
+                                else:
+                                    is_clip_tactical = True
+
+                                if f_img is not None:
+                                    Path(cause_frame_path).parent.mkdir(parents=True, exist_ok=True)
+                                    cv2.imwrite(str(cause_frame_path), f_img)
+                                    _, buffer = cv2.imencode(".jpg", f_img, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
+                                    freeze_frame_b64 = f"data:image/jpeg;base64,{base64.b64encode(buffer).decode('utf-8')}"
+                                    logger.info(
+                                        f"Saved verified freeze frame for {cid} at frame {K_video} "
+                                        f"(is_tactical={is_clip_tactical}) to {cause_frame_path}"
+                                    )
+
+                    # Set T_preroll and V_freeze to verified frame K = K_video
                     K = K_video
                     video_freeze_frame = K
                     pre_roll_duration_frames = K
@@ -696,24 +757,32 @@ class TacticalPipelineRunner:
                     cause_frame_idx = K
                     adjusted_c_idx = K
 
-                    vision_data["video_freeze_frame"] = K
-                    vision_data["videoFreezeFrame"] = K
+                    vision_data["is_tactical"] = is_clip_tactical
+                    vision_data["is_close_up"] = not is_clip_tactical
+                    vision_data["video_freeze_frame"] = K if is_clip_tactical else None
+                    vision_data["videoFreezeFrame"] = K if is_clip_tactical else None
                     vision_data["pre_roll_duration_frames"] = K
                     vision_data["preRollDurationFrames"] = K
                     vision_data["cause_frame_idx"] = K
                     vision_data["causeFrameIdx"] = K
-                    vision_data["freeze_frame"] = K
+                    vision_data["freeze_frame"] = K if is_clip_tactical else None
+                    if not is_clip_tactical:
+                        vision_data["freeze_frames"] = 0
                     if clip_video_frames > 0:
                         vision_data["actual_video_frames"] = clip_video_frames
                     if "cause_telestration" in vision_data and isinstance(vision_data["cause_telestration"], dict):
                         ctel = vision_data["cause_telestration"]
-                        ctel["video_freeze_frame"] = K
-                        ctel["videoFreezeFrame"] = K
+                        ctel["is_tactical"] = is_clip_tactical
+                        ctel["is_close_up"] = not is_clip_tactical
+                        ctel["video_freeze_frame"] = K if is_clip_tactical else None
+                        ctel["videoFreezeFrame"] = K if is_clip_tactical else None
                         ctel["pre_roll_duration_frames"] = K
                         ctel["preRollDurationFrames"] = K
                         ctel["cause_frame_idx"] = K
                         ctel["causeFrameIdx"] = K
-                        ctel["freeze_frame"] = K
+                        ctel["freeze_frame"] = K if is_clip_tactical else None
+                        if not is_clip_tactical:
+                            ctel["freeze_frames"] = 0
                         ctel["step_1_ms"] = locked_beats.get("step_1_ms")
                         ctel["step_2_ms"] = locked_beats.get("step_2_ms")
                         ctel["step_3_ms"] = locked_beats.get("step_3_ms")
@@ -730,35 +799,19 @@ class TacticalPipelineRunner:
                         ctel["step_boundaries_frames"] = locked_beats.get("step_boundaries_frames")
                         if "beat_2_steps" in locked_beats:
                             ctel["beat_2_steps"] = locked_beats["beat_2_steps"]
-                    locked_beats["video_freeze_frame"] = K
-                    locked_beats["videoFreezeFrame"] = K
+                    locked_beats["is_tactical"] = is_clip_tactical
+                    locked_beats["is_close_up"] = not is_clip_tactical
+                    locked_beats["video_freeze_frame"] = K if is_clip_tactical else None
+                    locked_beats["videoFreezeFrame"] = K if is_clip_tactical else None
                     locked_beats["pre_roll_duration_frames"] = K
                     locked_beats["preRollDurationFrames"] = K
                     locked_beats["cause_frame_idx"] = K
                     locked_beats["causeFrameIdx"] = K
-                    locked_beats["freeze_frame"] = K
+                    locked_beats["freeze_frame"] = K if is_clip_tactical else None
+                    if not is_clip_tactical and isinstance(locked_beats.get("beat_2_cause"), dict):
+                        locked_beats["beat_2_cause"]["freeze_frames"] = 0
 
-                    # Re-save cause_frame_path ({cid}_cause.jpg) from video at exact freeze_frame index K
-                    cause_frame_path = (
-                        extracted_clip.get("cause_frame_path")
-                        or vision_data.get("cause_frame_path")
-                        or str(self.frames_dir / f"{cid}_cause.jpg")
-                    )
-                    freeze_frame_b64 = None
-                    if vid_file and Path(vid_file).is_file() and cause_frame_path:
-                        cap = cv2.VideoCapture(str(vid_file))
-                        if cap.isOpened():
-                            cap.set(cv2.CAP_PROP_POS_FRAMES, K)
-                            ret_f, f_img = cap.read()
-                            if ret_f and f_img is not None:
-                                Path(cause_frame_path).parent.mkdir(parents=True, exist_ok=True)
-                                cv2.imwrite(str(cause_frame_path), f_img)
-                                _, buffer = cv2.imencode(".jpg", f_img, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
-                                freeze_frame_b64 = f"data:image/jpeg;base64,{base64.b64encode(buffer).decode('utf-8')}"
-                                logger.info(f"Re-saved cause freeze frame for {cid} at frame {K} to {cause_frame_path} and encoded Base64")
-                            cap.release()
-
-                    if freeze_frame_b64:
+                    if freeze_frame_b64 and is_clip_tactical:
                         vision_data["freeze_frame_b64"] = freeze_frame_b64
                         vision_data["freezeFrameUrl"] = freeze_frame_b64
                         vision_data["freeze_frame_url"] = freeze_frame_b64
@@ -832,20 +885,29 @@ class TacticalPipelineRunner:
             if actual_clip_video_frames <= 0 and sc.get("actual_video_frames"):
                 actual_clip_video_frames = int(sc.get("actual_video_frames"))
 
-            # Physical video freeze frame vs pre-roll duration: K = K_video (decoupled from beat_1_frames)
+            # Physical video freeze frame vs pre-roll duration: K = K_video (verified by Tactical Frame Intelligence Gate)
             b1_sec = b1_ms / 1000.0
             beat_1_frames = int(math.ceil((b1_sec + 0.15) * 30))
             b2_sec = b2_ms / 1000.0
             beat_2_frames = int(math.ceil(b2_sec * 30))
 
-            K_video = getattr(TacticalVisionEngine, "CLIP_TARGETS", {}).get(cid, {}).get("k_video", beat_1_frames)
-            freeze_end_frame = max(K_video, beat_1_frames) + beat_2_frames + 12
-            freeze_frames = freeze_end_frame - K_video
+            is_clip_tactical = bool(sc.get("is_tactical", sc.get("cause_telestration", {}).get("is_tactical", True)))
+            K_video = int(
+                sc.get("cause_frame_idx")
+                or sc.get("video_freeze_frame")
+                or getattr(TacticalVisionEngine, "CLIP_TARGETS", {}).get(cid, {}).get("k_video", beat_1_frames)
+            )
+            if is_clip_tactical:
+                freeze_end_frame = max(K_video, beat_1_frames) + beat_2_frames + 12
+                freeze_frames = freeze_end_frame - K_video
+            else:
+                freeze_end_frame = K_video
+                freeze_frames = 0
 
             K = K_video
-            video_freeze_frame = K
+            video_freeze_frame = K if is_clip_tactical else None
             pre_roll_duration_frames = K
-            freeze_frame = K
+            freeze_frame = K if is_clip_tactical else None
             cause_frame_idx = K
 
             b3_sec = b3_ms / 1000.0
@@ -907,7 +969,7 @@ class TacticalPipelineRunner:
                 try:
                     cap = cv2.VideoCapture(str(vid_path))
                     if cap.isOpened():
-                        cap.set(cv2.CAP_PROP_POS_FRAMES, freeze_frame)
+                        cap.set(cv2.CAP_PROP_POS_FRAMES, K)
                         ret_f, f_img = cap.read()
                         if ret_f and f_img is not None:
                             cv2.imwrite(str(target_frame_disk), f_img, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
@@ -915,23 +977,25 @@ class TacticalPipelineRunner:
                 except Exception:
                     pass
 
-            freeze_frame_url = f"http://127.0.0.1:3000/assets/frames/{frame_name}"
-            fg_mask_url = sc.get("fg_mask_url") or f"http://127.0.0.1:3000/assets/frames/{cid}_fg_mask.png"
+            freeze_frame_url = f"http://127.0.0.1:3000/assets/frames/{frame_name}" if is_clip_tactical else None
+            fg_mask_url = (sc.get("fg_mask_url") or f"http://127.0.0.1:3000/assets/frames/{cid}_fg_mask.png") if is_clip_tactical else None
 
             cause_tel = dict(sc.get("cause_telestration", {}))
-            cause_tel["video_freeze_frame"] = K
-            cause_tel["videoFreezeFrame"] = K
-            cause_tel["pre_roll_duration_frames"] = K
-            cause_tel["preRollDurationFrames"] = K
+            cause_tel["is_tactical"] = is_clip_tactical
+            cause_tel["is_close_up"] = not is_clip_tactical
+            cause_tel["video_freeze_frame"] = video_freeze_frame
+            cause_tel["videoFreezeFrame"] = video_freeze_frame
+            cause_tel["pre_roll_duration_frames"] = pre_roll_duration_frames
+            cause_tel["preRollDurationFrames"] = pre_roll_duration_frames
             cause_tel["cause_frame_idx"] = K
             cause_tel["causeFrameIdx"] = K
-            cause_tel["freeze_frame"] = K
+            cause_tel["freeze_frame"] = freeze_frame
             cause_tel["freeze_frames"] = freeze_frames
             cause_tel["freezeFrameUrl"] = freeze_frame_url
             cause_tel["freeze_frame_url"] = freeze_frame_url
             cause_tel["show_score_badge"] = False  # Suppress fake top-right score pill
             t_map = sc.get("tracks_per_frame", {})
-            if isinstance(t_map, dict):
+            if isinstance(t_map, dict) and is_clip_tactical:
                 c_orig = sc.get("cause_frame_idx")
                 if c_orig is not None and str(c_orig) in t_map and str(K) not in t_map:
                     t_map[str(K)] = t_map[str(c_orig)]
@@ -1011,6 +1075,10 @@ class TacticalPipelineRunner:
                 "type": "clip",
                 "url": clip_url,
                 "videoUrl": clip_url,
+                "is_tactical": is_clip_tactical,
+                "isTactical": is_clip_tactical,
+                "is_close_up": not is_clip_tactical,
+                "isCloseUp": not is_clip_tactical,
                 "is_warped": True,
                 "isWarped": True,
                 "warped_video_url": clip_url,
@@ -1018,6 +1086,10 @@ class TacticalPipelineRunner:
                 "freezeFrameUrl": freeze_frame_url,
                 "freeze_frame_url": freeze_frame_url,
                 "telestration": {
+                    "is_tactical": is_clip_tactical,
+                    "isTactical": is_clip_tactical,
+                    "is_close_up": not is_clip_tactical,
+                    "isCloseUp": not is_clip_tactical,
                     "freezeFrameUrl": freeze_frame_url,
                     "freeze_frame_url": freeze_frame_url,
                 },

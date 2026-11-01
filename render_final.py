@@ -620,10 +620,14 @@ def main():
         b2_ms = beats.get("beat_2_cause", {}).get("duration_ms", 5400) if isinstance(beats.get("beat_2_cause"), dict) else 5400
         b3_ms = beats.get("beat_3_effect", {}).get("duration_ms", 4200) if isinstance(beats.get("beat_3_effect"), dict) else 4200
 
-        # Physical video freeze frame vs pre-roll duration: K = K_video
+        # Physical video freeze frame vs pre-roll duration: K = K_video (verified by Tactical Frame Intelligence Gate)
         K = K_video
+        is_clip_tactical = bool(sc.get("is_tactical", True))
 
-        # Re-save cause_frame_path ({cid}_cause.jpg) from video at exact freeze_frame index K and encode Base64 data URI
+        # Re-save cause_frame_path ({cid}_cause.jpg) from video at verified freeze_frame index K and encode Base64 data URI
+        from src.vision.shot_classifier import CameraShotClassifier, ShotType
+        from src.ingestion.clip_extractor import ClipExtractor
+        from src.ingestion.time_indexer import MatchTimeIndexer
         frame_path = sc.get("cause_frame_path") or sc.get("freeze_frame_path") or f"F:/DockerRenders/assets/frames/{cid}_cause.jpg"
         freeze_frame_b64 = None
         if vid_path and Path(vid_path).is_file() and frame_path:
@@ -631,13 +635,30 @@ def main():
             if cap.isOpened():
                 cap.set(cv2.CAP_PROP_POS_FRAMES, K)
                 ret_f, f_img = cap.read()
-                if ret_f and f_img is not None:
-                    Path(frame_path).parent.mkdir(parents=True, exist_ok=True)
-                    cv2.imwrite(str(frame_path), f_img)
-                    _, buffer = cv2.imencode(".jpg", f_img, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
-                    freeze_frame_b64 = f"data:image/jpeg;base64,{base64.b64encode(buffer).decode('utf-8')}"
-                    print(f"Re-saved cause freeze frame for {cid} at frame {K} to {frame_path} and encoded Base64 URI")
                 cap.release()
+                if ret_f and f_img is not None:
+                    st_k, metrics_k = CameraShotClassifier.classify(f_img)
+                    if st_k == ShotType.CLOSE_UP:
+                        print(f"[Tactical Intelligence Gate] Frame {K} in {cid} rejected ({metrics_k.get('rejection_reasons')}). Scanning clip for wide tactical frame...")
+                        temp_ext = ClipExtractor(time_indexer=MatchTimeIndexer(), media_source=str(vid_path))
+                        best_tac = temp_ext.extract_tactical_keyframe(clip_path=str(vid_path), output_path=str(frame_path))
+                        if best_tac and best_tac.get("frame_idx") is not None:
+                            K = int(best_tac["frame_idx"])
+                            K_video = K
+                            is_clip_tactical = True
+                            f_img = cv2.imread(str(frame_path))
+                        else:
+                            is_clip_tactical = False
+                            print(f"[Tactical Intelligence Gate] No valid wide tactical frame in {cid}. Suppressing freeze & telestration.")
+                    else:
+                        is_clip_tactical = True
+
+                    if f_img is not None:
+                        Path(frame_path).parent.mkdir(parents=True, exist_ok=True)
+                        cv2.imwrite(str(frame_path), f_img)
+                        _, buffer = cv2.imencode(".jpg", f_img, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
+                        freeze_frame_b64 = f"data:image/jpeg;base64,{base64.b64encode(buffer).decode('utf-8')}"
+                        print(f"Saved verified cause freeze frame for {cid} at frame {K} (is_tactical={is_clip_tactical}) to {frame_path}")
 
         # Step 2 & 3: Subtle Elastic Speed-Ramping Engine & Pre-Warped Video Pipeline
         src_dur_sec = (actual_video_frames / 30.0) if actual_video_frames > 0 else 10.0
@@ -648,6 +669,7 @@ def main():
             cause_frame_idx=K,
             source_fps=30.0,
             candidate_segments=candidate_segs,
+            is_tactical=is_clip_tactical,
         )
 
         speed_segments = elastic_sol["speed_segments"]

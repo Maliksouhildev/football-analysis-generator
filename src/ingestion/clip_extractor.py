@@ -806,14 +806,15 @@ class ClipExtractor:
         effect_frame_path = self.frames_dir / f"{clip_id}_effect.jpg"
 
         # Autonomous High-Terrain Tactical Keyframe Selector:
-        # Evaluates candidate frames across the entire clip using CameraShotClassifier and discrete Laplacian sharpness.
-        # Rejects low-angle replays, player face close-ups, coaches complaining on bench, and motion blur.
+        # Evaluates candidate frames across the entire clip using CameraShotClassifier, tactical interest score,
+        # camera motion stability, and discrete Laplacian sharpness.
+        # Rejects low-angle replays, player face close-ups, bench/substitution shots, tight 1v1 touchline zooms, and motion blur.
         tactical_info = self.extract_tactical_keyframe(
             clip_path=str(clip_path),
             output_path=str(cause_frame_path),
-            min_turf=0.40,
-            min_players=4,
-            max_player_height=0.22,
+            min_turf=0.45,
+            min_players=5,
+            max_player_height=0.23,
             min_sharpness=55.0,
         )
 
@@ -823,20 +824,19 @@ class ClipExtractor:
             is_wide_tactical = True
             logger.info(
                 f"Autonomous tactical keyframe selected for {clip_id} at {cause_offset:.2f}s "
-                f"(score={tactical_info.get('tactical_score')}, sharpness={tactical_info.get('sharpness_score')})"
+                f"(score={tactical_info.get('tactical_score')}, interest={tactical_info.get('tactical_interest_score')}, "
+                f"sharpness={tactical_info.get('sharpness_score')})"
             )
         else:
-            if event_schema.get("video_freeze_frame") is not None or event_schema.get("freeze_frame") is not None or event_schema.get("cause_frame_idx") is not None:
-                c_override = int(event_schema.get("video_freeze_frame") or event_schema.get("freeze_frame") or event_schema.get("cause_frame_idx"))
-                cause_offset = max(0.0, min(actual_dur - 0.5, c_override / float(actual_fps)))
-
+            # No frame in this clip passed the Tactical Frame Intelligence Gate:
+            # Extract reference thumbnail for diagnostics only, and strictly mark is_tactical=False & is_close_up=True
+            # so downstream stages NEVER freeze the video or draw telestration on this clip.
             self.extract_frame_at_index(str(clip_path), round(cause_offset * actual_fps), str(cause_frame_path))
-            try:
-                from src.vision.shot_classifier import CameraShotClassifier, ShotType
-                st, m = CameraShotClassifier.classify(str(cause_frame_path))
-                is_wide_tactical = (st == ShotType.WIDE_TACTICAL)
-            except Exception:
-                is_wide_tactical = cause_is_wide
+            is_wide_tactical = False
+            logger.warning(
+                f"[Tactical Intelligence Gate] No valid wide tactical frame found in {clip_id}. "
+                f"Suppressing freeze-frame & telestration (is_tactical=False)."
+            )
 
         cause_frame_idx = round(cause_offset * actual_fps)
         effect_frame_idx = round(effect_offset * actual_fps)
@@ -877,9 +877,11 @@ class ClipExtractor:
             "cause_grass_ratio": cause_grass,
             "effect_grass_ratio": effect_grass,
             "is_tactical": is_wide_tactical,
+            "is_close_up": not is_wide_tactical,
             "fps": actual_fps,
             "cause_frame_idx": cause_frame_idx,
-            "video_freeze_frame": cause_frame_idx,
+            "video_freeze_frame": cause_frame_idx if is_wide_tactical else None,
+            "freeze_frames": None if is_wide_tactical else 0,
             "pre_roll_duration_frames": cause_frame_idx,
             "effect_frame_idx": effect_frame_idx,
             "climax_hook_window": climax_hook,
@@ -891,15 +893,16 @@ class ClipExtractor:
         clip_path: str,
         output_path: str,
         sample_offsets: Optional[List[float]] = None,
-        min_turf: float = 0.40,
-        min_players: int = 4,
-        max_player_height: float = 0.22,
-        min_sharpness: float = 75.0,
+        min_turf: float = 0.45,
+        min_players: int = 5,
+        max_player_height: float = 0.23,
+        min_sharpness: float = 55.0,
     ) -> Optional[Dict[str, Any]]:
         """
         Samples candidate frames across the clip and evaluates each using CameraShotClassifier
-        and discrete Laplacian sharpness. Selects the highest-scoring wide tactical frame.
-        Returns None if no candidate qualifies (e.g. pure close-up replay, tight duel, or blurry).
+        (Multi-Factor Tactical Interest Score), camera pan stability, and discrete Laplacian sharpness.
+        Selects the highest-scoring wide tactical frame.
+        Returns None if no candidate qualifies (e.g. close-up replay, bench/substitution shot, tight sideline zoom, or blurry).
         """
         out_p = Path(output_path).resolve()
         out_p.parent.mkdir(parents=True, exist_ok=True)
@@ -910,90 +913,98 @@ class ClipExtractor:
 
         from src.vision.shot_classifier import CameraShotClassifier, ShotType
 
-        # Probe clip duration
-        dur = 6.0
-        try:
-            cmd = [
-                "ffprobe", "-v", "error",
-                "-show_entries", "format=duration",
-                "-of", "default=noprint_wrappers=1:nokey=1",
-                str(clip_p),
-            ]
-            res = subprocess.run(cmd, capture_output=True, text=True, check=True)
-            dur = float(res.stdout.strip())
-        except Exception:
-            pass
+        cap = cv2.VideoCapture(str(clip_p))
+        if not cap.isOpened():
+            return None
+
+        fps = float(cap.get(cv2.CAP_PROP_FPS) or 30.0)
+        if fps <= 0:
+            fps = 30.0
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+        dur = total_frames / fps if total_frames > 0 else 6.0
 
         if sample_offsets is None:
-            # Sample candidate high-terrain frames across the entire clip with fine 0.45s resolution
-            sample_offsets = [round(t, 2) for t in np.arange(0.6, max(1.2, dur - 0.6), 0.45)]
+            start_s = min(0.75, dur * 0.15)
+            end_s = max(start_s + 0.3, dur - min(0.9, dur * 0.15))
+            sample_offsets = [round(float(t), 2) for t in np.arange(start_s, end_s, 0.30)]
             if not sample_offsets:
-                sample_offsets = [min(dur / 2.0, 1.5)]
+                sample_offsets = [round(dur * 0.4, 2)]
 
         best_score = -1.0
         best_cand: Optional[Dict[str, Any]] = None
-        best_temp_path: Optional[str] = None
+        best_img: Optional[np.ndarray] = None
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            for i, off in enumerate(sample_offsets):
-                cand_file = os.path.join(tmp_dir, f"cand_{i:02d}.jpg")
-                cmd = [
-                    self.ffmpeg_bin, "-y",
-                    "-ss", f"{off:.3f}",
-                    "-i", str(clip_p),
-                    "-frames:v", "1",
-                    "-q:v", "2",
-                    cand_file,
-                ]
-                subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                if not os.path.exists(cand_file):
+        for off in sample_offsets:
+            f_idx = max(0, min(max(0, total_frames - 1), int(round(off * fps))))
+            # Also read f_idx - 2 to measure instantaneous camera pan / cut velocity
+            prev_idx = max(0, f_idx - 2)
+            cap.set(cv2.CAP_PROP_POS_FRAMES, prev_idx)
+            ret_p, prev_frame = cap.read()
+            if f_idx != prev_idx:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, f_idx)
+                ret, img = cap.read()
+            else:
+                ret, img = ret_p, prev_frame
+
+            if not ret or img is None:
+                continue
+
+            # Measure camera stability (reject frames inside whip-pans or broadcast cuts)
+            mean_luma_diff = 0.0
+            if ret_p and prev_frame is not None and prev_frame.shape == img.shape and f_idx != prev_idx:
+                g1 = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
+                g2 = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                mean_luma_diff = float(np.mean(cv2.absdiff(g1, g2)))
+                if mean_luma_diff > 18.0:
                     continue
 
-                try:
-                    shot_type, metrics = CameraShotClassifier.classify(
-                        cand_file,
-                        turf_threshold=min_turf,
-                        max_player_height_threshold=max_player_height,
-                    )
-                    if shot_type == ShotType.CLOSE_UP:
-                        continue
-                    if metrics.get("valid_players", 0) < min_players:
-                        continue
-
-                    img = cv2.imread(cand_file)
-                    if img is None:
-                        continue
-                    sharp = calculate_sharpness_score(img, mask_scoreboard=True)
-                    if sharp < min_sharpness:
-                        continue
-
-                    # Composite tactical quality score
-                    turf_ratio = metrics.get("turf_ratio", 0.5)
-                    players = metrics.get("valid_players", 5)
-                    score = sharp * (1.0 + turf_ratio) * min(10, players)
-
-                    if score > best_score:
-                        best_score = score
-                        best_cand = {
-                            "is_tactical": True,
-                            "offset_in_clip": off,
-                            "sharpness_score": round(sharp, 2),
-                            "tactical_score": round(score, 2),
-                            "metrics": metrics,
-                        }
-                        best_temp_path = cand_file
-                except Exception as e:
-                    logger.debug(f"Candidate frame evaluation error at {off}s: {e}")
-
-            if best_temp_path and os.path.exists(best_temp_path) and best_cand:
-                shutil.copy2(best_temp_path, str(out_p))
-                best_cand["frame_path"] = str(out_p)
-                logger.info(
-                    f"Selected tactical keyframe at offset {best_cand['offset_in_clip']}s "
-                    f"(sharpness={best_cand['sharpness_score']}, players={best_cand['metrics'].get('valid_players')}, "
-                    f"turf={best_cand['metrics'].get('turf_ratio')})"
+            try:
+                shot_type, metrics = CameraShotClassifier.classify(
+                    img,
+                    turf_threshold=min_turf,
+                    max_player_height_threshold=max_player_height,
+                    min_players=min_players,
                 )
-                return best_cand
+                if shot_type == ShotType.CLOSE_UP or not metrics.get("is_tactical", False):
+                    continue
+
+                sharp = calculate_sharpness_score(img, mask_scoreboard=True)
+                if sharp < min_sharpness:
+                    continue
+
+                interest = float(metrics.get("tactical_interest_score", 50.0))
+                stability_bonus = max(0.55, 1.0 - (mean_luma_diff / 25.0))
+                rel_pos = off / max(1.0, dur)
+                temporal_weight = 1.15 if (0.20 <= rel_pos <= 0.68) else 0.92
+                score = interest * (sharp ** 0.45) * stability_bonus * temporal_weight
+
+                if score > best_score:
+                    best_score = score
+                    best_cand = {
+                        "is_tactical": True,
+                        "offset_in_clip": off,
+                        "frame_idx": f_idx,
+                        "sharpness_score": round(sharp, 2),
+                        "tactical_interest_score": round(interest, 2),
+                        "tactical_score": round(score, 2),
+                        "camera_motion_diff": round(mean_luma_diff, 2),
+                        "metrics": metrics,
+                    }
+                    best_img = img.copy()
+            except Exception as e:
+                logger.debug(f"Candidate frame evaluation error at {off}s: {e}")
+
+        cap.release()
+
+        if best_img is not None and best_cand is not None:
+            cv2.imwrite(str(out_p), best_img, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+            best_cand["frame_path"] = str(out_p)
+            logger.info(
+                f"Selected tactical keyframe at offset {best_cand['offset_in_clip']}s (frame {best_cand['frame_idx']}) "
+                f"[interest={best_cand['tactical_interest_score']}, sharpness={best_cand['sharpness_score']}, "
+                f"players={best_cand['metrics'].get('valid_players')}, turf={best_cand['metrics'].get('turf_ratio')}]"
+            )
+            return best_cand
 
         return None
 

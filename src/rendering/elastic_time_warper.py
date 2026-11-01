@@ -61,11 +61,14 @@ class ElasticTimeWarper:
         cause_frame_idx: int,
         source_fps: float = 30.0,
         candidate_segments: Optional[List[Dict[str, Any]]] = None,
+        is_tactical: bool = True,
     ) -> Dict[str, Any]:
         """
         Audio-Driven Auto-Elasticity Solver:
         Solves continuous speed regimes and exact output frame counts such that:
-        - Freeze frame occurs at cause_frame_idx for the duration of beat_2_cause audio.
+        - Freeze frame occurs at cause_frame_idx for the duration of beat_2_cause audio (when is_tactical=True).
+        - When is_tactical=False (e.g. close-up, bench/substitution shot, or tight touchline zoom),
+          freeze_duration_frames = 0 and video plays continuously without freezing.
         - Video speed ramps r_i = D_video / D_audio are clamped within natural broadcast bounds:
           * FAST_TRANSIT: 1.25x to 1.35x
           * NORMAL_FLOW: 1.00x
@@ -73,14 +76,14 @@ class ElasticTimeWarper:
           * FREEZE_HOLD: 0.00x
         - Total output frame count matches master voiceover WAV duration:
           abs(video_frames - audio_frames) <= 1
-        - Freeze frame has ZERO drift: t_source(F_out) == cause_frame_idx / source_fps
-          for every frame in the freeze window.
-        - Source frame cause_frame_idx maps exactly to freeze_start_frame.
         """
         # 1. Resolve master audio durations
         b1_ms = beats.get("beat_1_setup", {}).get("duration_ms", 2000) if isinstance(beats.get("beat_1_setup"), dict) else 2000
         b2_ms = beats.get("beat_2_cause", {}).get("duration_ms", 5400) if isinstance(beats.get("beat_2_cause"), dict) else 5400
         b3_ms = beats.get("beat_3_effect", {}).get("duration_ms", 4200) if isinstance(beats.get("beat_3_effect"), dict) else 4200
+
+        if beats.get("is_tactical") is False or (isinstance(beats.get("beat_2_cause"), dict) and beats["beat_2_cause"].get("freeze_frames") == 0):
+            is_tactical = False
 
         d_audio_1 = max(0.6, float(b1_ms) / 1000.0)
         d_audio_2 = max(1.5, float(b2_ms) / 1000.0)
@@ -89,9 +92,9 @@ class ElasticTimeWarper:
         # Exact total target audio frames partitioned per beat with breathing buffers
         f1_frames = int(math.ceil(d_audio_1 * self.fps))
         b2_frames_exact = int(math.ceil(d_audio_2 * self.fps))
-        f2_frames = b2_frames_exact + 12  # Guarantees Beat 2 lead-in (+6f) and post-speech buffer (+6f)
+        f2_frames = (b2_frames_exact + 12) if is_tactical else 0  # Zero freeze when clip is non-tactical / close-up
         b3_frames_exact = int(math.ceil(d_audio_3 * self.fps))
-        f3_frames = max(15, b3_frames_exact + 6)  # Guarantees post-roll breathing buffer (+6f)
+        f3_frames = max(15, b3_frames_exact + 6 + (0 if is_tactical else (b2_frames_exact + 12)))
         total_target_frames = f1_frames + f2_frames + f3_frames
 
         # 2. Source video landmarks
