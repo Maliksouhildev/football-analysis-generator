@@ -782,17 +782,24 @@ class MatchLineupResolver:
         home_starters = cls._generate_default_starters(home_team, is_home=True)
         away_starters = cls._generate_default_starters(away_team, is_home=False)
 
-        if "madrid" in str(away_team).lower() and effective_minute >= 80:
-            for i, p in enumerate(away_starters):
-                if "mbapp" in str(p.get("name", "")).lower():
-                    away_starters[i] = {
-                        "name": "Endrick",
-                        "short_name": "Endrick (CF)",
-                        "number": 16,
-                        "role": "CF",
-                        "is_gk": False,
+        # Substitutions / red cards come from the live ground-truth timeline (never hardcoded).
+        from src.scraper.live_ground_truth import MatchInstant, get_registered_ground_truth
+        _gt = get_registered_ground_truth()
+        if _gt is not None:
+            _instant = MatchInstant.from_clock(match_minute, 0, period=period)
+            for _side, _bucket in (("home", home_starters), ("away", away_starters)):
+                _on = sorted(_gt.on_pitch(_instant, _side), key=lambda p: (not p.is_gk, p.number or 99))
+                _bucket[:] = [
+                    {
+                        "name": p.name,
+                        "short_name": p.short_name,
+                        "number": p.number or 0,
+                        "role": p.position or ("GK" if p.is_gk else "CM"),
+                        "is_gk": p.is_gk,
+                        "player_id": p.player_id,
                     }
-                    break
+                    for p in _on
+                ] or _bucket
 
         slots_home = FORMATION_TOPOLOGY_TEMPLATES.get(home_formation, FORMATION_TOPOLOGY_TEMPLATES["4-3-3"])
         for p in home_starters:
@@ -1168,93 +1175,45 @@ class MatchLineupResolver:
 
     @classmethod
     def _generate_default_starters(cls, team_name: str, is_home: bool) -> List[Dict[str, Any]]:
-        t_low = str(team_name).lower()
-        if "barcelona" in t_low or "barca" in t_low or "bar" in t_low or "fcb" in t_low:
-            barca_players = [
-                ("Iñaki Peña", 13, "GK", True),
-                ("Jules Koundé", 23, "RB", False),
-                ("Pau Cubarsí", 2, "RCB", False),
-                ("Iñigo Martínez", 5, "LCB", False),
-                ("Alejandro Balde", 3, "LB", False),
-                ("Marc Casadó", 17, "DM", False),
-                ("Pedri", 8, "CM", False),
-                ("Dani Olmo", 20, "AM", False),
-                ("Lamine Yamal", 19, "RW", False),
-                ("Robert Lewandowski", 9, "CF", False),
-                ("Raphinha", 11, "LW", False),
-            ]
-            return [
-                {
-                    "name": name,
-                    "short_name": f"{name.split()[-1]} ({role})",
-                    "number": num,
-                    "role": role,
-                    "is_gk": is_gk,
-                }
-                for name, num, role, is_gk in barca_players
-            ]
-        if "madrid" in t_low or "rma" in t_low:
-            madrid_players = [
-                ("Thibaut Courtois", 1, "GK", True),
-                ("Lucas Vázquez", 17, "RB", False),
-                ("Éder Militão", 3, "RCB", False),
-                ("Antonio Rüdiger", 22, "LCB", False),
-                ("Ferland Mendy", 23, "LB", False),
-                ("Federico Valverde", 8, "CM", False),
-                ("Aurélien Tchouaméni", 14, "DM", False),
-                ("Eduardo Camavinga", 6, "CM", False),
-                ("Jude Bellingham", 5, "AM", False),
-                ("Kylian Mbappé", 9, "CF", False),
-                ("Vinícius Júnior", 7, "LW", False),
-            ]
-            return [
-                {
-                    "name": name,
-                    "short_name": f"{name.split()[-1]} ({role})",
-                    "number": num,
-                    "role": role,
-                    "is_gk": is_gk,
-                }
-                for name, num, role, is_gk in madrid_players
-            ]
-        if "roma" in t_low or "rom" in t_low:
-            roma_players = [
-                ("Pierluigi Gollini", 95, "GK", True),
-                ("Gianluca Mancini", 23, "RCB", False),
-                ("Evan Ndicka", 5, "CB", False),
-                ("Mario Hermoso", 22, "LCB", False),
-                ("Nahuel Molina", 20, "RWB", False),
-                ("Marten de Roon", 15, "DM", False),
-                ("Manu Koné", 17, "CM", False),
-                ("Wesley", 43, "LWB", False),
-                ("Paulo Dybala", 21, "AM", False),
-                ("Matías Soulé", 18, "RW", False),
-                ("Donyell Malen", 14, "CF", False),
-            ]
-            return [
-                {
-                    "name": name,
-                    "short_name": f"{name.split()[-1]} ({role})",
-                    "number": num,
-                    "role": role,
-                    "is_gk": is_gk,
-                }
-                for name, num, role, is_gk in roma_players
-            ]
+        """
+        Starting XI sourced exclusively from the live GroundTruthDictionary (Sportmonks /
+        API-Football). No player data is hardcoded. When no ground truth is registered,
+        anonymous slot placeholders are returned; they carry no real identity and are
+        always rejected by the IdentityGate.
+        """
+        from src.scraper.live_ground_truth import get_registered_ground_truth
+
+        gt = get_registered_ground_truth()
+        if gt is not None:
+            side = "home" if is_home else "away"
+            if team_name and gt.side_of(team_name) in ("home", "away"):
+                side = gt.side_of(team_name)
+            xi = sorted(gt.starting_xi(side), key=lambda p: (not p.is_gk, p.number or 99))
+            if xi:
+                return [
+                    {
+                        "name": p.name,
+                        "short_name": p.short_name,
+                        "number": p.number or 0,
+                        "role": p.position or ("GK" if p.is_gk else "CM"),
+                        "is_gk": p.is_gk,
+                        "player_id": p.player_id,
+                    }
+                    for p in xi
+                ]
 
         roles = ["GK", "RB", "CB", "CB", "LB", "DM", "CM", "AM", "RW", "LW", "CF"]
-        starters = []
-        base_num = 1 if is_home else 13
-        for i, role in enumerate(roles):
-            num = (i + 1) if role == "GK" else (base_num + i)
-            starters.append({
-                "name": f"{team_name} #{num}",
-                "short_name": f"{team_name} #{num} ({role})",
-                "number": num,
+        return [
+            {
+                "name": "",
+                "short_name": role,
+                "number": 0,
                 "role": role,
                 "is_gk": role == "GK",
-            })
-        return starters
+                "unverified_placeholder": True,
+            }
+            for role in roles
+        ]
 
 
 def get_match_context_at_minute(

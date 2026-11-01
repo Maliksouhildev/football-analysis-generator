@@ -225,6 +225,24 @@ Return JSON:
             id_map = {}
             receiver_id = None
 
+        # Verify LLM identifications against Ground Truth Dictionary to eliminate hallucinations
+        from src.scraper.live_ground_truth import IdentityGate, MatchInstant, get_registered_ground_truth
+        gt = fixture.get("_ground_truth") or get_registered_ground_truth()
+        if gt is not None:
+            instant = MatchInstant.from_clock(int(fixture.get("current_minute", 0)), 0)
+            verified_id_map = {}
+            for pid, entry in id_map.items():
+                cand = entry.get("resolved_name") or entry.get("name") or entry.get("number")
+                is_v, v_p, _ = IdentityGate.verify_identity(cand, instant, ground_truth=gt)
+                if is_v and v_p is not None:
+                    entry["resolved_name"] = v_p.name
+                    entry["display_name"] = v_p.short_name
+                    entry["number"] = v_p.number
+                    entry["position"] = v_p.position
+                    entry["team"] = v_p.team_name
+                    verified_id_map[pid] = entry
+            id_map = verified_id_map
+
         # Determine receiver / ball carrier if not established
         ball = detection.get("ball", {})
         if not receiver_id and ball.get("detected") and ball.get("position_norm") and detection["players"]:
@@ -361,6 +379,24 @@ Return JSON:
             id_map = {}
             carrier_id = None
             pred = {}
+
+        # Verify LLM identifications against Ground Truth Dictionary in T0
+        from src.scraper.live_ground_truth import IdentityGate, MatchInstant, get_registered_ground_truth
+        gt = fixture.get("_ground_truth") or get_registered_ground_truth()
+        if gt is not None:
+            instant = MatchInstant.from_clock(int(fixture.get("current_minute", 0)), 0)
+            verified_id_map = {}
+            for pid, entry in id_map.items():
+                cand = entry.get("resolved_name") or entry.get("name") or entry.get("number")
+                is_v, v_p, _ = IdentityGate.verify_identity(cand, instant, ground_truth=gt)
+                if is_v and v_p is not None:
+                    entry["resolved_name"] = v_p.name
+                    entry["display_name"] = v_p.short_name
+                    entry["number"] = v_p.number
+                    entry["position"] = v_p.position
+                    entry["team"] = v_p.team_name
+                    verified_id_map[pid] = entry
+            id_map = verified_id_map
 
         # Resolve any unidentified players via Multi-Cue RosterManager
         for p in detection["players"]:
