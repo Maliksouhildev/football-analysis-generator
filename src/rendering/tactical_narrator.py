@@ -706,11 +706,11 @@ class TacticalNarrator:
         if not has_data_tag and cat_spoken:
             from src.rendering.match_stats_provider import MatchStatsProvider
             stats_p = MatchStatsProvider()
-            telem = self._get_player_telemetry_phrase(stats_p, cat_spoken, "ninety percent pass accuracy")
-            res["beat_2_cause"] = f"{b2_str.rstrip('.')} Backed by {telem}, [match_heatmap:{cat_spoken}] anchors the sequence."
+            telem = TacticalNarrator._get_player_telemetry_phrase(stats_p, cat_spoken, "ninety percent pass accuracy")
+            res["beat_2_cause"] = f"{b2_str.rstrip('.')} Backed by {telem}, [heatmap:{cat_spoken}] anchors the sequence."
             if "beat_2_steps" in res and isinstance(res["beat_2_steps"], dict):
                 s2 = res["beat_2_steps"].get("step_2", "")
-                res["beat_2_steps"]["step_2"] = f"{s2.rstrip('.')} Backed by {telem} [match_heatmap:{cat_spoken}]."
+                res["beat_2_steps"]["step_2"] = f"{s2.rstrip('.')} Backed by {telem} [heatmap:{cat_spoken}]."
 
         return res
 

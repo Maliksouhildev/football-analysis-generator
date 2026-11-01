@@ -184,7 +184,7 @@ class TacticalRenderer:
 
         # 4. Render floating badges on top with leader stems
         for b in resolved_badges:
-            self._draw_player_hud_badge(draw, b)
+            self._draw_player_hud_badge(draw, b, overlay_img=overlay)
 
         # 5. Render Ball Halo (if detected)
         ball = frame_analysis.get("ball", {})
@@ -284,7 +284,7 @@ class TacticalRenderer:
 
         # 4. Render floating badges on top with leader stems
         for b in resolved_badges:
-            self._draw_player_hud_badge(draw, b)
+            self._draw_player_hud_badge(draw, b, overlay_img=overlay)
 
         # 5. Render top broadcast HUD telemetry banner
         metrics = stage_data.get("metrics", {})
@@ -510,11 +510,67 @@ class TacticalRenderer:
         ]
         draw.polygon(core_pts, fill=(*acc, 22))
 
+    def _draw_football_icon(
+        self,
+        draw: ImageDraw.ImageDraw,
+        x: float,
+        y: float,
+        size: int = 14,
+        overlay_img: Optional[Image.Image] = None
+    ) -> None:
+        """Overlays authentic football PNG icon from assets/icons or crisp vector fallback."""
+        icon_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets", "icons", "football.png")
+        if overlay_img is not None and os.path.exists(icon_path):
+            try:
+                ball_img = Image.open(icon_path).convert("RGBA").resize((size, size), Image.Resampling.LANCZOS)
+                overlay_img.alpha_composite(ball_img, dest=(int(x), int(y)))
+                return
+            except Exception:
+                pass
+        # High-contrast procedural vector fallback
+        r = size / 2.0
+        cx, cy = x + r, y + r
+        draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=(255, 255, 255, 255), outline=(20, 20, 20, 255), width=1)
+        pr = r * 0.45
+        pts = [
+            (cx, cy - pr),
+            (cx + pr * 0.95, cy - pr * 0.31),
+            (cx + pr * 0.59, cy + pr * 0.81),
+            (cx - pr * 0.59, cy + pr * 0.81),
+            (cx - pr * 0.95, cy - pr * 0.31),
+        ]
+        draw.polygon(pts, fill=(20, 20, 20, 255))
+
+    def _draw_card_icon(
+        self,
+        draw: ImageDraw.ImageDraw,
+        x: float,
+        y: float,
+        is_red: bool = False,
+        w: int = 10,
+        h: int = 14,
+        overlay_img: Optional[Image.Image] = None
+    ) -> None:
+        """Overlays disciplinary yellow / red card PNG icon or vector card."""
+        icon_name = "red_card.png" if is_red else "yellow_card.png"
+        icon_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets", "icons", icon_name)
+        if overlay_img is not None and os.path.exists(icon_path):
+            try:
+                card_img = Image.open(icon_path).convert("RGBA").resize((w, h), Image.Resampling.LANCZOS)
+                overlay_img.alpha_composite(card_img, dest=(int(x), int(y)))
+                return
+            except Exception:
+                pass
+        fill_col = (239, 68, 68, 255) if is_red else (250, 204, 21, 255)
+        out_col = (185, 28, 28, 255) if is_red else (202, 138, 4, 255)
+        draw.rounded_rectangle([x, y, x + w, y + h], radius=2, fill=fill_col, outline=out_col, width=1)
+
     def _draw_player_hud_badge(
         self,
         draw: ImageDraw.ImageDraw,
         b_info: Any,
-        *legacy_args
+        *legacy_args,
+        overlay_img: Optional[Image.Image] = None
     ):
         """
         Draws sleek modern TV broadcast floating player card:
@@ -548,11 +604,32 @@ class TacticalRenderer:
         num_str = str(res.get("number") or player_data.get("number") or player_data.get("jersey_number") or "-")
         pos_str = sanitize_text(res.get("position") or player_data.get("role") or player_data.get("tactical_role_tag") or player_data.get("tactical_role") or "")
 
-        # Compute badge width cleanly
+        # Discrete events (goals, cards) and official rating from stats API (no guessing)
+        stats = player_data.get("stats") or {}
+        goals = int(player_data.get("goals") or stats.get("goals") or stats.get("Goals") or 0)
+        yellow_cards = int(player_data.get("yellow_cards") or stats.get("yellow_cards") or stats.get("yellowCards") or 0)
+        red_cards = int(player_data.get("red_cards") or stats.get("red_cards") or stats.get("redCards") or 0)
+        rating_val = player_data.get("rating") or stats.get("rating") or stats.get("Rating")
+
+        if goals == 0 and yellow_cards == 0 and not rating_val:
+            try:
+                from src.rendering.match_stats_provider import MatchStatsProvider
+                p_stats = MatchStatsProvider().get_player_stats(display_name)
+                if p_stats:
+                    goals = int(p_stats.get("goals", 0))
+                    yellow_cards = int(p_stats.get("yellow_cards", 0))
+                    red_cards = int(p_stats.get("red_cards", 0))
+                    rating_val = p_stats.get("rating")
+            except Exception:
+                pass
+
+        # Calculate dynamic badge width incorporating discrete event icons and official rating
+        icons_w = (goals * 18) + (yellow_cards * 14) + (red_cards * 14)
+        rating_w = 32 if rating_val else 0
         name_len = len(display_name)
         role_len = len(pos_str)
-        badge_w = max(90, 32 + name_len * 7 + (role_len * 6 + 10 if pos_str else 0) + 12)
-        badge_h = 22
+        badge_w = max(90, 32 + name_len * 7 + (role_len * 6 + 10 if pos_str else 0) + icons_w + rating_w + 14)
+        badge_h = 24
 
         x0 = x - badge_w / 2.0
         y0 = y - badge_h
@@ -564,9 +641,7 @@ class TacticalRenderer:
 
         # 1. Draw Leader Stem connecting badge bottom to player head
         if head_y > y1 + 3:
-            # Subtle anchor stem line
             draw.line([(head_x, head_y), (x, y1)], fill=(*acc, 180), width=1)
-            # Anchor pin dot on player's head
             draw.ellipse([head_x - 2, head_y - 2, head_x + 2, head_y + 2], fill=(255, 255, 255, 240), outline=(*acc, 255), width=1)
 
         # 2. Glassmorphic Drop Shadow and Border
@@ -579,19 +654,41 @@ class TacticalRenderer:
         # 4. Jersey Number Left Pill
         pill_w = 22
         draw.rounded_rectangle([x0 + 2, y0 + 2, x0 + pill_w, y1 - 2], radius=2, fill=(*acc, 255))
-        # Center number text inside pill
         num_offset = 6 if len(num_str) == 1 else 3
-        draw.text((x0 + num_offset, y0 + 3), num_str, fill=(15, 15, 15, 255))
+        draw.text((x0 + num_offset, y0 + 4), num_str, fill=(15, 15, 15, 255))
 
         # 5. Player Name
         name_x = x0 + pill_w + 6
-        draw.text((name_x, y0 + 3), display_name, fill=(255, 255, 255, 255))
+        draw.text((name_x, y0 + 4), display_name, fill=(255, 255, 255, 255))
 
-        # 6. Tactical Role Pill (if available)
+        # 6. Discrete Event Icons (Football PNG icons for goals, card icons for fouls)
+        cur_icon_x = name_x + name_len * 7 + 8
+        for _ in range(goals):
+            self._draw_football_icon(draw, cur_icon_x, y0 + 5, size=14, overlay_img=overlay_img)
+            cur_icon_x += 18
+        for _ in range(yellow_cards):
+            self._draw_card_icon(draw, cur_icon_x, y0 + 5, is_red=False, w=10, h=14, overlay_img=overlay_img)
+            cur_icon_x += 14
+        for _ in range(red_cards):
+            self._draw_card_icon(draw, cur_icon_x, y0 + 5, is_red=True, w=10, h=14, overlay_img=overlay_img)
+            cur_icon_x += 14
+
+        # 7. Official Algorithmic Rating Pill (e.g. 8.4 in green)
+        if rating_val:
+            try:
+                r_num = float(rating_val)
+                r_col = (34, 197, 94, 255) if r_num >= 7.5 else ((132, 204, 22, 255) if r_num >= 7.0 else ((234, 179, 8, 255) if r_num >= 6.5 else (239, 68, 68, 255)))
+                draw.rounded_rectangle([cur_icon_x, y0 + 3, cur_icon_x + 28, y1 - 3], radius=3, fill=r_col)
+                draw.text((cur_icon_x + 4, y0 + 5), f"{r_num:.1f}", fill=(0, 0, 0, 255))
+                cur_icon_x += 32
+            except Exception:
+                pass
+
+        # 8. Tactical Role Pill (if available)
         if pos_str:
             role_x = x1 - (len(pos_str) * 6 + 10)
             draw.rounded_rectangle([role_x, y0 + 3, x1 - 3, y1 - 3], radius=2, fill=(255, 255, 255, 40))
-            draw.text((role_x + 3, y0 + 4), pos_str, fill=(*acc, 255))
+            draw.text((role_x + 3, y0 + 5), pos_str, fill=(*acc, 255))
 
     def _draw_pass_vector(
         self,
@@ -725,3 +822,102 @@ class TacticalRenderer:
 
         svg_parts.append('</svg>')
         return "\n".join(svg_parts)
+
+    def draw_broadcast_player_stat_card(
+        self,
+        draw: ImageDraw.ImageDraw,
+        player_stats: Dict[str, Any],
+        x: float,
+        y: float,
+        card_w: int = 340,
+        card_h: int = 160,
+        overlay_img: Optional[Image.Image] = None
+    ) -> Dict[str, Any]:
+        """
+        Renders an authentic TV broadcast Player Stat Card overlay with:
+        - Official algorithmic match rating pill (e.g. 8.4 in green)
+        - Discrete event football PNG icons (for each goal scored)
+        - Disciplinary card icons (yellow/red cards)
+        - Expected goals (xG), passing metrics, and duels won
+        """
+        x0, y0 = x, y
+        x1, y1 = x + card_w, y + card_h
+
+        # 1. Glassmorphic Backdrop & Neon Accent Border
+        draw.rounded_rectangle([x0 - 2, y0 - 2, x1 + 2, y1 + 2], radius=10, fill=(0, 0, 0, 160))
+        draw.rounded_rectangle([x0, y0, x1, y1], radius=8, fill=(10, 14, 23, 235), outline=(0, 229, 255, 180), width=1)
+
+        # 2. Header: Title & Club
+        club = sanitize_text(player_stats.get("clubName") or player_stats.get("team") or "MATCH TELEMETRY").upper()
+        draw.text((x0 + 16, y0 + 12), f"OFFICIAL MATCH STATS  |  {club}", fill=(0, 229, 255, 230))
+
+        # 3. Player Header: Name, Number, Role
+        p_name = sanitize_text(player_stats.get("playerName") or player_stats.get("name") or "Player")
+        p_num = str(player_stats.get("number") or player_stats.get("jersey_number") or "-")
+        p_role = sanitize_text(player_stats.get("position") or player_stats.get("role") or "MF")
+
+        # Number pill
+        draw.rounded_rectangle([x0 + 16, y0 + 36, x0 + 44, y0 + 58], radius=4, fill=(0, 229, 255, 220))
+        draw.text((x0 + 22, y0 + 40), f"#{p_num}", fill=(10, 14, 23, 255))
+
+        # Player Name & Role
+        draw.text((x0 + 52, y0 + 38), f"{p_name} ({p_role})", fill=(255, 255, 255, 255))
+
+        # Official Rating Pill
+        rating_num = float(player_stats.get("rating", 7.0))
+        r_col = (34, 197, 94, 255) if rating_num >= 7.5 else ((132, 204, 22, 255) if rating_num >= 7.0 else ((234, 179, 8, 255) if rating_num >= 6.5 else (239, 68, 68, 255)))
+        draw.rounded_rectangle([x1 - 58, y0 + 36, x1 - 16, y0 + 58], radius=4, fill=r_col)
+        draw.text((x1 - 50, y0 + 40), f"{rating_num:.1f}", fill=(0, 0, 0, 255))
+
+        # 4. Discrete Event Icons Row (Football PNG icons for goals, cards)
+        goals = int(player_stats.get("goals", 0))
+        yellow_cards = int(player_stats.get("yellow_cards", 0))
+        red_cards = int(player_stats.get("red_cards", 0))
+
+        event_x = x0 + 16
+        event_y = y0 + 68
+
+        if goals > 0 or yellow_cards > 0 or red_cards > 0:
+            draw.text((event_x, event_y), "EVENTS:", fill=(180, 195, 210, 220))
+            event_x += 65
+            for _ in range(goals):
+                self._draw_football_icon(draw, event_x, event_y, size=15, overlay_img=overlay_img)
+                event_x += 20
+            for _ in range(yellow_cards):
+                self._draw_card_icon(draw, event_x, event_y, is_red=False, w=11, h=15, overlay_img=overlay_img)
+                event_x += 16
+            for _ in range(red_cards):
+                self._draw_card_icon(draw, event_x, event_y, is_red=True, w=11, h=15, overlay_img=overlay_img)
+                event_x += 16
+
+        # 5. Stats Metrics Table (xG, Passing, Duels, Interceptions)
+        stats_data = player_stats.get("stats") or {}
+        xg_val = player_stats.get("xg", stats_data.get("xG", 0.0))
+        xg_str = f"{float(xg_val):.2f}"
+        pass_str = str(player_stats.get("passes") or stats_data.get("Passing", "N/A"))
+        duels_str = str(stats_data.get("Duels Won", "N/A"))
+        inter_str = str(stats_data.get("Interceptions", "0"))
+
+        grid_y = y0 + 96
+        draw.line([(x0 + 16, grid_y - 6), (x1 - 16, grid_y - 6)], fill=(255, 255, 255, 40), width=1)
+
+        col_w = (card_w - 32) / 4.0
+        cols = [
+            ("xG", xg_str),
+            ("PASSING", pass_str.split()[0]),
+            ("DUELS", duels_str.split()[0]),
+            ("INTERCEPT", inter_str),
+        ]
+        for i, (label, val) in enumerate(cols):
+            cx = x0 + 16 + i * col_w
+            draw.text((cx, grid_y), label, fill=(150, 165, 185, 220))
+            draw.text((cx, grid_y + 16), val, fill=(255, 255, 255, 255))
+
+        return {
+            "x0": x0, "y0": y0, "x1": x1, "y1": y1,
+            "goals_rendered": goals,
+            "yellow_cards_rendered": yellow_cards,
+            "red_cards_rendered": red_cards,
+            "rating_rendered": rating_num
+        }
+
