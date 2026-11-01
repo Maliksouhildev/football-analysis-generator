@@ -23,7 +23,9 @@ import time
 import urllib.parse
 import urllib.request
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
+
+from src.rendering.player_headshot_service import PlayerHeadshotService
 
 logger = logging.getLogger("rendering.player_asset_manager")
 
@@ -33,8 +35,15 @@ class PlayerAssetManager:
 
     def __init__(self, output_dir: str = r"F:\DockerRenders\assets\players"):
         self.output_dir = Path(output_dir)
-        self.output_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            # Fallback to local project assets if F:\ drive is not mounted
+            self.output_dir = Path(__file__).resolve().parent.parent.parent / "assets" / "players"
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+
         self._last_request_time = 0.0
+        self.headshot_service = PlayerHeadshotService(cache_dir=self.output_dir)
 
     @staticmethod
     def clean_name(name: str) -> str:
@@ -55,13 +64,17 @@ class PlayerAssetManager:
         if not file_path.exists():
             return False
         size = file_path.stat().st_size
-        # Legacy placeholder circles are small files (< 6KB)
-        return size >= 8000
+        return size >= 8000 and self.headshot_service.is_valid_transparent_png(file_path)
 
-    def get_player_portrait(self, player_name: str, team: str = "Football Club") -> Optional[str]:
+    def get_player_portrait_path(
+        self,
+        player_name: str,
+        team: str = "Football Club",
+        frame_crop: Optional[Any] = None,
+    ) -> Optional[Path]:
         """
-        Returns the Remotion-accessible HTTP URL for the player's portrait cutout.
-        Guarantees local caching so Remotion never stalls on external web requests.
+        Returns local absolute Path to the studio-quality transparent PNG player headshot.
+        Uses EA Sports FC CDN primary route, with BiRefNet / rembg neural crop masking fallback.
         """
         if not player_name or not player_name.strip():
             return None
@@ -70,38 +83,33 @@ class PlayerAssetManager:
         slug = self.get_slug(clean_player)
         cached_file = self.output_dir / f"{slug}.png"
 
-        # 1. Check local cache for genuine photo
-        if self.is_valid_real_photo(cached_file):
-            self._sync_to_docker(cached_file, f"{slug}.png")
+        # Resolve via PlayerHeadshotService (EA CDN -> TheSportsDB -> Wikipedia -> Neural BiRefNet/rembg crop)
+        resolved = self.headshot_service.resolve_player_headshot(
+            clean_player,
+            team=team,
+            frame_crop=frame_crop,
+            output_path=cached_file,
+        )
+        if resolved and resolved.is_file():
+            self._sync_to_docker(resolved, f"{slug}.png")
+            return resolved
+        return None
+
+    def get_player_portrait(
+        self,
+        player_name: str,
+        team: str = "Football Club",
+        frame_crop: Optional[Any] = None,
+    ) -> Optional[str]:
+        """
+        Returns the Remotion-accessible HTTP URL for the player's portrait cutout.
+        Guarantees local caching so Remotion never stalls on external web requests.
+        """
+        path = self.get_player_portrait_path(player_name, team=team, frame_crop=frame_crop)
+        if path:
+            slug = self.get_slug(self.clean_name(player_name))
             return f"http://127.0.0.1:3000/assets/players/{slug}.png"
-
-        # 2. Query Wikipedia PageImages (covers virtually all professional players in world football)
-        photo_url = self._lookup_wikipedia(clean_player)
-        if photo_url:
-            success = self._download_and_cache(photo_url, cached_file)
-            if success:
-                logger.info("Acquired official Wikipedia photo for '%s' -> %s (%d bytes)", clean_player, cached_file.name, cached_file.stat().st_size)
-                self._sync_to_docker(cached_file, f"{slug}.png")
-                return f"http://127.0.0.1:3000/assets/players/{slug}.png"
-
-        # 3. Query TheSportsDB
-        cutout_url = self._lookup_thesportsdb(clean_player)
-        if cutout_url:
-            success = self._download_and_cache(cutout_url, cached_file)
-            if success:
-                logger.info("Acquired official TheSportsDB cutout for '%s' -> %s", clean_player, cached_file.name)
-                self._sync_to_docker(cached_file, f"{slug}.png")
-                return f"http://127.0.0.1:3000/assets/players/{slug}.png"
-
-        # 4. Generate high-res stylized SVG/PNG fallback badge if no online photo found
-        if not cached_file.exists() or cached_file.stat().st_size < 100:
-            badge_path = self._generate_fallback_badge(clean_player, team, cached_file)
-            if badge_path and badge_path.exists():
-                self._sync_to_docker(cached_file, f"{slug}.png")
-                return f"http://127.0.0.1:3000/assets/players/{slug}.png"
-
-        self._sync_to_docker(cached_file, f"{slug}.png")
-        return f"http://127.0.0.1:3000/assets/players/{slug}.png"
+        return None
 
     def _lookup_wikipedia(self, player_name: str) -> Optional[str]:
         """Queries Wikipedia PageImages API with title lookup, falling back to footballer generator search."""

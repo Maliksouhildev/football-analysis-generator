@@ -565,6 +565,57 @@ class TacticalRenderer:
         out_col = (185, 28, 28, 255) if is_red else (202, 138, 4, 255)
         draw.rounded_rectangle([x, y, x + w, y + h], radius=2, fill=fill_col, outline=out_col, width=1)
 
+    def _draw_player_headshot_avatar(
+        self,
+        draw: ImageDraw.ImageDraw,
+        x: float,
+        y: float,
+        size: int,
+        headshot_source: Any,
+        overlay_img: Optional[Image.Image] = None,
+        border_color: Tuple[int, int, int, int] = (0, 229, 255, 230)
+    ) -> bool:
+        """
+        Overlays studio-quality transparent PNG player headshot in a circular broadcast avatar frame.
+        Eliminates jagged edges and messy borders.
+        """
+        if not headshot_source:
+            return False
+        try:
+            if isinstance(headshot_source, (str, bytes, os.PathLike)):
+                src_path = str(headshot_source)
+                if not os.path.exists(src_path):
+                    return False
+                img = Image.open(src_path)
+            elif isinstance(headshot_source, Image.Image):
+                img = headshot_source
+            else:
+                return False
+
+            if img.mode != "RGBA":
+                img = img.convert("RGBA")
+
+            target_size = (size, size)
+            resized = img.resize(target_size, Image.Resampling.LANCZOS)
+
+            # Circular mask for avatar container
+            mask = Image.new("L", target_size, 0)
+            mask_draw = ImageDraw.Draw(mask)
+            mask_draw.ellipse([0, 0, size, size], fill=255)
+
+            # Composite onto circular backing
+            circular_avatar = Image.new("RGBA", target_size, (15, 23, 42, 220))
+            circular_avatar.paste(resized, (0, 0), mask)
+
+            if overlay_img is not None:
+                overlay_img.alpha_composite(circular_avatar, dest=(int(x), int(y)))
+
+            # Outer glowing broadcast border ring
+            draw.ellipse([x - 1, y - 1, x + size + 1, y + size + 1], outline=border_color, width=2)
+            return True
+        except Exception:
+            return False
+
     def _draw_player_hud_badge(
         self,
         draw: ImageDraw.ImageDraw,
@@ -829,12 +880,13 @@ class TacticalRenderer:
         player_stats: Dict[str, Any],
         x: float,
         y: float,
-        card_w: int = 340,
+        card_w: int = 360,
         card_h: int = 160,
         overlay_img: Optional[Image.Image] = None
     ) -> Dict[str, Any]:
         """
         Renders an authentic TV broadcast Player Stat Card overlay with:
+        - Studio-quality transparent PNG player headshot avatar (EA Sports FC CDN / BiRefNet / rembg)
         - Official algorithmic match rating pill (e.g. 8.4 in green)
         - Discrete event football PNG icons (for each goal scored)
         - Disciplinary card icons (yellow/red cards)
@@ -851,17 +903,38 @@ class TacticalRenderer:
         club = sanitize_text(player_stats.get("clubName") or player_stats.get("team") or "MATCH TELEMETRY").upper()
         draw.text((x0 + 16, y0 + 12), f"OFFICIAL MATCH STATS  |  {club}", fill=(0, 229, 255, 230))
 
-        # 3. Player Header: Name, Number, Role
+        # 3. Player Header: Name, Number, Role, Headshot
         p_name = sanitize_text(player_stats.get("playerName") or player_stats.get("name") or "Player")
         p_num = str(player_stats.get("number") or player_stats.get("jersey_number") or "-")
         p_role = sanitize_text(player_stats.get("position") or player_stats.get("role") or "MF")
 
+        # Studio-Quality Headshot Resolution (EA Sports FC CDN -> Neural BiRefNet/rembg cutout)
+        headshot_source = player_stats.get("headshot_path") or player_stats.get("portrait_path") or player_stats.get("headshot")
+        if not headshot_source:
+            try:
+                from src.rendering.player_headshot_service import PlayerHeadshotService
+                svc = PlayerHeadshotService()
+                official = svc.get_official_headshot(p_name, team=club)
+                if official and official.is_file():
+                    headshot_source = str(official)
+            except Exception:
+                pass
+
+        has_headshot = False
+        avatar_size = 46
+        if headshot_source:
+            has_headshot = self._draw_player_headshot_avatar(
+                draw, x0 + 14, y0 + 36, size=avatar_size, headshot_source=headshot_source, overlay_img=overlay_img
+            )
+
+        content_x = x0 + 68 if has_headshot else x0 + 16
+
         # Number pill
-        draw.rounded_rectangle([x0 + 16, y0 + 36, x0 + 44, y0 + 58], radius=4, fill=(0, 229, 255, 220))
-        draw.text((x0 + 22, y0 + 40), f"#{p_num}", fill=(10, 14, 23, 255))
+        draw.rounded_rectangle([content_x, y0 + 36, content_x + 28, y0 + 58], radius=4, fill=(0, 229, 255, 220))
+        draw.text((content_x + 6, y0 + 40), f"#{p_num}", fill=(10, 14, 23, 255))
 
         # Player Name & Role
-        draw.text((x0 + 52, y0 + 38), f"{p_name} ({p_role})", fill=(255, 255, 255, 255))
+        draw.text((content_x + 36, y0 + 38), f"{p_name} ({p_role})", fill=(255, 255, 255, 255))
 
         # Official Rating Pill
         rating_num = float(player_stats.get("rating", 7.0))
@@ -874,7 +947,7 @@ class TacticalRenderer:
         yellow_cards = int(player_stats.get("yellow_cards", 0))
         red_cards = int(player_stats.get("red_cards", 0))
 
-        event_x = x0 + 16
+        event_x = content_x
         event_y = y0 + 68
 
         if goals > 0 or yellow_cards > 0 or red_cards > 0:
@@ -918,6 +991,8 @@ class TacticalRenderer:
             "goals_rendered": goals,
             "yellow_cards_rendered": yellow_cards,
             "red_cards_rendered": red_cards,
-            "rating_rendered": rating_num
+            "rating_rendered": rating_num,
+            "headshot_rendered": has_headshot,
+            "headshot_source": str(headshot_source) if headshot_source else None,
         }
 
