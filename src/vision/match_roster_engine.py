@@ -320,12 +320,20 @@ class ActiveXIResolver:
 
     def _attach_live_ground_truth(self, home_team: Optional[str] = None, away_team: Optional[str] = None) -> None:
         """
-        Binds the process-wide live GroundTruthDictionary (Sportmonks / API-Football).
-        No player data is ever hardcoded: without a registered dictionary the roster is
-        EMPTY and no player identity can be assigned (strict anti-hallucination mode).
+        Binds the process-wide live GroundTruthDictionary (Sportmonks / API-Football / ESPN).
+        If not yet registered in memory and home_team/away_team are known, triggers AutonomousMatchResolver
+        to populate and register the official matchday ground truth.
         """
         from src.scraper.live_ground_truth import get_registered_ground_truth
         self.ground_truth = get_registered_ground_truth()
+        if self.ground_truth is None and home_team and away_team:
+            try:
+                from src.scraper.autonomous_match_resolver import AutonomousMatchResolver
+                AutonomousMatchResolver().resolve(home=home_team, away=away_team)
+                self.ground_truth = get_registered_ground_truth()
+            except Exception as e:
+                logger.debug("AutonomousMatchResolver auto-registration note: %s", e)
+
         if self.ground_truth is not None:
             self.match_data = {
                 "match_id": f"{self.ground_truth.provider}:{self.ground_truth.fixture_id}",

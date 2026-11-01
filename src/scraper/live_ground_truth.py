@@ -929,9 +929,100 @@ class ApiFootballClient:
 # 7. Global Registry & Fetch Functions
 # =============================================================================
 
-def register_ground_truth(ground_truth: GroundTruthDictionary) -> None:
+def register_ground_truth(ground_truth: Union[GroundTruthDictionary, Dict[str, Any]]) -> GroundTruthDictionary:
     """Registers the active live GroundTruthDictionary in process memory."""
     global _REGISTERED_GROUND_TRUTH
+    if isinstance(ground_truth, dict):
+        d = ground_truth
+        fid = d.get("fixture_id") or d.get("match_id") or "live_match"
+        h_name = str(d.get("home_team_name") or d.get("home_team") or "Home Team")
+        a_name = str(d.get("away_team_name") or d.get("away_team") or "Away Team")
+
+        def _build_players(raw_list: List[Dict[str, Any]], side: str, t_name: str, starter_flag: bool) -> List[PlayerGroundTruth]:
+            out: List[PlayerGroundTruth] = []
+            for idx, p in enumerate(raw_list or []):
+                p_name = str(p.get("name", "")).strip()
+                if not p_name:
+                    continue
+                p_num = int(p.get("num") or p.get("number") or p.get("jersey") or (idx + 1))
+                p_pos = str(p.get("role") or p.get("position") or "MF").strip()
+                is_gk = p_pos.upper() in ("GK", "G") or bool(p.get("is_gk", False))
+                out.append(
+                    PlayerGroundTruth(
+                        player_id=p.get("player_id") or f"{side}_{p_num}_{p_name.lower().replace(' ', '_')}",
+                        name=p_name,
+                        short_name=p.get("short_name") or f"{p_name.split()[-1]} ({p_pos})",
+                        number=p_num,
+                        position=p_pos,
+                        is_gk=is_gk,
+                        team_id=side,
+                        team_side=side,
+                        team_name=t_name,
+                        is_starter=starter_flag,
+                    )
+                )
+            return out
+
+        xi_home = _build_players(d.get("home_starting_xi", []), "home", h_name, True)
+        xi_away = _build_players(d.get("away_starting_xi", []), "away", a_name, True)
+        sub_home = _build_players(d.get("home_bench", []), "home", h_name, False)
+        sub_away = _build_players(d.get("away_bench", []), "away", a_name, False)
+
+        ev_list: List[GroundTruthEvent] = []
+        for idx, sub in enumerate(d.get("substitutions", [])):
+            side = str(sub.get("team", "home")).lower()
+            m_val = int(sub.get("minute") or 0)
+            p_out = str(sub.get("player_out") or (sub.get("out", {}) or {}).get("name") or "")
+            p_in = str(sub.get("player_in") or (sub.get("in", {}) or {}).get("name") or "")
+            in_num = int(sub.get("in_num") or (sub.get("in", {}) or {}).get("num") or 12)
+            in_role = str(sub.get("in_role") or (sub.get("in", {}) or {}).get("role") or "MF")
+            ev_list.append(
+                GroundTruthEvent(
+                    event_id=f"sub_{m_val}_{idx}",
+                    event_type="substitution",
+                    minute=m_val,
+                    second=int(sub.get("second") or 0),
+                    period=int(sub.get("period") or (1 if m_val <= 45 else 2)),
+                    team_side=side,
+                    team_id=side,
+                    player_id=f"{side}_{p_out.lower().replace(' ', '_')}",
+                    player_name=p_out,
+                    related_player_id=f"{side}_{in_num}_{p_in.lower().replace(' ', '_')}",
+                    related_player_name=p_in,
+                    raw_data={"number": in_num, "position": in_role, **sub},
+                )
+            )
+        for idx, rc in enumerate(d.get("red_cards", [])):
+            side = str(rc.get("team", "home")).lower()
+            m_val = int(rc.get("minute") or 0)
+            p_rc = str(rc.get("player") or rc.get("player_sent_off") or "")
+            ev_list.append(
+                GroundTruthEvent(
+                    event_id=f"red_{m_val}_{idx}",
+                    event_type="red_card",
+                    minute=m_val,
+                    second=int(rc.get("second") or 0),
+                    period=int(rc.get("period") or (1 if m_val <= 45 else 2)),
+                    team_side=side,
+                    team_id=side,
+                    player_id=f"{side}_{p_rc.lower().replace(' ', '_')}",
+                    player_name=p_rc,
+                    raw_data=dict(rc),
+                )
+            )
+        ground_truth = GroundTruthDictionary(
+            fixture_id=fid,
+            provider=str(d.get("provider", "espn")),
+            home_team=h_name,
+            away_team=a_name,
+            starting_xi_home=xi_home,
+            starting_xi_away=xi_away,
+            substitutes_home=sub_home,
+            substitutes_away=sub_away,
+            events_timeline=ev_list,
+            raw_payload=d,
+        )
+
     _REGISTERED_GROUND_TRUTH = ground_truth
     logger.info(
         "Registered live GroundTruthDictionary: %s vs %s (provider: %s, fixture_id: %s, starters: %d/%d)",
@@ -942,6 +1033,7 @@ def register_ground_truth(ground_truth: GroundTruthDictionary) -> None:
         len(ground_truth.starting_xi_home),
         len(ground_truth.starting_xi_away),
     )
+    return ground_truth
 
 
 def get_registered_ground_truth() -> Optional[GroundTruthDictionary]:

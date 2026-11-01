@@ -542,20 +542,35 @@ class PlayerIdentityResolver:
             return None
 
         try:
-            _, buf_wide = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+            wide_small = cv2.resize(frame, (960, 540), interpolation=cv2.INTER_AREA)
+            _, buf_wide = cv2.imencode(".jpg", wide_small, [int(cv2.IMWRITE_JPEG_QUALITY), 84])
             b64_wide = base64.b64encode(buf_wide).decode("utf-8")
 
-            _, buf_grid = cv2.imencode(".png", grid_img)
+            gh, gw = grid_img.shape[:2]
+            if gw > 960:
+                g_scale = 960.0 / float(gw)
+                grid_small = cv2.resize(grid_img, (960, max(120, int(gh * g_scale))), interpolation=cv2.INTER_AREA)
+            else:
+                grid_small = grid_img
+            _, buf_grid = cv2.imencode(".jpg", grid_small, [int(cv2.IMWRITE_JPEG_QUALITY), 86])
             b64_grid = base64.b64encode(buf_grid).decode("utf-8")
 
             home_active = lineup_info.get("home_active_xi", [])
             away_active = lineup_info.get("away_active_xi", [])
 
-            home_kit_col = lineup_info.get("home_kit_color") or lineup_info.get("home_team_color") or "#8a1529 (dark red/maroon)"
-            away_kit_col = lineup_info.get("away_kit_color") or lineup_info.get("away_team_color") or "#ffffff (white)"
+            home_kit_col = lineup_info.get("home_kit_color") or lineup_info.get("home_team_color") or "Blaugrana dark blue & crimson stripes (or Home kit)"
+            away_kit_col = lineup_info.get("away_kit_color") or lineup_info.get("away_team_color") or "#ffffff (All-white kit)"
 
-            home_roster_text = "\n".join([f"  #{p.get('number', '?')} {p.get('name', '')} ({p.get('role', 'MF')})" for p in home_active])
-            away_roster_text = "\n".join([f"  #{p.get('number', '?')} {p.get('name', '')} ({p.get('role', 'MF')})" for p in away_active])
+            from src.vision.isolated_player_ai_locator import PLAYER_BIOMETRIC_DB
+            def _fmt_p(p: Dict[str, Any]) -> str:
+                p_name = p.get("name", "")
+                bio = PLAYER_BIOMETRIC_DB.get(p_name.lower(), {})
+                if bio:
+                    return f"  #{p.get('number', '?')} {p_name} ({p.get('role', 'MF')}) | Skin: {bio.get('skin')} | Hair: {bio.get('hair')} | Cue: {bio.get('cues')}"
+                return f"  #{p.get('number', '?')} {p_name} ({p.get('role', 'MF')})"
+
+            home_roster_text = "\n".join([_fmt_p(p) for p in home_active])
+            away_roster_text = "\n".join([_fmt_p(p) for p in away_active])
 
             crop_legend_lines = []
             for cm in crop_meta:
@@ -568,7 +583,7 @@ class PlayerIdentityResolver:
 
             prompt = f"""You are an elite television football analyst and computer vision identity expert.
 You are given two images:
-1. The wide 1080p broadcast frame of {home_team} (Home) vs {away_team} (Away) at match minute {match_minute}.
+1. The wide broadcast frame of {home_team} (Home) vs {away_team} (Away) at match minute {match_minute}.
    - {home_team} (Home) kit color: {home_kit_col}
    - {away_team} (Away) kit color: {away_kit_col}
 2. A numbered composite grid of high-resolution player crops, each labeled with '#<track_id>' in yellow at the top-left corner.
@@ -584,8 +599,8 @@ Grid Crop Positions on Pitch:
 {crop_legend_text}
 
 TASK:
-1. For each crop in the numbered grid (#track_id), examine visible jersey numbers on the back and shorts, skin tone, hair (e.g., curly afro, blonde buzzcut), boots, and tactical position on the pitch.
-2. Assign the EXACT player name and number from the active squad lists. You may ONLY choose from the active squads above! Never guess outside these names.
+1. For each crop in the numbered grid (#track_id), examine visible jersey numbers on the back and shorts, skin tone, hair (e.g., curly afro -> #17 Marc Cucurella, blonde tall LCB -> #4 Dean Huijsen, black braids -> #6 Eduardo Camavinga, blonde LW -> #17 Anthony Gordon), boots, and 2D tactical position on the pitch.
+2. Assign the EXACT player name and number from the active squad lists. You may ONLY choose from the active squads above! Never guess outside these names, and never assign the same player twice.
 3. Identify which track_id is the BALL CARRIER (the player who physically has the ball at his feet or is kicking/dribbling it).
 
 Return pure JSON:
@@ -612,22 +627,30 @@ Return pure JSON:
                     "parts": [
                         {"text": prompt},
                         {"inline_data": {"mime_type": "image/jpeg", "data": b64_wide}},
-                        {"inline_data": {"mime_type": "image/png", "data": b64_grid}}
+                        {"inline_data": {"mime_type": "image/jpeg", "data": b64_grid}}
                     ]
                 }],
                 "generationConfig": {
                     "response_mime_type": "application/json",
-                    "temperature": 0.1
+                    "temperature": 0.0,
+                    "thinkingConfig": {"thinkingBudget": 0}
                 }
             }
 
-            models_to_try = ["gemini-3.1-flash-lite", "gemini-flash-lite-latest", "gemini-3.5-flash-lite"]
+            models_to_try = ["gemini-3.1-flash-lite-preview", "gemini-flash-lite-latest", "gemini-3-flash-preview"]
             resp = None
             for model_name in models_to_try:
+                gen_cfg_m = {"response_mime_type": "application/json", "temperature": 0.0}
+                if "3." in model_name:
+                    gen_cfg_m["thinkingConfig"] = {"thinkingBudget": 0}
+                payload_m = {
+                    "contents": payload["contents"],
+                    "generationConfig": gen_cfg_m,
+                }
                 for attempt in range(2):
                     endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
                     try:
-                        resp = requests.post(endpoint, json=payload, timeout=25)
+                        resp = requests.post(endpoint, json=payload_m, timeout=25)
                         if resp.status_code == 200:
                             break
                         elif resp.status_code in (429, 503):
@@ -963,8 +986,8 @@ Return pure JSON:
         ref_tracks: List[Dict[str, Any]] = []
 
         valid_turf_tracks = []
-        min_turf_y = 19.0
-        max_turf_y = 82.8
+        min_turf_y = 18.0
+        max_turf_y = 96.5
         for tr in tracks_at_freeze:
             if not isinstance(tr, dict):
                 continue
@@ -1104,9 +1127,59 @@ Return pure JSON:
                 "team": "home" if assigned_gk == home_gk else "away",
             }
 
-        # 8. VLM Verification (only for tracks not already locked by timestamped coordinate telemetry)
+        # 8. Multi-Source IsolatedPlayerAILocator + VLM Verification
         vlm_res = None
-        if self.use_vlm and api_key and not telemetry_assignments:
+        if frame is not None and tracks_at_freeze and not telemetry_assignments:
+            try:
+                from src.vision.isolated_player_ai_locator import IsolatedPlayerAILocator, LocatorConfig
+                iso_locator = IsolatedPlayerAILocator(LocatorConfig())
+                iso_res = iso_locator.analyze_frame(
+                    frame_or_path=frame,
+                    home_team=home_team,
+                    away_team=away_team,
+                    fallback_minute=match_minute,
+                    period_hint=period,
+                    clip_id=cid,
+                )
+                iso_actors = iso_res.get("actors", [])
+                claimed_iso = set()
+                for tr in valid_turf_tracks:
+                    tid = int(tr.get("track_id", -1))
+                    if tid <= 0 or tr.get("jersey_class") == "REFEREE":
+                        continue
+                    tx = float(tr.get("x_pct", 50.0))
+                    ty = float(tr.get("y_pct", 50.0))
+                    best_act = None
+                    best_d = 6.5
+                    for idx_a, act_d in enumerate(iso_actors):
+                        if idx_a in claimed_iso:
+                            continue
+                        d = math.hypot(tx - float(act_d.get("x_pct", 50.0)), ty - float(act_d.get("y_pct", 50.0)))
+                        if d < best_d:
+                            best_d = d
+                            best_act = (idx_a, act_d)
+                    if best_act is not None:
+                        idx_a, act_d = best_act
+                        claimed_iso.add(idx_a)
+                        aname = act_d.get("assigned_name", "")
+                        arole = act_d.get("assigned_role", "MF")
+                        anum = int(act_d.get("assigned_number") or 0)
+                        ateam = act_d.get("team", "home")
+                        if aname:
+                            tr["team"] = ateam
+                            tr["jersey_class"] = "GOALKEEPER" if act_d.get("is_gk") else ("TEAM_HOME" if ateam == "home" else "TEAM_AWAY")
+                            assignments[tid] = {
+                                "name": aname,
+                                "short_name": f"{aname.split()[-1]} ({arole})",
+                                "role": arole,
+                                "number": anum,
+                                "team": ateam,
+                                "verified_by_vlm": True,
+                            }
+            except Exception as iso_err:
+                logger.debug("IsolatedPlayerAILocator integration fallback: %s", iso_err)
+
+        if self.use_vlm and api_key and not telemetry_assignments and not any(v.get("verified_by_vlm") for v in assignments.values()):
             vlm_res = self._verify_with_gemini_vlm(
                 frame=frame,
                 tracks_at_freeze=tracks_at_freeze,

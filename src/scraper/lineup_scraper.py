@@ -1024,7 +1024,7 @@ class MatchLineupResolver:
 
     @classmethod
     def _extract_starters(cls, payload: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
-        lineups = payload.get("lineups", payload)
+        lineups = payload.get("lineups") or payload.get("teams") or payload.get("rosters") or payload
         home_section = lineups.get("home", {})
         away_section = lineups.get("away", {})
 
@@ -1039,22 +1039,28 @@ class MatchLineupResolver:
 
     @classmethod
     def _parse_team_players(cls, team_section: Any, is_home: bool) -> List[Dict[str, Any]]:
-        if not isinstance(team_section, dict):
+        if isinstance(team_section, list):
+            raw_players = team_section
+        elif isinstance(team_section, dict):
+            raw_players = (
+                team_section.get("players")
+                or team_section.get("starters")
+                or team_section.get("starting_xi")
+                or []
+            )
+        else:
             return []
-
-        raw_players = (
-            team_section.get("players")
-            or team_section.get("starters")
-            or team_section.get("starting_xi")
-            or []
-        )
 
         starters: List[Dict[str, Any]] = []
         for p in raw_players:
-            if p.get("substitute") is True:
+            if (
+                p.get("substitute") is True
+                or p.get("is_starter") is False
+                or p.get("starter") is False
+            ):
                 continue
 
-            p_info = p.get("player", p)
+            p_info = p.get("player", p) if isinstance(p.get("player"), dict) else p
             name = (
                 p_info.get("name")
                 or p_info.get("shortName")
@@ -1066,6 +1072,8 @@ class MatchLineupResolver:
                 or p.get("shirtNumber")
                 or p.get("shirt")
                 or p.get("number")
+                or p.get("jersey")
+                or p.get("num")
                 or (len(starters) + 1)
             )
             try:
@@ -1073,9 +1081,22 @@ class MatchLineupResolver:
             except (ValueError, TypeError):
                 num = len(starters) + 1
 
-            pos = p.get("position") or p_info.get("position") or p.get("role") or "MF"
-            role = cls._normalize_role(pos, len(starters))
-            is_gk = role == "GK" or p.get("is_gk") is True or pos in ("G", "GK", "Keeper")
+            raw_pos = p.get("role") or p.get("position") or p_info.get("position") or "MF"
+            if isinstance(raw_pos, dict):
+                pos_str = str(raw_pos.get("abbreviation") or raw_pos.get("name") or "MF").strip()
+            else:
+                pos_str = str(raw_pos).strip()
+
+            canonical_roles = {
+                "GK", "RB", "RCB", "LCB", "CB", "LB", "RWB", "LWB",
+                "DM", "CDM", "RCM", "LCM", "CM", "AM", "CAM", "RM", "LM",
+                "RW", "LW", "CF", "ST", "FW",
+            }
+            if pos_str.upper() in canonical_roles:
+                role = pos_str.upper()
+            else:
+                role = cls._normalize_role(pos_str, len(starters))
+            is_gk = role == "GK" or p.get("is_gk") is True or pos_str.upper() in ("G", "GK", "KEEPER")
 
             starters.append({
                 "name": name,
@@ -1098,6 +1119,49 @@ class MatchLineupResolver:
 
         if "home_substitutions" in payload or "away_substitutions" in payload:
             return payload.get("home_substitutions", []), payload.get("away_substitutions", [])
+
+        # Support unified 'substitutions' list from AutonomousMatchResolver / ESPN
+        if "substitutions" in payload and isinstance(payload["substitutions"], list):
+            for sub in payload["substitutions"]:
+                if not isinstance(sub, dict):
+                    continue
+                minute = int(sub.get("minute") or sub.get("time") or 0)
+                side = str(sub.get("team", "home")).lower()
+                is_home = side == "home"
+                p_in = str(sub.get("player_in") or (sub.get("in", {}) or {}).get("name") or "Sub In")
+                p_out = str(sub.get("player_out") or (sub.get("out", {}) or {}).get("name") or "Sub Out")
+                raw_num = (
+                    sub.get("in_num")
+                    or sub.get("number")
+                    or (sub.get("in", {}) or {}).get("num")
+                    or 12
+                )
+                try:
+                    num = int(raw_num)
+                except (ValueError, TypeError):
+                    num = 12
+                role = str(
+                    sub.get("in_role")
+                    or sub.get("role")
+                    or (sub.get("in", {}) or {}).get("role")
+                    or "MF"
+                ).upper()
+                sub_dict = {
+                    "minute": minute,
+                    "player_out": p_out,
+                    "player_in": p_in,
+                    "in_short_name": f"{p_in.split()[-1]} ({role})",
+                    "number": num,
+                    "role": role,
+                }
+                if is_home:
+                    home_subs.append(sub_dict)
+                else:
+                    away_subs.append(sub_dict)
+            if home_subs or away_subs:
+                home_subs.sort(key=lambda s: s["minute"])
+                away_subs.sort(key=lambda s: s["minute"])
+                return home_subs, away_subs
 
         incidents = payload.get("incidents", payload.get("events", []))
         for inc in incidents:

@@ -529,9 +529,11 @@ class EvidenceMatcher:
         home_players = full_roster.get("home", [])
         away_players = full_roster.get("away", [])
 
-        # Filter or prioritize players relevant to the thesis, or return active outfield
+        # Prioritize players relevant to the thesis first, while preserving the full active XI
         focal_home = []
+        rest_home = []
         focal_away = []
+        rest_away = []
 
         keywords = [k.lower() for k in thesis.player_keywords]
         if thesis.crowd_evidence:
@@ -540,24 +542,22 @@ class EvidenceMatcher:
         for p in home_players:
             p_name = p.get("name", "").lower()
             p_role = p.get("role", "").lower()
+            entry = {"num": p["num"], "name": p["name"], "role": p["role"]}
             if any(k in p_name or k == p_role for k in keywords):
-                focal_home.append({"num": p["num"], "name": p["name"], "role": p["role"]})
+                focal_home.append(entry)
+            else:
+                rest_home.append(entry)
 
         for p in away_players:
             p_name = p.get("name", "").lower()
             p_role = p.get("role", "").lower()
+            entry = {"num": p["num"], "name": p["name"], "role": p["role"]}
             if any(k in p_name or k == p_role for k in keywords):
-                focal_away.append({"num": p["num"], "name": p["name"], "role": p["role"]})
-
-        # Ensure at least one representative key player per team
-        if not focal_home and home_players:
-            p = home_players[min(1, len(home_players)-1)]
-            focal_home.append({"num": p["num"], "name": p["name"], "role": p["role"]})
-        if not focal_away and away_players:
-            p = away_players[min(9, len(away_players)-1)]
-            focal_away.append({"num": p["num"], "name": p["name"], "role": p["role"]})
+                focal_away.append(entry)
+            else:
+                rest_away.append(entry)
 
         return {
-            "home": focal_home,
-            "away": focal_away,
+            "home": focal_home + rest_home,
+            "away": focal_away + rest_away,
         }

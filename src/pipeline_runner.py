@@ -407,23 +407,27 @@ class TacticalPipelineRunner:
             selected_events = goals + others[:max(0, target_clip_count - len(goals))]
             selected_events.sort(key=lambda e: (e.get("period", 1), e.get("minute", 0), e.get("second", 0)))
 
+            lineup_payload = resolved_match.get("lineup_payload") or matchday_data
             for idx, evt in enumerate(selected_events):
                 m = evt.get("minute", 10)
                 s = evt.get("second", 0)
+                ev_period = evt.get("period", 1 if m <= 45 else 2)
                 cause_m = max(0, m - 1) if s < 15 else m
                 cause_s = (s - 15) % 60
+                resolved_roster = MatchLineupResolver.resolve_active_roster(
+                    matchday_data=lineup_payload,
+                    period=ev_period,
+                    minute=m,
+                )
                 event_windows.append({
                     "clip_id": f"clip_{idx+1:02d}_{evt.get('type', 'tactical')}",
-                    "period": evt.get("period", 1 if m <= 45 else 2),
+                    "period": ev_period,
                     "t_cause_clock": f"{cause_m:02d}:{cause_s:02d}",
                     "t_effect_clock": f"{m:02d}:{s:02d}",
                     "narrative_tone": crowd_result.narrative_tone,
                     "thesis": evt.get("description", f"Tactical transition breakdown at minute {m}'"),
                     "crowd_evidence": f"Crowd consensus: {evt.get('description', '')}",
-                    "active_roster": {
-                        "home": [{"num": 10, "name": evt.get("player", f"{home_team} Player"), "role": "FW"}],
-                        "away": [{"num": 4, "name": f"{away_team} Defender", "role": "CB"}],
-                    },
+                    "active_roster": resolved_roster,
                     "video_pts": evt.get("video_pts"),
                     "raw_event": evt,
                 })
@@ -442,6 +446,11 @@ class TacticalPipelineRunner:
                             pts = time_indexer.get_pts_for_match_minute(match_minute=m, second=s, period=p)
                         except Exception:
                             pass
+                    resolved_roster = MatchLineupResolver.resolve_active_roster(
+                        matchday_data=lineup_payload,
+                        period=p,
+                        minute=m,
+                    )
                     event_windows.append({
                         "clip_id": f"clip_{idx+1:02d}_tactical",
                         "period": p,
@@ -450,10 +459,7 @@ class TacticalPipelineRunner:
                         "narrative_tone": crowd_result.narrative_tone,
                         "thesis": f"Tactical duel and spatial overload analysis at minute {m}'",
                         "crowd_evidence": f"Tactical analysis at minute {m}'",
-                        "active_roster": {
-                            "home": [{"num": 10, "name": f"{home_team} Player", "role": "FW"}],
-                            "away": [{"num": 4, "name": f"{away_team} Defender", "role": "CB"}],
-                        },
+                        "active_roster": resolved_roster,
                         "video_pts": pts,
                         "raw_event": {"minute": m, "second": 0, "type": "tactical", "period": p},
                     })
@@ -1114,6 +1120,7 @@ class TacticalPipelineRunner:
             "score": score,
             "segments": active_segments,
             "durationInSeconds": round(current_time, 2),
+            "compositionId": "TacticalMasterclass",
         }
 
         # Generate word-level dynamic subtitles from timeline commentaries
@@ -1187,6 +1194,15 @@ class TacticalPipelineRunner:
                     if render_status != "done":
                         error_msg = render_res.get("error", f"Render failed with status: {render_status}")
                         raise RuntimeError(f"Remotion render job {job_id} failed: {error_msg}")
+
+                    host_mp4 = self.output_dir / f"{job_id}.mp4"
+                    master_mp4 = self.output_dir / f"{match_id}_masterclass_final.mp4"
+                    if host_mp4.is_file():
+                        import shutil
+                        shutil.copy2(str(host_mp4), str(master_mp4))
+                        render_result["host_output_path"] = str(host_mp4)
+                        render_result["master_output_path"] = str(master_mp4)
+                        logger.info(f"Master render copied to {master_mp4} ({master_mp4.stat().st_size / (1024*1024):.2f} MB)")
 
                 render_path = match_checkpoint_dir / "remotion_render.json"
                 self.state_tracker.record_checkpoint(
@@ -1308,9 +1324,25 @@ class TacticalPipelineRunner:
 
     def _dispatch_render(self, payload: Dict[str, Any]) -> str:
         url = f"{self.remotion_host}/render"
+
+        def _json_serial(obj):
+            if hasattr(obj, "tolist"):
+                return obj.tolist()
+            try:
+                import numpy as np
+                if isinstance(obj, (np.integer, np.int64, np.int32)):
+                    return int(obj)
+                if isinstance(obj, (np.floating, np.float64, np.float32)):
+                    return float(obj)
+                if isinstance(obj, np.ndarray):
+                    return obj.tolist()
+            except ImportError:
+                pass
+            return str(obj)
+
         req = urllib.request.Request(
             url,
-            data=json.dumps(payload).encode("utf-8"),
+            data=json.dumps(payload, default=_json_serial).encode("utf-8"),
             headers={"Content-Type": "application/json"},
             method="POST",
         )

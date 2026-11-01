@@ -44,9 +44,9 @@ from src.vision.tactical_parser import (
 logger = logging.getLogger("vision.tactical_vision_engine")
 
 SUPPORTED_VISION_MODELS = [
+    "gemini-3.1-flash-lite-preview",
     "gemini-flash-lite-latest",
-    "gemini-2.5-flash",
-    "gemini-3.1-flash-lite",
+    "gemini-3-flash-preview",
 ]
 
 TACTICAL_TELESTRATION_SYSTEM_PROMPT = """You are a World-Class Football Tactical Telestrator and Match Analyst for UEFA Champions League and Sky Sports broadcasts.
@@ -74,7 +74,7 @@ CRITICAL RULES:
      * Pitch position and role (e.g., CBs holding the defensive line, CF making the central run, CM orchestrating).
      * Physical appearance, skin tone, hair, and build matching the active lineup list for this match minute.
    - Use ONLY players from the provided active lineup list who are currently on the pitch (accounting for substitutions).
-   - NOTE: Identify all players strictly by Tactical Role: 'BALL CARRIER', 'PRESSING TRIGGER', 'THIRD-MAN RUNNER', 'ISOLATED FULLBACK', 'COVERING CB', 'MIDFIELD PIVOT'. Never guess or output real player names.
+   - Match each player to their exact active lineup entry and tactical role (e.g., 'Yamal (RW)', 'Mbappé (CF)', 'Cucurella (LB)', 'Rodri (DM)').
 
 4. TACTICAL ROLES & COLORS:
    - Focal Player / Ball Carrier / Primary Attacker: color = '#ffff00' (Yellow), showRing = true, showBeam = true, showBadge = true.
@@ -647,20 +647,41 @@ TASKS:
         track["torso_rgb"] = [med_r, med_g, med_b]
         track["torso_hsv"] = [med_h, med_s, med_v]
 
+        # Compute pixel-level kit fractions on non-grass torso pixels (prevents Blaugrana blue+crimson from being mistaken for referee)
+        H_vals = torso_hsv[non_grass, 0] if np.count_nonzero(non_grass) >= 6 else torso_hsv[:, :, 0].ravel()
+        S_vals = torso_hsv[non_grass, 1] if np.count_nonzero(non_grass) >= 6 else torso_hsv[:, :, 1].ravel()
+        V_vals = torso_hsv[non_grass, 2] if np.count_nonzero(non_grass) >= 6 else torso_hsv[:, :, 2].ravel()
+
+        white_frac = float(np.mean((S_vals < 52) & (V_vals > 150)))
+        dark_blue_frac = float(np.mean((H_vals >= 102) & (H_vals <= 138) & (S_vals >= 35) & (V_vals < 185)))
+        crimson_red_frac = float(np.mean(((H_vals <= 14) | (H_vals >= 155)) & (S_vals >= 40) & (V_vals >= 35) & (V_vals < 175)))
+        cyan_ref_frac = float(np.mean((H_vals >= 83) & (H_vals <= 104) & (S_vals >= 60) & (V_vals >= 135)))
+        orange_gk_frac = float(np.mean(((H_vals <= 18) | (H_vals >= 166)) & (S_vals >= 95) & (V_vals >= 165)))
+
         # 1. Reject Referee:
-        # Referees wear kits distinct from outfield players (e.g. fluorescent cyan, neon yellow, light blue, bright pink)
-        if (med_b - med_r > 20 and med_b >= med_g - 15) or (med_g - med_r > 28) or (75 <= med_h <= 135 and med_s >= 25):
+        # Only classify as REFEREE when wearing solid sky-cyan / neon without Blaugrana blue+crimson stripes
+        if cyan_ref_frac >= 0.25 and (dark_blue_frac + crimson_red_frac) < 0.22 and white_frac < 0.35:
             track["jersey_class"] = "REFEREE"
             track["team"] = "referee"
             return "REFEREE"
 
-        # 2. Goalkeeper (black/dark/distinct kit):
-        if med_v < 62 and med_s < 60:
+        # 2. Goalkeeper (bright orange/coral #13 Lunin or solid black/dark kit):
+        if orange_gk_frac >= 0.28 or (med_v < 58 and med_s < 48 and (dark_blue_frac + crimson_red_frac) < 0.15):
             track["jersey_class"] = "GOALKEEPER"
             track["team"] = "gk"
             return "GOALKEEPER"
 
-        # 3. Dynamic color distance if home_hex and away_hex are provided
+        # 3. Blaugrana / White direct kit signature
+        if white_frac >= 0.25 and white_frac >= (dark_blue_frac + crimson_red_frac):
+            track["jersey_class"] = "TEAM_AWAY"
+            track["team"] = "away"
+            return "TEAM_AWAY"
+        if (dark_blue_frac + crimson_red_frac) >= 0.16:
+            track["jersey_class"] = "TEAM_HOME"
+            track["team"] = "home"
+            return "TEAM_HOME"
+
+        # 4. Dynamic color distance if home_hex and away_hex are provided
         if home_hex and away_hex:
             h_rgb = np.array(TacticalVisionEngine._hex_to_rgb(home_hex))
             a_rgb = np.array(TacticalVisionEngine._hex_to_rgb(away_hex))
@@ -1673,10 +1694,9 @@ TASKS:
             f"Context: {thesis}\n\n"
             "CRITICAL FIRST STEP - BALL & BALL CARRIER DETECTION (AT t = 0.0s):\n"
             "FIRST: Locate the football on the pitch in FRAME FREEZE. Identify the exact integer [ID] of the player who has the ball at their feet:\n"
-            "- In Clip 2 (23:40): The central white midfielder carrying the ball around (x=50%, y=30%)—NEVER a red defender!\n"
-            "- In Clip 3 (50:03): The Goalkeeper in black inside the left box around (x=24%, y=40%)—NEVER a player on the right wing!\n"
-            "- In Clip 5 (81:58 Corner Kick): The Roma corner taker at the top-left corner flag around (x=38%, y=16%)!\n"
-            "- The Referee wearing cyan blue MUST NEVER be selected as catalyst_player or included in any structural network!\n"
+            f"- Home Team ({home_team}) vs Away Team ({away_team}) at match minute {match_min}:{match_sec:02d}.\n"
+            "- Cross-check visible jersey numbers, biometric traits (e.g., curly afro, blonde hair, braids), and 2D formation roles.\n"
+            "- The Referee wearing sky-cyan MUST NEVER be selected as catalyst_player or included in any structural network!\n"
             "Return that exact ID as catalyst_player.track_id.\n\n"
             f"{carrier_hint}"
             f"Available tracked player IDs on pitch at t=0.0s: {available_tids}.\n\n"
@@ -1803,8 +1823,9 @@ TASKS:
         parts.append({"text": f"{prompt}\n\n{roster_directive}\n"})
 
         gen_cfg: Dict[str, Any] = {
-            "temperature": 0.1,
+            "temperature": 0.0,
             "response_mime_type": "application/json",
+            "thinkingConfig": {"thinkingBudget": 0},
         }
         if roster_schema is not None:
             gen_cfg["response_schema"] = roster_schema
@@ -3405,7 +3426,7 @@ TASKS:
                     p_pick = outfield_defs[idx_d % len(outfield_defs)]
                     d_name = p_pick.get("short_name", p_pick["name"])
                 else:
-                    d_name = "Mancini (CB)" if defending_team == "home" else "Rüdiger (CB)"
+                    d_name = "Cubarsí (RCB)" if defending_team == "home" else "Konaté (RCB)"
 
             d_name = active_resolver.sanitize_player_name(
                 d_name, active_state, default_role=d_name, team=defending_team
