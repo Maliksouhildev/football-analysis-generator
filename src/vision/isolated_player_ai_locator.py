@@ -1181,6 +1181,13 @@ class IsolatedPlayerAILocator:
         5. Per-player 2D Homography Role Priors & Visual Biometric Profiles
         """
         api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+        if not api_key:
+            try:
+                from dotenv import load_dotenv
+                load_dotenv()
+                api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+            except Exception:
+                pass
         if not api_key or not actors:
             return {}
 
@@ -1705,6 +1712,7 @@ class IsolatedPlayerAILocator:
         fallback_minute: Optional[int] = None,
         period_hint: Optional[int] = None,
         save_debug_dir: Optional[Union[str, Path]] = None,
+        clip_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Runs the complete 8-stage isolated AI player locator & identifier pipeline on a frame.
@@ -1721,7 +1729,7 @@ class IsolatedPlayerAILocator:
 
         ew = event_window or {}
         raw_ev = ew.get("raw_event") or {}
-        clip_id = str(ew.get("clip_id") or (frame_path.stem if frame_path else "clip"))
+        clip_id = str(clip_id or ew.get("clip_id") or (frame_path.stem if frame_path else "clip"))
 
         # 1. Extract Match Clock (Scoreboard OCR + Event Window Fallback)
         if fallback_minute is None:
