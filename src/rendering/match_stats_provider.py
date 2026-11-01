@@ -975,6 +975,32 @@ class MatchStatsProvider:
                 badges.append({"type": "red_card", "icon": "red_card.png", "count": res["red_cards"]})
             res["event_badges"] = badges
 
+        # Programmatic KDE tactical heatmap via mplsoccer & kloppy
+        if not res.get("heatmap_png_path"):
+            try:
+                from src.rendering.tactical_visualization_engine import TacticalVisualizationEngine
+                if not hasattr(self, "_viz_engine") or self._viz_engine is None:
+                    self._viz_engine = TacticalVisualizationEngine()
+
+                raw_pts = res.get("heatPoints") or []
+                df_coords = self._viz_engine.standardize_touch_coordinates(
+                    raw_pts,
+                    src_system="opta",
+                    player_name=player_name,
+                    player_id=res.get("number", 0),
+                )
+                vis_res = self._viz_engine.generate_player_heatmap(
+                    df_coords,
+                    player_name=player_name,
+                    jersey_number=res.get("number"),
+                    club_name=res.get("clubName"),
+                )
+                if vis_res.success:
+                    res["heatmap_png_path"] = str(vis_res.output_path)
+                    res["heatmap_url"] = f"http://127.0.0.1:3000/assets/visualizations/{vis_res.output_path.name}"
+            except Exception as e:
+                logger.debug("Tactical visualization generation notice for %s: %s", player_name, e)
+
         return res
 
     def fetch_sofascore_match_heatmap(
@@ -1075,3 +1101,40 @@ class MatchStatsProvider:
             "portraitUrl": f"http://127.0.0.1:3000/assets/players/{slug}.png",
             "crestUrl": CLUB_CRESTS.get(club, ""),
         }
+
+    def generate_player_tactical_heatmap(
+        self,
+        player_name: str,
+        team_hint: Optional[str] = None,
+        force_regenerate: bool = False,
+    ) -> Optional[str]:
+        """
+        Generates and returns the path to a studio-grade transparent KDE heatmap
+        for the given player.
+        """
+        stats = self.get_player_stats(player_name, team_hint=team_hint)
+        if stats and stats.get("heatmap_png_path"):
+            return stats["heatmap_png_path"]
+        return None
+
+    def generate_team_pass_network(
+        self,
+        team_name: str,
+        df_passes: Optional[Any] = None,
+    ) -> Optional[str]:
+        """
+        Generates and returns the path to a studio-grade transparent pass network
+        for the specified squad.
+        """
+        try:
+            from src.rendering.tactical_visualization_engine import TacticalVisualizationEngine
+            if not hasattr(self, "_viz_engine") or self._viz_engine is None:
+                self._viz_engine = TacticalVisualizationEngine()
+            import pandas as pd
+            passes_df = df_passes if isinstance(df_passes, pd.DataFrame) else pd.DataFrame()
+            res = self._viz_engine.generate_pass_network(passes_df, team_name=team_name)
+            if res.success:
+                return str(res.output_path)
+        except Exception as e:
+            logger.warning("Error generating team pass network for %s: %s", team_name, e)
+        return None
