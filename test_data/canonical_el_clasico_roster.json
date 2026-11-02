@@ -17,9 +17,17 @@
       {"name": "Raphinha", "number": 11, "role": "LW"}
     ],
     "substitutions": [
-      {"minute": 46, "player_out": "Fermín López", "player_in": "Frenkie de Jong", "in_number": 21, "in_role": "CM"},
+      {"minute": 63, "player_out": "Fermín López", "player_in": "Frenkie de Jong", "in_number": 21, "in_role": "CM"},
       {"minute": 65, "player_out": "Marc Casadó", "player_in": "Dani Olmo", "in_number": 20, "in_role": "AM"},
       {"minute": 87, "player_out": "Pedri", "player_in": "Gavi", "in_number": 6, "in_role": "CM"}
+    ],
+    "substitutes": [
+      {"name": "Frenkie de Jong", "number": 21, "role": "CM"},
+      {"name": "Dani Olmo", "number": 20, "role": "AM"},
+      {"name": "Gavi", "number": 6, "role": "CM"},
+      {"name": "Ansu Fati", "number": 10, "role": "LW"},
+      {"name": "Ferran Torres", "number": 7, "role": "CF"},
+      {"name": "Fermín López", "number": 16, "role": "RCM"}
     ],
     "red_cards": []
   },
@@ -40,9 +48,17 @@
       {"name": "Kylian Mbappé", "number": 9, "role": "CF"}
     ],
     "substitutions": [
-      {"minute": 62, "player_out": "Federico Valverde", "player_in": "Arda Güler", "in_number": 24, "in_role": "RW"},
+      {"minute": 62, "player_out": "Federico Valverde", "player_in": "Arda Güler", "in_number": 15, "in_role": "RW"},
       {"minute": 63, "player_out": "Aurélien Tchouaméni", "player_in": "Luka Modrić", "in_number": 10, "in_role": "CM"},
-      {"minute": 77, "player_out": "Eduardo Camavinga", "player_in": "Brahim Díaz", "in_number": 21, "in_role": "RW"}
+      {"minute": 77, "player_out": "Eduardo Camavinga", "player_in": "Brahim Díaz", "in_number": 21, "in_role": "RW"},
+      {"minute": 82, "player_out": "Vinícius Júnior", "player_in": "Endrick", "in_number": 16, "in_role": "CF"}
+    ],
+    "substitutes": [
+      {"name": "Arda Güler", "number": 15, "role": "RW"},
+      {"name": "Luka Modrić", "number": 10, "role": "CM"},
+      {"name": "Brahim Díaz", "number": 21, "role": "RW"},
+      {"name": "Endrick", "number": 16, "role": "CF"},
+      {"name": "Dani Ceballos", "number": 19, "role": "CM"}
     ],
     "red_cards": []
   }

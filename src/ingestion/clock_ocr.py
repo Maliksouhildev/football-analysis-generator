@@ -1027,8 +1027,8 @@ class ScoreboardClockOCR:
 
             team_codes: List[str] = []
             for t in texts:
-                # Check for MM:SS or MM.SS clock
-                m_clk = re.search(r"(\d{1,3})\s*[:\.]\s*([0-5]\d)", t)
+                # Check for MM:SS or MM.SS or MM*SS clock
+                m_clk = re.search(r"(\d{1,3})\s*[:\.\*\-']\s*([0-5]\d)", t)
                 if m_clk and not out["clock_str"]:
                     mm = int(m_clk.group(1))
                     ss = int(m_clk.group(2))
