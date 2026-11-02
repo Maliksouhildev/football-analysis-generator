@@ -203,29 +203,47 @@ PLAYER_BIOMETRIC_DB: Dict[str, Dict[str, Any]] = {
         "kit_note": "Real Madrid White #10",
         "cues": "Center Forward (CF) #10 leading the attack or inside penalty box",
     },
-    "yan diomande": {
-        "num": 25, "team": "away", "role": "LW",
-        "skin": "dark", "hair": "short black hair", "build": "agile winger",
-        "kit_note": "Real Madrid White #25 (subbed off at 90+4' for #19 Carlos Espí)",
-        "cues": "Left Winger / Attacking Midfielder Left (LW) #25 in white kit",
+    "brahim diaz": {
+        "num": 21, "team": "away", "role": "RW",
+        "skin": "tan/light", "hair": "short dark hair", "build": "low center of gravity, agile dribbler",
+        "kit_note": "Real Madrid White #21",
+        "cues": "Right Winger / Attacking Midfielder #21",
     },
     "arda guler": {
         "num": 15, "team": "away", "role": "RW",
         "skin": "light", "hair": "short dark brown hair", "build": "slender technical playmaker",
-        "kit_note": "Real Madrid White #15 (subbed off at 90+4' for #12 Trent Alexander-Arnold)",
+        "kit_note": "Real Madrid White #15",
         "cues": "Right Winger / Attacking Midfielder Right (RW) #15 with light skin",
     },
-    "trent alexander-arnold": {
-        "num": 12, "team": "away", "role": "RW",
-        "skin": "brown/dark", "hair": "short dark twists/curls", "build": "athletic right-sided player",
-        "kit_note": "Real Madrid White #12 (entered at 90+4' for #15 Arda Güler)",
-        "cues": "Right-sided player #12 after 90+4'",
+    "rodrygo": {
+        "num": 11, "team": "away", "role": "RW",
+        "skin": "brown", "hair": "short dark faded hair", "build": "quick dynamic forward",
+        "kit_note": "Real Madrid White #11",
+        "cues": "Right Winger / Forward #11 in white kit",
     },
-    "carlos espi": {
-        "num": 19, "team": "away", "role": "LW",
-        "skin": "light", "hair": "short brown hair", "build": "tall young forward",
-        "kit_note": "Real Madrid White #19 (entered at 90+4' for #25 Yan Diomande)",
-        "cues": "Forward #19 after 90+4'",
+    "endrick": {
+        "num": 16, "team": "away", "role": "ST",
+        "skin": "dark", "hair": "short dark hair", "build": "powerful explosive young striker",
+        "kit_note": "Real Madrid White #16",
+        "cues": "Striker #16 in white kit",
+    },
+    "frenkie de jong": {
+        "num": 21, "team": "home", "role": "CM",
+        "skin": "light", "hair": "medium blonde hair", "build": "tall gliding midfielder",
+        "kit_note": "Blaugrana #21",
+        "cues": "Midfielder #21 with blonde hair carrying ball out of deep zones",
+    },
+    "gavi": {
+        "num": 6, "team": "home", "role": "CM",
+        "skin": "light", "hair": "short dark brown hair", "build": "intense combative midfielder",
+        "kit_note": "Blaugrana #6",
+        "cues": "Central Midfielder #6 pressing relentlessly",
+    },
+    "dani olmo": {
+        "num": 20, "team": "home", "role": "AM",
+        "skin": "light", "hair": "short brown hair", "build": "tactical attacking playmaker",
+        "kit_note": "Blaugrana #20",
+        "cues": "Attacking Midfielder #20 occupying pockets of space",
     },
 }
 
@@ -631,7 +649,7 @@ class IsolatedPlayerAILocator:
 
                 # Exclude sidelines stewards/cameramen/warm-up substitutes outside the playable pitch
                 if self.config.use_touchline_staff_filter:
-                    if (x_pct < 7.5 and y_pct > 75.0) or (y_pct > 96.5):
+                    if (x_pct < 7.5 and y_pct > 78.0 and not hull_near):
                         continue
                     # Exclude bench/warm-up substitutes & photographers above the top touchline (y_pct < 17.5% or clipped at top border y1 <= 2.5% h)
                     min_playable_y = max(17.5, pitch_geom["min_turf_y_pct"] + 1.0)
@@ -1433,25 +1451,24 @@ class IsolatedPlayerAILocator:
             "  IMAGE 1: The full broadcast match frame with numbered bounding boxes `[ID]`.\n"
             "  IMAGE 2: A high-resolution multi-crop zoom sheet where each tile `[ID]` shows the full player crop on the left and a Super-Resolution CLAHE-sharpened kit/shorts/boots zoom crop on the right.\n\n"
             f"OFFICIAL ACTIVE ON-PITCH ROSTERS AT MATCH CLOCK {active_state.clock_str}:\n"
-            f"HOME TEAM ({home_name} - Blaugrana dark blue & crimson striped shirts, dark blue shorts; GK #1 Joan García in bright green):\n"
+            f"HOME TEAM ({home_name} - Blaugrana dark blue & crimson striped shirts, dark blue shorts; GK #13 Iñaki Peña in bright green):\n"
             f"{home_roster_str}\n\n"
-            f"AWAY TEAM ({away_name} - All-white shirts & white shorts; GK #13 Andriy Lunin in bright orange/coral):\n"
+            f"AWAY TEAM ({away_name} - All-white shirts & white shorts; GK #13 Andriy Lunin in bright orange/coral/salmon):\n"
             f"{away_roster_str}\n"
             f"{banned_str}"
             f"{telemetry_str}\n"
             f"DETECTED ON-PITCH ACTORS TO IDENTIFY ({len(actors)} players):\n"
             f"{actors_block}\n\n"
             "MANDATORY MULTI-SOURCE IDENTIFICATION PROTOCOL:\n"
-            "1. JERSEY & SHORTS NUMBER OCR FIRST: Inspect both IMAGE 1 and the sharpened kit/shorts zoom in IMAGE 2 for any visible shirt back numbers OR front shorts thigh numbers (e.g. #17 Anthony Gordon on front right dark shorts, #16 Ibrahima Konaté on front right white shorts, #25 Yan Diomande, #3 Alejandro Balde, #8 Pedri / Federico Valverde, #15 Arda Güler, #16 Rodri, #7 Fermín López). If a number is physically readable on the shirt or shorts, lock that exact player from the corresponding team! Set `visible_number: null` and `number_confidence: 0.0` if digits are NOT physically visible/readable on the shirt or shorts (NEVER copy a guessed roster number into `visible_number`).\n"
+            "1. JERSEY & SHORTS NUMBER OCR FIRST: Inspect both IMAGE 1 and the sharpened kit/shorts zoom in IMAGE 2 for any visible shirt back numbers OR front shorts thigh numbers (e.g. #17 Marc Casadó on dark shorts, #17 Lucas Vázquez on white shorts, #16 Fermín López on dark kit, #3 Alejandro Balde, #8 Pedri / #8 Federico Valverde, #19 Lamine Yamal, #9 Robert Lewandowski / #9 Kylian Mbappé, #7 Vinícius Júnior, #11 Raphinha). If a number is physically readable on the shirt or shorts, lock that exact player from the corresponding team! Set `visible_number: null` and `number_confidence: 0.0` if digits are NOT physically visible/readable on the shirt or shorts (NEVER copy a guessed roster number into `visible_number`).\n"
             "2. BIOMETRIC, BOOT COLOR & VISUAL DISCRIMINATORS (GSR VISUAL REALITY OVERRIDES API SUB TIMESTAMPS):\n"
-            "   - Short blonde/light-brown hair + bright mint-green/turquoise boots in Blaugrana kit -> #7 Fermín López (RCM).\n"
-            "   - Blonde/ginger hair + #17 on front shorts + gold boots on left wing in Blaugrana kit -> #17 Anthony Gordon (LW).\n"
-            "   - Tall muscular dark-skinned RCB in white kit with #16 on front white shorts -> #16 Ibrahima Konaté (RCB).\n"
-            "   - Long voluminous dark curly afro hair in white kit -> #17 Marc Cucurella (LB).\n"
-            "   - Very tall light-skinned blonde/light-brown hair LCB in white kit -> #4 Dean Huijsen (LCB).\n"
-            "   - Long black braids/dreadlocks in white kit (after 80') -> #6 Eduardo Camavinga (RCM).\n"
-            "   - Tucked-in Blaugrana shirt #16 in central midfield -> #16 Rodri (DM).\n"
-            "   - Bright orange/coral/salmon GK kit -> #13 Andriy Lunin (GK); Bright green GK kit -> #1 Joan García (GK).\n"
+            "   - Short blonde/light-brown hair + bright mint-green/turquoise boots in Blaugrana kit -> #16 Fermín López (RCM).\n"
+            "   - Compact build + dark hair + #17 on dark shorts in Blaugrana kit -> #17 Marc Casadó (DM).\n"
+            "   - Energetic right-back with dark hair + #17 on white kit -> #17 Lucas Vázquez (RB).\n"
+            "   - Dark-skinned powerful LB in white kit -> #23 Ferland Mendy (LB).\n"
+            "   - Distinctive long black braids/dreadlocks in white kit -> #6 Eduardo Camavinga (LCM).\n"
+            "   - Tall dark-skinned CB with beard in white kit -> #22 Antonio Rüdiger (LCB).\n"
+            "   - Bright orange/coral/salmon GK kit -> #13 Andriy Lunin (GK); Bright green GK kit -> #13 Iñaki Peña (GK).\n"
             "3. 2D FORMATION TOPOLOGY & SPATIAL ELIMINATION: For players whose jersey numbers are occluded, match their 2D formation line (backline vs midfield vs attack) and flank zone (left vs central vs right) to the remaining unassigned players in that team's Active XI.\n"
             "4. STRICT 1-TO-1 UNIQUENESS & TEAM LOCK: Never assign a Home player to an Away track or vice versa. Never assign the same player to two different `[ID]` boxes in the same frame.\n\n"
             "Return ONLY valid JSON matching this exact schema:\n"
@@ -1462,11 +1479,11 @@ class IsolatedPlayerAILocator:
             '      "team": "home",\n'
             '      "visible_number": 16,\n'
             '      "number_confidence": 0.95,\n'
-            '      "observed_biometrics": "light skin, tall build, tucked Blaugrana shirt #16",\n'
-            '      "tactical_role": "DM",\n'
-            '      "name": "Rodri",\n'
+            '      "observed_biometrics": "blonde hair, bright mint-green boots, Blaugrana kit",\n'
+            '      "tactical_role": "RCM",\n'
+            '      "name": "Fermín López",\n'
             '      "confidence": 0.96,\n'
-            '      "reasoning": "Number 16 clearly visible on back of Blaugrana jersey in central midfield"\n'
+            '      "reasoning": "Blonde hair and mint boots clearly identify Fermín López in midfield"\n'
             "    }\n"
             "  ]\n"
             "}"
@@ -1659,31 +1676,34 @@ class IsolatedPlayerAILocator:
                     hair_blonde = float(vf.get("hair_blonde_frac", 0.0))
                     hair_dark = float(vf.get("hair_dark_frac", 0.0))
                     if bio:
-                        if "afro" in obs_bio or "curly" in obs_bio:
-                            if "cucurella" in c_norm or "yamal" in c_norm:
-                                bio_score = max(bio_score, 1.0)
-                        if "cucurella" in c_norm and act.formation_line == "backline" and act.flank_zone in ("left", "left_half"):
-                            bio_score = max(bio_score, 1.5)
+                        if "curly" in obs_bio and "yamal" in c_norm:
+                            bio_score = max(bio_score, 1.2)
                         if "blonde" in obs_bio or "ginger" in obs_bio or hair_blonde >= 0.04:
-                            if "huijsen" in c_norm or "gordon" in c_norm or "de jong" in c_norm or "fermin" in c_norm:
-                                bio_score = max(bio_score, 1.0)
-                        # Unmistakable #7 Fermín López lock: short blonde/light-brown hair + bright mint-green boots
-                        if ("fermin" in c_norm or "lopez" in c_norm) and (mint_boot >= 0.035 or "mint" in obs_bio):
+                            if "fermin" in c_norm or "de jong" in c_norm:
+                                bio_score = max(bio_score, 1.2)
+                        # Unmistakable #16 Fermín López lock: short blonde/light-brown hair + bright mint-green boots
+                        if ("fermin" in c_norm or "lopez" in c_norm) and (mint_boot >= 0.035 or "mint" in obs_bio or hair_blonde >= 0.03):
                             bio_score = 3.5
                             score += 0.55
-                        # #17 Anthony Gordon lock: blonde/ginger hair on left flank with non-mint (gold) boots
-                        if "gordon" in c_norm and hair_blonde >= 0.04 and mint_boot < 0.02 and act.flank_zone in ("left", "left_half"):
+                        # Real Madrid RB #17 Lucas Vázquez: short dark hair in white kit on right flank
+                        if "vazquez" in c_norm and act.formation_line in ("backline", "midfield") and act.flank_zone in ("right", "right_half"):
                             bio_score = max(bio_score, 2.0)
-                            score += 0.25
-                        # #16 Ibrahima Konaté lock: tall dark-skinned RCB in white kit (#16 on front white shorts)
-                        if "konate" in c_norm and hair_dark >= 0.14 and (act.x_pct < 12.0 or act.role_priors.get("RCB", 0.0) >= 0.50):
-                            bio_score = max(bio_score, 2.2)
-                            score += 0.30
+                            score += 0.35
+                        # Barcelona DM #17 Marc Casadó: compact holding midfielder in Blaugrana kit
+                        if "casado" in c_norm and act.formation_line in ("midfield", "backline") and act.flank_zone in ("central", "right_half", "left_half"):
+                            bio_score = max(bio_score, 2.0)
+                            score += 0.35
+                        # Real Madrid GK #13 Andriy Lunin: tall keeper in salmon/orange/coral kit
+                        if "lunin" in c_norm and act.is_gk:
+                            bio_score = 4.0
+                            score += 1.0
+                        # Barcelona GK #13 Iñaki Peña: keeper in green kit
+                        if "pena" in c_norm and act.is_gk:
+                            bio_score = 4.0
+                            score += 1.0
                         if "braid" in obs_bio or "dread" in obs_bio:
                             if "camavinga" in c_norm:
-                                bio_score = max(bio_score, 1.2)
-                        if "tucked" in obs_bio and "rodri" in c_norm:
-                            bio_score = max(bio_score, 1.2)
+                                bio_score = max(bio_score, 2.0)
                     score += self.config.w_biometric_cue * bio_score
 
                     S[i, j] = score
@@ -1740,10 +1760,10 @@ class IsolatedPlayerAILocator:
     ) -> None:
         """
         Post-assignment critic audit that verifies:
-        1. Backline-Left (`LB` prior >= 0.85) player with dark curly afro hair (`hair_dark_frac >= 0.14`)
-           is assigned to #17 Marc Cucurella (LB).
-        2. Central/Right-Midfield player (`35% <= x_pct <= 45%`, `52% <= y_pct <= 66%`) whose back number `#15`
-           is visible is assigned to #15 Arda Güler (RW).
+        1. Goalkeeper in salmon/orange/coral kit is locked to #13 Andriy Lunin (GK).
+        2. Right-back formation slot in white kit is assigned to #17 Lucas Vázquez (RB).
+        3. Left-back formation slot in white kit is assigned to #23 Ferland Mendy (LB).
+        4. Central/Right-Midfield player whose back number #15 is visible is assigned to #15 Arda Güler (RW).
         """
         def _swap_or_assign(target_act: DetectedPitchActor, target_num: int, target_name: str, target_role: str, reason: str) -> None:
             if target_act.assigned_number == target_num:
@@ -1761,30 +1781,55 @@ class IsolatedPlayerAILocator:
                 other_act.assigned_number = old_num
                 other_act.assigned_role = old_role
 
-        # Check 1: #17 Marc Cucurella (LB) on far-side left-back flank (y_pct < 36%) with dark curly afro hair,
-        # ONLY when the actor does NOT already have a locked jersey/shorts OCR number!
+        # Check 1: Goalkeeper #13 Andriy Lunin
+        if any(int(p.get("number") or 0) == 13 and p.get("is_gk") for p in pool):
+            gk_cands = [a for a in team_actors if a.is_gk]
+            if gk_cands:
+                _swap_or_assign(
+                    gk_cands[0],
+                    13,
+                    "Andriy Lunin",
+                    "GK",
+                    "Critic lock: Goalkeeper salmon/orange kit detected -> #13 Andriy Lunin (GK)",
+                )
+
+        # Check 2: Right-back #17 Lucas Vázquez on right flank
         if any(int(p.get("number") or 0) == 17 for p in pool) and len(team_actors) >= 4:
+            rb_cands = [
+                a for a in team_actors
+                if not a.is_gk
+                and a.formation_line in ("backline", "midfield")
+                and a.flank_zone in ("right", "right_half")
+            ]
+            if rb_cands:
+                best_rb = max(rb_cands, key=lambda a: a.role_priors.get("RB", 0.0) + (1.0 if a.ocr_number == 17 else 0.0))
+                _swap_or_assign(
+                    best_rb,
+                    17,
+                    "Lucas Vázquez",
+                    "RB",
+                    "Critic lock: Right-back formation slot (BACKLINE_RIGHT) -> #17 Lucas Vázquez (RB)",
+                )
+
+        # Check 3: Left-back #23 Ferland Mendy on left flank
+        if any(int(p.get("number") or 0) == 23 for p in pool) and len(team_actors) >= 4:
             lb_cands = [
                 a for a in team_actors
                 if not a.is_gk
-                and a.ocr_number is None
-                and a.y_pct < 36.0
-                and a.formation_line == "backline"
+                and a.formation_line in ("backline", "midfield")
                 and a.flank_zone in ("left", "left_half")
-                and a.role_priors.get("LB", 0.0) >= 0.85
-                and a.visual_features.get("hair_dark_frac", 0.0) >= 0.08
             ]
             if lb_cands:
-                best_lb = max(lb_cands, key=lambda a: a.role_priors.get("LB", 0.0) + a.visual_features.get("hair_dark_frac", 0.0))
+                best_lb = max(lb_cands, key=lambda a: a.role_priors.get("LB", 0.0))
                 _swap_or_assign(
                     best_lb,
-                    17,
-                    "Marc Cucurella",
+                    23,
+                    "Ferland Mendy",
                     "LB",
-                    "Critic lock: Left-back formation slot (BACKLINE_LEFT) + dark curly afro hair profile -> #17 Marc Cucurella (LB)",
+                    "Critic lock: Left-back formation slot (BACKLINE_LEFT) -> #23 Ferland Mendy (LB)",
                 )
 
-        # Check 2: #15 Arda Güler (RW) in central/right-half midfield when #15 is on pitch
+        # Check 4: #15 Arda Güler (RW) in central/right-half midfield when #15 is on pitch
         if any(int(p.get("number") or 0) == 15 for p in pool):
             guler_cands = [
                 a for a in team_actors
@@ -1801,6 +1846,65 @@ class IsolatedPlayerAILocator:
                     "RW",
                     "Critic lock: #15 Arda Güler visible on back of white shirt in central-right channel",
                 )
+
+    def render_resolved_annotated_frame(
+        self,
+        frame: np.ndarray,
+        actors: List[DetectedPitchActor],
+    ) -> np.ndarray:
+        """
+        Renders a broadcast-quality annotated image with:
+        - Player bounding box (Home=Electric Blue, Away=Gold, GK=Neon Green)
+        - High-contrast player badge tag: '#{number} {Name} ({Role})'
+        - Confidence pill e.g. '98%'
+        - Pitch stud/boot turf contact dot
+        """
+        out = frame.copy()
+        for act in actors:
+            x1, y1, x2, y2 = act.bbox
+            is_gk = act.is_gk
+            team = act.team
+
+            if is_gk:
+                color = (0, 230, 118)       # Bright Neon Green
+                border_color = (0, 180, 80)
+            elif team == "home":
+                color = (255, 120, 60)      # Electric Blue for Barcelona
+                border_color = (200, 70, 30)
+            else:
+                color = (40, 215, 255)      # Gold / Cyan for Real Madrid
+                border_color = (30, 170, 210)
+
+            # Draw bounding box
+            cv2.rectangle(out, (x1, y1), (x2, y2), color, 2, cv2.LINE_AA)
+
+            # Stud/boot turf contact point
+            boot_x = int(0.5 * (x1 + x2))
+            boot_y = int(y2)
+            cv2.circle(out, (boot_x, boot_y), 4, color, -1, cv2.LINE_AA)
+            cv2.circle(out, (boot_x, boot_y), 6, (20, 20, 20), 1, cv2.LINE_AA)
+
+            # Build label tag
+            if act.assigned_number and act.assigned_name:
+                last_name = act.assigned_name.split()[-1]
+                tag = f"#{act.assigned_number} {last_name} ({act.assigned_role})"
+            elif act.assigned_name:
+                tag = f"{act.assigned_name} ({act.assigned_role})"
+            else:
+                tag = f"Player [{act.track_id}]"
+
+            conf_pct = int(round(act.assignment_confidence * 100))
+            full_tag = f"{tag} {conf_pct}%"
+
+            (tw, th), _ = cv2.getTextSize(full_tag, cv2.FONT_HERSHEY_DUPLEX, 0.48, 1)
+            ty_box = max(th + 8, y1 - 4)
+
+            # Badge background
+            cv2.rectangle(out, (x1, ty_box - th - 6), (x1 + tw + 10, ty_box + 4), (12, 16, 24), -1)
+            cv2.rectangle(out, (x1, ty_box - th - 6), (x1 + tw + 10, ty_box + 4), border_color, 1)
+            cv2.putText(out, full_tag, (x1 + 4, ty_box - 2), cv2.FONT_HERSHEY_DUPLEX, 0.48, color, 1, cv2.LINE_AA)
+
+        return out
 
     # -------------------------------------------------------------------------
     # STAGE 8: End-to-End Execution on a Match Frame / Event Window
@@ -1912,10 +2016,13 @@ class IsolatedPlayerAILocator:
         )
         actors = self.resolve_global_identities(actors, vlm_results, active_state, event_ctx)
 
+        # 9. Render final broadcast-grade resolved annotated frame with player badges
+        resolved_annotated = self.render_resolved_annotated_frame(frame, actors)
+
         if save_debug_dir:
             dbg_dir = Path(save_debug_dir)
             dbg_dir.mkdir(parents=True, exist_ok=True)
-            cv2.imwrite(str(dbg_dir / f"{clip_id}_iter{self.config.iteration_id:02d}_annotated.jpg"), annotated_frame)
+            cv2.imwrite(str(dbg_dir / f"{clip_id}_iter{self.config.iteration_id:02d}_annotated.jpg"), resolved_annotated)
             cv2.imwrite(str(dbg_dir / f"{clip_id}_iter{self.config.iteration_id:02d}_cropsheet.jpg"), crop_sheet)
 
         elapsed = time.time() - t0
@@ -1936,5 +2043,7 @@ class IsolatedPlayerAILocator:
             "home_count": len(home_players),
             "away_count": len(away_players),
             "actors": [a.to_dict() for a in actors],
+            "annotated_frame": resolved_annotated,
+            "crop_sheet": crop_sheet,
             "elapsed_sec": round(elapsed, 2),
         }

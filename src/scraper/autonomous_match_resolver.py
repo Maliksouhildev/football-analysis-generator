@@ -162,10 +162,7 @@ class AutonomousMatchResolver:
 
         # Fallback: Known fixture ID or team schedule lookup when date is omitted / historical
         if not event_id:
-            if ("barcelona" in home_low or "barca" in home_low) and ("real madrid" in away_low or "madrid" in away_low):
-                event_id = "401882832"
-            elif ("real madrid" in home_low or "madrid" in home_low) and ("barcelona" in away_low or "barca" in away_low):
-                event_id = "401882832"
+            pass
 
         if not event_id:
             logger.info(f"[ESPN] Match not found on scoreboard for date '{date}'.")
