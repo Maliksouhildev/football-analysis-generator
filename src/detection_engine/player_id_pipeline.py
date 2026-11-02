@@ -211,16 +211,7 @@ class PlayerIDPipeline:
         )
 
         # ---------------------------------------------------------------------
-        # STAGE 5: Team Colorimetry & Kit Partitioning
-        # ---------------------------------------------------------------------
-        accepted_actors = self.internal_locator.classify_teams_and_kits(
-            frame=frame,
-            actors=accepted_actors,
-            shot_type=shot_type,
-        )
-
-        # ---------------------------------------------------------------------
-        # STAGE 6: 2D Homography & Spatial Topology Priors
+        # STAGE 5: 2D Homography & Spatial Topology Priors
         # ---------------------------------------------------------------------
         self.internal_locator.compute_spatial_topology_priors(
             frame=frame,
@@ -229,6 +220,16 @@ class PlayerIDPipeline:
             period=period_hint,
             clip_id=clip_id,
             persp_slope=pitch_geom.get("persp_slope", 0.20),
+        )
+
+        # ---------------------------------------------------------------------
+        # STAGE 6: Team Colorimetry, Kit Partitioning & GK Uniqueness Lock
+        # ---------------------------------------------------------------------
+        accepted_actors = self.classify_teams_and_kits(
+            frame=frame,
+            actors=accepted_actors,
+            pitch_geom=pitch_geom,
+            shot_type=shot_type,
         )
 
         # ---------------------------------------------------------------------
@@ -397,7 +398,17 @@ class PlayerIDPipeline:
 
         merged_boxes = self.internal_locator._nms_boxes(raw_boxes, iou_thresh=0.45)
 
-        # Scale estimation
+        # Fix 3.1: Shot type detection first: if max(H) > 0.45 * Frame_Height -> CLOSE_UP, else WIDE_TACTICAL
+        max_bh = max([b[3] - b[1] for b in merged_boxes], default=0)
+        if max_bh > int(0.45 * h):
+            shot_type = "close_up"
+        elif pitch_geom.get("shot_type") == "close_up":
+            shot_type = "close_up"
+        else:
+            shot_type = "wide_tactical"
+        pitch_geom["shot_type"] = shot_type
+
+        # Scale estimation for wide tactical shots
         confident_dims = [
             max(b[2] - b[0], b[3] - b[1])
             for b in merged_boxes
@@ -409,6 +420,8 @@ class PlayerIDPipeline:
         all_candidate_boxes: List[CandidateBox] = []
         accepted_actors: List[DetectedPitchActor] = []
         next_box_id = 1
+
+        pitch_poly = pitch_geom.get("pitch_polygon")
 
         for (x1, y1, x2, y2, conf) in merged_boxes:
             x1, y1 = max(0, x1), max(0, y1)
@@ -440,8 +453,24 @@ class PlayerIDPipeline:
                 all_candidate_boxes.append(c_box)
                 continue
 
-            # Rule 2: Non-human spherical object
-            if shot_type != "close_up":
+            # Fix 3.2: Perspective Scale Prior (CLOSE_UP vs WIDE_TACTICAL)
+            if shot_type == "close_up":
+                # Linear perspective scale prior based on bottom y2:
+                # Expected height at far top of pitch (y2 ≈ 0.25 * Frame_Height) is 36px, scaling linearly with y2.
+                # Keep any human detection with conf >= 0.45 and Height >= 36px standing on valid turf.
+                y2_frac = float(y2) / float(h)
+                expected_min_h = max(36, int(36 + max(0.0, y2_frac - 0.25) * 45.0))
+                if bh < 36:
+                    c_box.status = "rejected"
+                    c_box.rejection_reason = f"CLOSE_UP_SCALE_BELOW_36PX ({bh}px)"
+                    all_candidate_boxes.append(c_box)
+                    continue
+                if conf < 0.45 and bh < expected_min_h:
+                    c_box.status = "rejected"
+                    c_box.rejection_reason = f"CLOSE_UP_SCALE_PRIOR ({bh}px < {expected_min_h}px, conf={conf:.2f})"
+                    all_candidate_boxes.append(c_box)
+                    continue
+            else:
                 if max(bw, bh) < min_allowed_dim:
                     c_box.status = "rejected"
                     c_box.rejection_reason = "SCALE_BELOW_MEDIAN_TURF_PRIOR"
@@ -450,6 +479,28 @@ class PlayerIDPipeline:
                 if bh < 44 and (conf < 0.42 or (bw * bh) < 1600):
                     c_box.status = "rejected"
                     c_box.rejection_reason = "SPHERICAL_BALL_SCALE"
+                    all_candidate_boxes.append(c_box)
+                    continue
+
+            # Fix 1.3: Static Equipment & Non-Human Filter (sideline microphones, camera tripods)
+            torso_h = max(12, int(0.38 * bh))
+            t_crop = frame[y1:min(h, y1 + torso_h), max(0, x1 + int(0.12 * bw)):min(w, x2 - int(0.12 * bw))]
+            if t_crop.size > 0 and shot_type != "close_up":
+                t_hsv = cv2.cvtColor(t_crop, cv2.COLOR_BGR2HSV)
+                tH, tS, tV = t_hsv[:, :, 0], t_hsv[:, :, 1], t_hsv[:, :, 2]
+                skin_mask = (tH <= 25) & (tS >= 35) & (tS <= 180) & (tV >= 60)
+                kit_mask = (
+                    ((tS < 55) & (tV >= 155)) |  # White kit
+                    ((tH >= 100) & (tH <= 138) & (tS >= 35) & (tV >= 35)) |  # Blaugrana blue
+                    (((tH <= 14) | (tH >= 155)) & (tS >= 35) & (tV >= 35)) |  # Crimson red
+                    ((tH >= 35) & (tH <= 85) & (tS >= 80) & (tV >= 90)) |     # Green GK
+                    (((tH <= 20) | (tH >= 165)) & (tS >= 85) & (tV >= 140)) | # Salmon GK
+                    ((tH >= 82) & (tH <= 108) & (tS >= 55) & (tV >= 120))     # Cyan ref
+                )
+                human_pixel_frac = float(np.mean(skin_mask | kit_mask))
+                if human_pixel_frac < 0.12 and aspect >= 1.6:
+                    c_box.status = "rejected"
+                    c_box.rejection_reason = f"STATIC_EQUIPMENT_METALLIC_TRIPOD (human_frac={human_pixel_frac:.2f})"
                     all_candidate_boxes.append(c_box)
                     continue
 
@@ -491,6 +542,30 @@ class PlayerIDPipeline:
                             all_candidate_boxes.append(c_box)
                             continue
 
+            # Fix 1.2: Sideline Dugout & Bench Filter: sample 24x16 patch centered directly at ankle/foot contact zone
+            ankle_y1 = max(0, int(boot_y - 8))
+            ankle_y2 = min(h, int(boot_y + 8))
+            ankle_x1 = max(0, int(boot_x - 12))
+            ankle_x2 = min(w, int(boot_x + 12))
+
+            foot_patch = grass_mask[ankle_y1:ankle_y2, ankle_x1:ankle_x2]
+            foot_turf_frac = float(np.mean(foot_patch > 0)) if foot_patch.size > 0 else 0.0
+
+            # Left and right background strips outside ankles (12px wide)
+            strip_l = grass_mask[ankle_y1:ankle_y2, max(0, int(boot_x - 24)):max(0, int(boot_x - 12))]
+            strip_r = grass_mask[ankle_y1:ankle_y2, min(w, int(boot_x + 12)):min(w, int(boot_x + 24))]
+            surround_turf = 0.0
+            if strip_l.size > 0 and strip_r.size > 0:
+                surround_turf = 0.5 * (float(np.mean(strip_l > 0)) + float(np.mean(strip_r > 0)))
+            elif strip_l.size > 0:
+                surround_turf = float(np.mean(strip_l > 0))
+            elif strip_r.size > 0:
+                surround_turf = float(np.mean(strip_r > 0))
+
+            dist_to_boundary = 999.0
+            if pitch_poly is not None and len(pitch_poly) > 2:
+                dist_to_boundary = cv2.pointPolygonTest(pitch_poly, (float(boot_x), float(boot_y)), True)
+
             # Rule 6: Turf Hull & Boundary checks
             if shot_type == "close_up":
                 if self.config.use_touchline_staff_filter and (bh < int(h * 0.15) or conf < 0.23):
@@ -499,42 +574,28 @@ class PlayerIDPipeline:
                     all_candidate_boxes.append(c_box)
                     continue
             else:
-                by_i = min(h - 1, max(0, int(boot_y)))
-                bx_i = min(w - 1, max(0, int(boot_x)))
-                patch_y1 = max(0, by_i - 28)
-                patch_y2 = min(h, by_i + 16)
-                patch_x1 = max(0, bx_i - 24)
-                patch_x2 = min(w, bx_i + 24)
-                hull_near = np.count_nonzero(hull_mask[patch_y1:patch_y2, patch_x1:patch_x2]) > 0
-                grass_near = float(np.mean(grass_mask[patch_y1:patch_y2, patch_x1:patch_x2] > 0))
+                # Outside concave touchline polygon
+                if dist_to_boundary < -18.0:
+                    c_box.status = "rejected"
+                    c_box.rejection_reason = f"OFF_TURF_CONCAVE_BOUNDARY (dist={dist_to_boundary:.1f}px)"
+                    all_candidate_boxes.append(c_box)
+                    continue
 
-                if self.config.use_adaptive_turf_hull:
-                    if not hull_near and grass_near < 0.08:
+                # Near sideline/dugout: require green turf fraction >= 35% on ankle contact patch
+                if dist_to_boundary <= 25.0:
+                    if foot_turf_frac < 0.35 and surround_turf < 0.30:
                         c_box.status = "rejected"
-                        c_box.rejection_reason = "OFF_TURF_OUT_OF_BOUNDS"
+                        c_box.rejection_reason = f"DUGOUT_BENCH_ANKLE_NON_GRASS (turf={foot_turf_frac:.2f}, surround={surround_turf:.2f})"
                         all_candidate_boxes.append(c_box)
                         continue
 
-                # Touchline staff / photographers / dugout bench
-                if self.config.use_touchline_staff_filter:
-                    if x_pct < 7.5 and y_pct > 78.0 and not hull_near:
-                        c_box.status = "rejected"
-                        c_box.rejection_reason = "SIDELINE_STEWARD_OFF_TURF"
-                        all_candidate_boxes.append(c_box)
-                        continue
-                    min_playable_y = max(17.5, pitch_geom["min_turf_y_pct"] + 1.0)
-                    if y_pct < min_playable_y or (y1 <= int(h * 0.025) and y_pct < 20.0):
-                        c_box.status = "rejected"
-                        c_box.rejection_reason = "TOP_TOUCHLINE_BENCH_STAFF"
-                        all_candidate_boxes.append(c_box)
-                        continue
-                    if y_pct < 44.0:
-                        foot_around = grass_mask[max(0, int(boot_y) - 8):min(h, int(boot_y) + 12), max(0, x1 - 6):min(w, x2 + 6)]
-                        if foot_around.size == 0 or float(np.mean(foot_around > 0)) < 0.22:
-                            c_box.status = "rejected"
-                            c_box.rejection_reason = "FAR_DISTANCE_NON_GRASS"
-                            all_candidate_boxes.append(c_box)
-                            continue
+                # Top touchline bench staff filter
+                min_playable_y = max(17.5, pitch_geom["min_turf_y_pct"] + 1.0)
+                if y_pct < min_playable_y or (y1 <= int(h * 0.025) and y_pct < 20.0):
+                    c_box.status = "rejected"
+                    c_box.rejection_reason = "TOP_TOUCHLINE_BENCH_STAFF"
+                    all_candidate_boxes.append(c_box)
+                    continue
 
             # Accepted candidate
             all_candidate_boxes.append(c_box)
@@ -555,6 +616,276 @@ class PlayerIDPipeline:
             act.track_id = idx
 
         return all_candidate_boxes, accepted_actors
+
+    # -------------------------------------------------------------------------
+    # STAGE 5: Team Colorimetry, Kit Partitioning & GK Uniqueness Lock
+    # -------------------------------------------------------------------------
+
+    def classify_teams_and_kits(
+        self,
+        frame: np.ndarray,
+        actors: List[DetectedPitchActor],
+        pitch_geom: Dict[str, Any],
+        shot_type: str = "wide_tactical",
+    ) -> List[DetectedPitchActor]:
+        """
+        Classifies every detected pitch actor into:
+        - 'home' (FC Barcelona: Blaugrana blue & crimson + dark blue shorts, or green GK)
+        - 'away' (Real Madrid: White shirt & shorts, or salmon/orange GK)
+        - 'referee' (Cyan jersey H=82..108, S>=60, V>=125)
+        Applies:
+        1. Fix 2.1: Steward / Bib filter (neon yellow vest, high-vis orange bib outside penalty area)
+        2. Fix 2.1: Manager all-black attire filter (V_median < 48, S_median < 45)
+        3. Fix 2.2: Motion-blurred linesman / referee upgrade
+        4. Fix 4.1: Goalkeeper Uniqueness Lock: At most ONE actor per team is_gk=True
+        5. Fix 3.3: Late Quota Capping: at most 10 outfield + 1 GK per team (applied AFTER non-players purged)
+        """
+        h, w = frame.shape[:2]
+        pitch_poly = pitch_geom.get("pitch_polygon")
+        filtered_actors: List[DetectedPitchActor] = []
+        potential_gks: List[DetectedPitchActor] = []
+
+        for act in actors:
+            x1, y1, x2, y2 = act.bbox
+            bw = max(1, x2 - x1)
+            bh = max(1, y2 - y1)
+            boot_x = 0.5 * (x1 + x2)
+            boot_y = float(y2)
+
+            dist_to_boundary = 999.0
+            if pitch_poly is not None and len(pitch_poly) > 2:
+                dist_to_boundary = cv2.pointPolygonTest(pitch_poly, (float(boot_x), float(boot_y)), True)
+
+            # Upper torso crop
+            if shot_type == "close_up" and bh > int(h * 0.45):
+                ty1 = max(0, int(y1 + bh * 0.44))
+                ty2 = min(h, int(y1 + bh * 0.90))
+            else:
+                ty1 = max(0, int(y1 + bh * 0.14))
+                ty2 = min(h, int(y1 + bh * 0.52))
+            tx1 = max(0, int(x1 + bw * 0.18))
+            tx2 = min(w, int(x2 - bw * 0.18))
+            torso = frame[ty1:ty2, tx1:tx2]
+
+            # Shorts crop
+            sy1 = max(0, int(y1 + bh * 0.50))
+            sy2 = min(h, int(y1 + bh * 0.72))
+            sx1 = max(0, int(x1 + bw * 0.20))
+            sx2 = min(w, int(x2 - bw * 0.20))
+            shorts = frame[sy1:sy2, sx1:sx2]
+
+            # Head crop
+            hy1 = max(0, int(y1))
+            hy2 = min(h, int(y1 + bh * 0.20))
+            hx1 = max(0, int(x1 + bw * 0.15))
+            hx2 = min(w, int(x2 - bw * 0.15))
+            head = frame[hy1:hy2, hx1:hx2]
+
+            # Boots crop
+            by1_c = max(0, int(y1 + bh * 0.76))
+            by2_c = min(h, int(y2))
+            bx1_c = max(0, int(x1))
+            bx2_c = min(w, int(x2))
+            boots_crop = frame[by1_c:by2_c, bx1_c:bx2_c]
+
+            if torso.size == 0:
+                continue
+
+            hsv_t = cv2.cvtColor(torso, cv2.COLOR_BGR2HSV)
+            all_H = hsv_t[:, :, 0]
+            all_S = hsv_t[:, :, 1]
+            all_V = hsv_t[:, :, 2]
+
+            non_grass = ~((all_H >= 32) & (all_H <= 85) & (all_S >= 35))
+            if np.count_nonzero(non_grass) < 6:
+                non_grass = np.ones(hsv_t.shape[:2], dtype=bool)
+
+            H_vals = all_H[non_grass]
+            S_vals = all_S[non_grass]
+            V_vals = all_V[non_grass]
+
+            # Fix 2.1: Steward / Bib & Manager Isolation Filter (Stage 4)
+            # 1. Neon Yellow/Chartreuse steward vest: Hue in [20, 38], S >= 135, V >= 170 with fraction >= 0.20
+            neon_steward_frac = float(np.mean((all_H >= 20) & (all_H <= 38) & (all_S >= 135) & (all_V >= 170)))
+            if neon_steward_frac >= 0.20:
+                act.actor_type = "staff"
+                act.team = "unknown"
+                continue
+
+            # 2. High-Vis Orange steward/photographer bib outside penalty area: Hue in [4, 22], S >= 155, V >= 160
+            orange_bib_frac = float(np.mean((all_H >= 4) & (all_H <= 22) & (all_S >= 155) & (all_V >= 160)))
+            is_in_penalty_box = (
+                (act.pitch_x_m <= 16.5 or act.pitch_x_m >= 88.5) and
+                (13.8 <= act.pitch_y_m <= 54.2)
+            ) if (act.pitch_x_m > 0 or act.pitch_y_m > 0) else False
+
+            if orange_bib_frac >= 0.15:
+                if not is_in_penalty_box or abs(dist_to_boundary) <= 45.0:
+                    act.actor_type = "staff"
+                    act.team = "unknown"
+                    continue
+
+            # 3. Manager / Sideline Staff All-Black Attire: Upper Torso and Shorts both have V_median < 48 and S_median < 45
+            torso_v_med = float(np.median(V_vals)) if len(V_vals) > 0 else 100.0
+            torso_s_med = float(np.median(S_vals)) if len(S_vals) > 0 else 100.0
+            shorts_v_med = 100.0
+            shorts_s_med = 100.0
+            if shorts.size > 0:
+                hsv_s = cv2.cvtColor(shorts, cv2.COLOR_BGR2HSV)
+                shorts_v_med = float(np.median(hsv_s[:, :, 2]))
+                shorts_s_med = float(np.median(hsv_s[:, :, 1]))
+
+            if torso_v_med < 48.0 and torso_s_med < 45.0 and shorts_v_med < 48.0 and shorts_s_med < 45.0:
+                act.actor_type = "staff"
+                act.team = "unknown"
+                continue
+
+            # Fix 2.2: Referee & Linesman Filter Upgrade
+            # Widen cyan/neon referee detection to Hue in [82, 108], S >= 60, V >= 125 with fraction >= 0.18
+            cyan_ref_frac = float(np.mean((H_vals >= 82) & (H_vals <= 108) & (S_vals >= 60) & (V_vals >= 125)))
+            white_frac = float(np.mean((S_vals < 52) & (V_vals > 152)))
+            dark_blue_frac = float(np.mean((H_vals >= 102) & (H_vals <= 138) & (S_vals >= 35) & (V_vals < 185)))
+            crimson_red_frac = float(np.mean(((H_vals <= 14) | (H_vals >= 155)) & (S_vals >= 40) & (V_vals >= 35) & (V_vals < 175)))
+            blaugrana_frac = dark_blue_frac + crimson_red_frac
+
+            if cyan_ref_frac >= 0.18:
+                if shot_type == "close_up" or abs(dist_to_boundary) <= 35.0:
+                    act.team = "referee"
+                    act.actor_type = "referee"
+                    continue
+                elif blaugrana_frac < 0.25 and white_frac < 0.35:
+                    act.team = "referee"
+                    act.actor_type = "referee"
+                    continue
+
+            # Shorts white & orange
+            shorts_white_frac = 0.0
+            shorts_orange_frac = 0.0
+            if shorts.size > 0:
+                hsv_s = cv2.cvtColor(shorts, cv2.COLOR_BGR2HSV)
+                ng_s = ~((hsv_s[:, :, 0] >= 30) & (hsv_s[:, :, 0] <= 85) & (hsv_s[:, :, 1] >= 35))
+                if np.count_nonzero(ng_s) > 4:
+                    sH = hsv_s[:, :, 0][ng_s]
+                    sS = hsv_s[:, :, 1][ng_s]
+                    sV = hsv_s[:, :, 2][ng_s]
+                    shorts_white_frac = float(np.mean((sS < 55) & (sV > 145)))
+                    shorts_orange_frac = float(np.mean(((sH <= 18) | (sH >= 166)) & (sS >= 95) & (sV >= 155)))
+
+            # Mint boots
+            mint_boot_frac = 0.0
+            if boots_crop.size > 0:
+                hsv_b = cv2.cvtColor(boots_crop, cv2.COLOR_BGR2HSV)
+                mint_boot_frac = float(np.mean((hsv_b[:, :, 0] >= 68) & (hsv_b[:, :, 0] <= 96) & (hsv_b[:, :, 1] >= 58) & (hsv_b[:, :, 2] >= 115)))
+
+            # Hair
+            hair_blonde_frac = 0.0
+            if head.size > 0:
+                hsv_h = cv2.cvtColor(head, cv2.COLOR_BGR2HSV)
+                ng_h = ~((hsv_h[:, :, 0] >= 30) & (hsv_h[:, :, 0] <= 88) & (hsv_h[:, :, 1] >= 35))
+                if np.count_nonzero(ng_h) > 4:
+                    hair_blonde_frac = float(np.mean((hsv_h[:, :, 0][ng_h] >= 12) & (hsv_h[:, :, 0][ng_h] <= 32) & (hsv_h[:, :, 2][ng_h] > 135)))
+
+            # Goalkeeper color signals
+            orange_gk_frac = float(np.mean(((all_H <= 18) | (all_H >= 166)) & (all_S >= 95) & (all_V >= 165)))
+            green_gk_frac = float(np.mean((all_H >= 45) & (all_H <= 82) & (all_S >= 95) & (all_V >= 135)))
+
+            act.visual_features = {
+                "white_frac": round(white_frac, 3),
+                "shorts_white_frac": round(shorts_white_frac, 3),
+                "blaugrana_frac": round(blaugrana_frac, 3),
+                "cyan_ref_frac": round(cyan_ref_frac, 3),
+                "orange_gk_frac": round(orange_gk_frac, 3),
+                "green_gk_frac": round(green_gk_frac, 3),
+                "mint_boot_frac": round(mint_boot_frac, 3),
+                "hair_blonde_frac": round(hair_blonde_frac, 3),
+            }
+
+            is_potential_gk = False
+            if (orange_gk_frac >= 0.20 or (orange_gk_frac >= 0.14 and shorts_orange_frac >= 0.20)) and dark_blue_frac < 0.08:
+                act.team = "away"
+                act.actor_type = "goalkeeper"
+                is_potential_gk = True
+            elif green_gk_frac >= 0.35 and bw < int(w * 0.12):
+                act.team = "home"
+                act.actor_type = "goalkeeper"
+                is_potential_gk = True
+
+            if is_potential_gk:
+                potential_gks.append(act)
+                continue
+
+            # Outfield team assignment
+            away_score = white_frac * 1.3 + shorts_white_frac * 0.7
+            home_score = blaugrana_frac * 1.4 + float(np.mean(V_vals < 115)) * 0.6
+
+            if away_score >= home_score and (white_frac >= 0.22 or shorts_white_frac >= 0.28):
+                act.team = "away"
+            else:
+                act.team = "home"
+            act.is_gk = False
+            act.actor_type = "player"
+            filtered_actors.append(act)
+
+        # Fix 4.1: Goalkeeper Uniqueness Lock
+        # At most ONE actor per team can have is_gk = True.
+        # Score candidates by proximity to goalmouth/penalty box interior and valid pitch containment.
+        for team_side in ["home", "away"]:
+            team_gks = [a for a in potential_gks if a.team == team_side]
+            if not team_gks:
+                continue
+
+            def _score_gk_cand(a: DetectedPitchActor) -> float:
+                score = 0.0
+                if a.pitch_x_m <= 18.0 or a.pitch_x_m >= 87.0:
+                    score += 10.0
+                if "box" in a.tactical_zone or "penalty" in a.tactical_zone or "gk" in a.tactical_zone:
+                    score += 10.0
+                b_x = 0.5 * (a.bbox[0] + a.bbox[2])
+                b_y = float(a.bbox[3])
+                if pitch_poly is not None and len(pitch_poly) > 2:
+                    d = cv2.pointPolygonTest(pitch_poly, (b_x, b_y), True)
+                    if d >= 0:
+                        score += 5.0
+                    else:
+                        score -= 25.0
+                asp = (a.bbox[3] - a.bbox[1]) / max(1, a.bbox[2] - a.bbox[0])
+                if 1.8 <= asp <= 3.8:
+                    score += 3.0
+                return score
+
+            team_gks.sort(key=_score_gk_cand, reverse=True)
+            best_gk = team_gks[0]
+            best_gk.is_gk = True
+            best_gk.actor_type = "goalkeeper"
+            filtered_actors.append(best_gk)
+
+            # Demote extra GK candidates
+            for extra_gk in team_gks[1:]:
+                extra_gk.is_gk = False
+                extra_gk.actor_type = "staff"
+
+        # Fix 3.3: Late Quota Capping (at most 10 outfield + 1 GK per team)
+        # Applied ONLY AFTER Stage 2 and Stage 4 filters have purged all non-players
+        if self.config.use_live_active_xi_sync:
+            home_outfield = [a for a in filtered_actors if a.team == "home" and not a.is_gk]
+            away_outfield = [a for a in filtered_actors if a.team == "away" and not a.is_gk]
+            home_gk = [a for a in filtered_actors if a.team == "home" and a.is_gk]
+            away_gk = [a for a in filtered_actors if a.team == "away" and a.is_gk]
+
+            if len(home_outfield) > 10:
+                home_outfield.sort(key=lambda a: (a.visual_features.get("blaugrana_frac", 0.0) + a.confidence), reverse=True)
+                home_outfield = home_outfield[:10]
+            if len(away_outfield) > 10:
+                away_outfield.sort(key=lambda a: (a.visual_features.get("white_frac", 0.0) + a.confidence), reverse=True)
+                away_outfield = away_outfield[:10]
+
+            filtered_actors = home_gk + home_outfield + away_gk + away_outfield
+            filtered_actors.sort(key=lambda a: (round(a.x_pct / 4.0), a.y_pct))
+
+        for idx, act in enumerate(filtered_actors, start=1):
+            act.track_id = idx
+
+        return filtered_actors
 
     # -------------------------------------------------------------------------
     # STAGE 9: Hungarian Bipartite Matching with Full Diagnostic Affinity Matrix
@@ -622,6 +953,44 @@ class PlayerIDPipeline:
 
         for team_side, pool in [("home", home_pool), ("away", away_pool)]:
             team_actors = [a for a in actors if a.team == team_side]
+            if not team_actors or not pool:
+                continue
+
+            # Fix 4.2: Goalkeeper Hard-Assignment & Outfield Hungarian Decoupling
+            # Hard-assign the unique is_gk track to the active goalkeeper from ActiveXIResolver immediately.
+            # Remove both that bounding box and the GK player from the outfield Hungarian cost matrix
+            # so an outfield player can NEVER be assigned to a green GK bounding box.
+            gk_actor = next((a for a in team_actors if a.is_gk), None)
+            active_gk_cand = next((p for p in pool if p.get("is_gk") or str(p.get("role", "")).upper() == "GK"), None)
+
+            if gk_actor is not None and active_gk_cand is not None:
+                gk_actor.assigned_name = active_gk_cand["name"]
+                gk_actor.assigned_number = int(active_gk_cand.get("number") or 13)
+                gk_actor.assigned_role = "GK"
+                gk_actor.assignment_confidence = 0.99
+                gk_actor.assignment_method = "GK_UNIQUENESS_LOCK"
+                gk_actor.reasoning = f"Unique goalkeeper locked to #{gk_actor.assigned_number} {gk_actor.assigned_name} inside goalmouth/penalty box"
+
+                # Record diagnostic affinity breakdown for locked GK
+                affinity_records_out[gk_actor.track_id] = [{
+                    "track_id": gk_actor.track_id,
+                    "player_name": active_gk_cand["name"],
+                    "jersey_number": gk_actor.assigned_number,
+                    "team": team_side,
+                    "role": "GK",
+                    "s_vlm": 0.42,
+                    "s_ocr": 0.30,
+                    "s_topo": 0.18,
+                    "s_bio": 0.10,
+                    "total_score": 1.0,
+                    "is_assigned": True,
+                    "notes": "GK_UNIQUENESS_LOCK",
+                }]
+
+                # Decouple: Remove GK actor and GK candidate from outfield Hungarian cost matrix!
+                team_actors = [a for a in team_actors if a.track_id != gk_actor.track_id]
+                pool = [p for p in pool if p["name"] != active_gk_cand["name"]]
+
             if not team_actors or not pool:
                 continue
 

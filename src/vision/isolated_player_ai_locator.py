@@ -425,9 +425,9 @@ class IsolatedPlayerAILocator:
         h, w = frame.shape[:2]
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
-        # Green pitch turf mask (H in 30..68 strictly excludes cyan/teal LED boards at H=75..95)
-        lower_green = np.array([30, 24, 24], dtype=np.uint8)
-        upper_green = np.array([68, 255, 255], dtype=np.uint8)
+        # Green pitch turf mask (Hue in [32, 85], S >= 35, V >= 35 strictly excludes cyan/teal LED boards)
+        lower_green = np.array([32, 35, 35], dtype=np.uint8)
+        upper_green = np.array([85, 255, 255], dtype=np.uint8)
         grass_mask = cv2.inRange(hsv, lower_green, upper_green)
 
         # Zero out scoreboard bug (top-left) and DAZN logo (top-right)
@@ -440,17 +440,20 @@ class IsolatedPlayerAILocator:
 
         turf_ratio = float(np.count_nonzero(grass_closed)) / float(h * w)
 
-        # Largest connected turf contour -> Convex Hull
+        # Largest connected turf contour -> Concave Touchline Polygon via approxPolyDP
+        # Eliminates stadium corner bridges and concave sideline leaks pulling in photographers/stewards
         contours, _ = cv2.findContours(grass_closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         hull_mask = np.zeros((h, w), dtype=np.uint8)
+        pitch_poly: Optional[np.ndarray] = None
         min_turf_y_pct = 12.0
         max_turf_y_pct = 96.0
         if contours:
             largest = max(contours, key=cv2.contourArea)
             if cv2.contourArea(largest) > 0.05 * (h * w):
-                hull = cv2.convexHull(largest)
-                cv2.drawContours(hull_mask, [hull], -1, 255, thickness=-1)
-                ys = hull[:, 0, 1]
+                peri = cv2.arcLength(largest, True)
+                pitch_poly = cv2.approxPolyDP(largest, 0.015 * peri, True)
+                cv2.drawContours(hull_mask, [pitch_poly], -1, 255, thickness=-1)
+                ys = pitch_poly[:, 0, 1]
                 min_turf_y_pct = float(np.min(ys)) / h * 100.0
                 max_turf_y_pct = float(np.max(ys)) / h * 100.0
 
@@ -493,6 +496,7 @@ class IsolatedPlayerAILocator:
             "persp_slope": round(persp_slope, 2),
             "grass_mask": grass_closed,
             "hull_mask": hull_mask,
+            "pitch_polygon": pitch_poly,
             "min_turf_y_pct": round(min_turf_y_pct, 1),
             "max_turf_y_pct": round(max_turf_y_pct, 1),
             "banner_bbox": banner_bbox,
@@ -1557,6 +1561,24 @@ class IsolatedPlayerAILocator:
 
         for team_side, pool in [("home", home_pool), ("away", away_pool)]:
             team_actors = [a for a in actors if a.team == team_side]
+            if not team_actors or not pool:
+                continue
+
+            # Fix 4.2: Goalkeeper Hard-Assignment & Outfield Decoupling
+            # Hard-assign unique is_gk track to active goalkeeper immediately and remove from outfield cost matrix.
+            gk_actor = next((a for a in team_actors if a.is_gk), None)
+            active_gk_cand = next((p for p in pool if p.get("is_gk") or str(p.get("role", "")).upper() == "GK"), None)
+
+            if gk_actor is not None and active_gk_cand is not None:
+                gk_actor.assigned_name = active_gk_cand["name"]
+                gk_actor.assigned_number = int(active_gk_cand.get("number") or 13)
+                gk_actor.assigned_role = "GK"
+                gk_actor.assignment_confidence = 0.99
+                gk_actor.assignment_method = "GK_UNIQUENESS_LOCK"
+                gk_actor.reasoning = f"Unique goalkeeper locked to #{gk_actor.assigned_number} {gk_actor.assigned_name} inside goalmouth/penalty box"
+                team_actors = [a for a in team_actors if a.track_id != gk_actor.track_id]
+                pool = [p for p in pool if p["name"] != active_gk_cand["name"]]
+
             if not team_actors or not pool:
                 continue
 

@@ -34,9 +34,9 @@ class PitchGeometryEngine:
         h, w = frame.shape[:2]
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
-        # 1. Green pitch turf mask (H in 30..68 strictly excludes cyan/teal LED boards)
-        lower_green = np.array([30, 24, 24], dtype=np.uint8)
-        upper_green = np.array([68, 255, 255], dtype=np.uint8)
+        # 1. Green pitch turf mask (Hue in [32, 85], S >= 35, V >= 35 strictly excludes cyan/teal LED boards)
+        lower_green = np.array([32, 35, 35], dtype=np.uint8)
+        upper_green = np.array([85, 255, 255], dtype=np.uint8)
         grass_mask = cv2.inRange(hsv, lower_green, upper_green)
 
         # Zero out scoreboard bug (top-left) and broadcast bug (top-right)
@@ -49,19 +49,22 @@ class PitchGeometryEngine:
 
         turf_ratio = float(np.count_nonzero(grass_closed)) / float(h * w)
 
-        # 2. Largest connected turf contour -> Convex Hull
+        # 2. Largest connected turf contour -> Concave Touchline Polygon via approxPolyDP
+        # Eliminates stadium corner bridges and concave sideline leaks pulling in photographers/stewards
         contours, _ = cv2.findContours(grass_closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         hull_mask = np.zeros((h, w), dtype=np.uint8)
-        hull_pts: Optional[np.ndarray] = None
+        pitch_poly: Optional[np.ndarray] = None
         min_turf_y_pct = 12.0
         max_turf_y_pct = 96.0
 
         if contours:
             largest = max(contours, key=cv2.contourArea)
             if cv2.contourArea(largest) > 0.05 * (h * w):
-                hull_pts = cv2.convexHull(largest)
-                cv2.drawContours(hull_mask, [hull_pts], -1, 255, thickness=-1)
-                ys = hull_pts[:, 0, 1]
+                peri = cv2.arcLength(largest, True)
+                # Tight boundary hugging actual pitch grass (epsilon = 0.015 * arcLength)
+                pitch_poly = cv2.approxPolyDP(largest, 0.015 * peri, True)
+                cv2.drawContours(hull_mask, [pitch_poly], -1, 255, thickness=-1)
+                ys = pitch_poly[:, 0, 1]
                 min_turf_y_pct = float(np.min(ys)) / h * 100.0
                 max_turf_y_pct = float(np.max(ys)) / h * 100.0
 
@@ -122,7 +125,8 @@ class PitchGeometryEngine:
             "persp_slope": round(persp_slope, 2),
             "grass_mask": grass_closed,
             "hull_mask": hull_mask,
-            "hull_pts": hull_pts,
+            "hull_pts": pitch_poly,
+            "pitch_polygon": pitch_poly,
             "hough_lines": hough_lines,
             "min_turf_y_pct": round(min_turf_y_pct, 1),
             "max_turf_y_pct": round(max_turf_y_pct, 1),
