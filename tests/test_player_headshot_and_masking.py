@@ -61,7 +61,7 @@ class TestPlayerHeadshotAndMasking(unittest.TestCase):
         self.assertLess(lookup_time, 0.1, "Cached retrieval must take < 100ms")
 
     def test_transparency_validation(self):
-        """Verifies that authentic anti-aliased cutouts pass while solid boxes and hard binary keyhole stencils fail."""
+        """Verifies that authentic anti-aliased cutouts pass while solid boxes, hard binary stencils, and dome stencils fail."""
         from PIL import ImageFilter
 
         # 1. Solid opaque image -> False
@@ -74,7 +74,17 @@ class TestPlayerHeadshotAndMasking(unittest.TestCase):
         draw_s.ellipse([40, 20, 160, 180], fill=(200, 40, 40, 255))
         self.assertFalse(self.service.is_valid_transparent_png(hard_stencil))
 
-        # 3. True anti-aliased studio cutout (soft edge contour + color variance) -> True
+        # 3. Geometric arch/dome stencil filled with pitch grass/crowd (upper quadrants filled) -> False
+        dome_stencil = Image.new("RGBA", (240, 240), (0, 0, 0, 0))
+        draw_d = ImageDraw.Draw(dome_stencil)
+        # Draw a wide dome that fills into the upper quadrants (like uncropped stadium photos inside a dome)
+        draw_d.rounded_rectangle([15, 10, 225, 235], radius=60, fill=(45, 140, 50, 255))
+        r, g, b, a = dome_stencil.split()
+        a = a.filter(ImageFilter.GaussianBlur(radius=1.5))
+        dome_stencil = Image.merge("RGBA", (r, g, b, a))
+        self.assertFalse(self.service.is_valid_transparent_png(dome_stencil), "Dome stencil with wide filled upper quadrants must be rejected")
+
+        # 4. True anti-aliased studio cutout (soft edge contour + clear upper margins) -> True
         studio = Image.new("RGBA", (240, 240), (0, 0, 0, 0))
         draw = ImageDraw.Draw(studio)
         draw.ellipse([70, 30, 170, 130], fill=(215, 165, 135, 255))  # Face skin tone
@@ -84,6 +94,14 @@ class TestPlayerHeadshotAndMasking(unittest.TestCase):
         a = a.filter(ImageFilter.GaussianBlur(radius=1.2))
         studio = Image.merge("RGBA", (r, g, b, a))
         self.assertTrue(self.service.is_valid_transparent_png(studio))
+
+    def test_fotmob_headshot_resolution_lewandowski_and_fermin(self):
+        """Verifies FotMob studio transparent PNG resolution for Lewandowski and Fermín López."""
+        for name in ["Robert Lewandowski", "Fermín López"]:
+            p = self.service.get_official_headshot(name, team="Barcelona")
+            self.assertIsNotNone(p, f"Headshot for {name} should be resolved")
+            self.assertTrue(p.is_file(), f"File for {name} must exist")
+            self.assertTrue(self.service.is_valid_transparent_png(p), f"Asset for {name} must be valid transparent PNG")
 
     def test_fallback_neural_segmentation_without_vlm(self):
         """
