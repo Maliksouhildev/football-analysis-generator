@@ -421,6 +421,9 @@ class TacticalPipelineRunner:
                 )
                 event_windows.append({
                     "clip_id": f"clip_{idx+1:02d}_{evt.get('type', 'tactical')}",
+                    "home_team": home_team,
+                    "away_team": away_team,
+                    "match_id": match_id,
                     "period": ev_period,
                     "t_cause_clock": f"{cause_m:02d}:{cause_s:02d}",
                     "t_effect_clock": f"{m:02d}:{s:02d}",
@@ -453,6 +456,9 @@ class TacticalPipelineRunner:
                     )
                     event_windows.append({
                         "clip_id": f"clip_{idx+1:02d}_tactical",
+                        "home_team": home_team,
+                        "away_team": away_team,
+                        "match_id": match_id,
                         "period": p,
                         "t_cause_clock": f"{m:02d}:00",
                         "t_effect_clock": f"{m:02d}:15",
@@ -640,6 +646,12 @@ class TacticalPipelineRunner:
             if not audio_locked_data:
                 logger.info(f"[Stage 4/5] Generating 3-beat tactical script & locking TTS audio for {cid}...")
                 try:
+                    if not event_window.get("home_team"):
+                        event_window["home_team"] = home_team
+                    if not event_window.get("away_team"):
+                        event_window["away_team"] = away_team
+                    if not event_window.get("match_id"):
+                        event_window["match_id"] = match_id
                     cause_frame_path = extracted_clip.get("cause_frame_path")
                     beats_script = self.narrator.generate_3beat_script(
                         event_window=event_window,
