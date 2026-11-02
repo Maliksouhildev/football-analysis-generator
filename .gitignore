@@ -17,8 +17,10 @@ audio/
 *.jpg
 *.png
 test_data/
+!test_data/canonical_el_clasico_roster.json
 *.mp3
 
 scratch/
 tools/
+debug_outputs/
 

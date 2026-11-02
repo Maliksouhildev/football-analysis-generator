@@ -1,0 +1,49 @@
+{
+  "match_id": "barcelona_vs_real_madrid_2024",
+  "home_team": {
+    "name": "FC Barcelona",
+    "short_name": "BAR",
+    "starting_xi": [
+      {"name": "Iñaki Peña", "number": 13, "role": "GK", "is_gk": true},
+      {"name": "Jules Koundé", "number": 23, "role": "RB"},
+      {"name": "Pau Cubarsí", "number": 2, "role": "RCB"},
+      {"name": "Iñigo Martínez", "number": 5, "role": "LCB"},
+      {"name": "Alejandro Balde", "number": 3, "role": "LB"},
+      {"name": "Marc Casadó", "number": 17, "role": "DM"},
+      {"name": "Pedri", "number": 8, "role": "LCM"},
+      {"name": "Fermín López", "number": 16, "role": "RCM"},
+      {"name": "Lamine Yamal", "number": 19, "role": "RW"},
+      {"name": "Robert Lewandowski", "number": 9, "role": "CF"},
+      {"name": "Raphinha", "number": 11, "role": "LW"}
+    ],
+    "substitutions": [
+      {"minute": 46, "player_out": "Fermín López", "player_in": "Frenkie de Jong", "in_number": 21, "in_role": "CM"},
+      {"minute": 65, "player_out": "Marc Casadó", "player_in": "Dani Olmo", "in_number": 20, "in_role": "AM"},
+      {"minute": 87, "player_out": "Pedri", "player_in": "Gavi", "in_number": 6, "in_role": "CM"}
+    ],
+    "red_cards": []
+  },
+  "away_team": {
+    "name": "Real Madrid",
+    "short_name": "RMA",
+    "starting_xi": [
+      {"name": "Andriy Lunin", "number": 13, "role": "GK", "is_gk": true},
+      {"name": "Lucas Vázquez", "number": 17, "role": "RB"},
+      {"name": "Éder Militão", "number": 3, "role": "RCB"},
+      {"name": "Antonio Rüdiger", "number": 22, "role": "LCB"},
+      {"name": "Ferland Mendy", "number": 23, "role": "LB"},
+      {"name": "Aurélien Tchouaméni", "number": 14, "role": "DM"},
+      {"name": "Federico Valverde", "number": 8, "role": "RCM"},
+      {"name": "Eduardo Camavinga", "number": 6, "role": "LCM"},
+      {"name": "Jude Bellingham", "number": 5, "role": "AM"},
+      {"name": "Vinícius Júnior", "number": 7, "role": "LW"},
+      {"name": "Kylian Mbappé", "number": 9, "role": "CF"}
+    ],
+    "substitutions": [
+      {"minute": 62, "player_out": "Federico Valverde", "player_in": "Arda Güler", "in_number": 24, "in_role": "RW"},
+      {"minute": 63, "player_out": "Aurélien Tchouaméni", "player_in": "Luka Modrić", "in_number": 10, "in_role": "CM"},
+      {"minute": 77, "player_out": "Eduardo Camavinga", "player_in": "Brahim Díaz", "in_number": 21, "in_role": "RW"}
+    ],
+    "red_cards": []
+  }
+}
