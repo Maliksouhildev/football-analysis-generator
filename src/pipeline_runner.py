@@ -396,8 +396,8 @@ class TacticalPipelineRunner:
                 except Exception as index_err:
                     logger.warning(f"SparseClockIndexer error: {index_err}")
 
-            target_duration = max(180.0, float(duration)) if duration else 600.0
-            target_clip_count = max(10, int(math.ceil(target_duration / 26.0)))
+            target_duration = max(30.0, float(duration)) if duration else 600.0
+            target_clip_count = max(2, int(math.ceil(target_duration / 26.0)))
 
             # Priority Ranking: Every goal first, then big chances, shots, and tactical turns spread across both halves
             goals = [e for e in raw_events if e.get("type") == "goal"]
@@ -863,6 +863,21 @@ class TacticalPipelineRunner:
         # -------------------------------------------------------------
         # Stage 5: REMOTION_RENDERED
         # -------------------------------------------------------------
+        # Respect target duration if requested
+        if duration and float(duration) > 0 and len(synchronized_clips) > 2:
+            target_dur = float(duration)
+            trimmed_clips = []
+            accum_sec = 0.0
+            for sc in synchronized_clips:
+                trimmed_clips.append(sc)
+                dur_frames = sc.get("total_composition_frames") or sc.get("duration_frames") or 500
+                accum_sec += (float(dur_frames) / 30.0)
+                if accum_sec >= target_dur and len(trimmed_clips) >= 2:
+                    break
+            if len(trimmed_clips) < len(synchronized_clips):
+                logger.info(f"[Target Duration] Trimmed synchronized clips from {len(synchronized_clips)} to {len(trimmed_clips)} to match target {target_dur}s (~{accum_sec:.1f}s).")
+                synchronized_clips = trimmed_clips
+
         logger.info(f"[Stage 5/5] Assembling Masterclass timeline & rendering ({len(synchronized_clips)} clips)...")
 
         active_segments: List[Dict[str, Any]] = []

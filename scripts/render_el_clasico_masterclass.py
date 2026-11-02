@@ -11,6 +11,7 @@ using the fully upgraded Game State Reconstruction (GSR) pipeline:
 ================================================================================
 """
 
+import argparse
 import json
 import logging
 import math
@@ -40,6 +41,13 @@ OUTPUT_MP4 = RENDER_DIR / "barcelona_vs_real_madrid_masterclass_final.mp4"
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Render El Clásico Tactical Masterclass")
+    parser.add_argument("--duration", type=float, default=90.0, help="Target duration in seconds (default: 90.0s = 1.5 min)")
+    args = parser.parse_args()
+
+    target_duration = float(args.duration)
+    logger.info("Configured render duration: %.1f seconds (~%.1f minutes)", target_duration, target_duration / 60.0)
+
     from src.pipeline_runner import TacticalPipelineRunner, STAGE_REMOTION_RENDERED
 
     runner = TacticalPipelineRunner(remotion_host=REMOTION_HOST, output_dir=str(RENDER_DIR), db_path=DB_PATH)
@@ -56,7 +64,7 @@ def main():
         remotion_render_file.unlink(missing_ok=True)
 
     # 2. Run pipeline runner (Stages 1-4 load instantly from verified cache; Stage 5 executes with updated workflow)
-    logger.info(f"Executing Tactical Masterclass pipeline for {HOME_TEAM} vs {AWAY_TEAM}...")
+    logger.info(f"Executing Tactical Masterclass pipeline for {HOME_TEAM} vs {AWAY_TEAM} ({target_duration}s)...")
     result = runner.run(
         video_path=None,
         download_url=None,
@@ -64,7 +72,7 @@ def main():
         home_team=HOME_TEAM,
         away_team=AWAY_TEAM,
         score=SCORE,
-        duration=600.0,
+        duration=target_duration,
         render=True,
         wait=True,
         force_refresh=False,
@@ -80,7 +88,8 @@ def main():
         file_mb = OUTPUT_MP4.stat().st_size / (1024 * 1024)
         logger.info(f"=== MASTERCLASS RENDER VERIFIED ===")
         logger.info(f"File: {OUTPUT_MP4.name} ({file_mb:.2f} MB)")
-        print(f"\n[SUCCESS] El Clásico 10-Minute Masterclass Rendered Successfully: {OUTPUT_MP4}")
+        print(f"\n[SUCCESS] El Clásico Masterclass Rendered Successfully: {OUTPUT_MP4} ({target_duration}s, {file_mb:.2f} MB)")
+
 
 
 if __name__ == "__main__":
