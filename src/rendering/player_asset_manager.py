@@ -83,16 +83,20 @@ class PlayerAssetManager:
         slug = self.get_slug(clean_player)
         cached_file = self.output_dir / f"{slug}.png"
 
-        # Resolve via PlayerHeadshotService (EA CDN -> TheSportsDB -> Wikipedia -> Neural BiRefNet/rembg crop)
+        # Resolve via PlayerHeadshotService (EA CDN -> TheSportsDB -> Transfermarkt -> Wikidata -> Wikipedia -> Neural BiRefNet/rembg crop)
         resolved = self.headshot_service.resolve_player_headshot(
             clean_player,
             team=team,
             frame_crop=frame_crop,
             output_path=cached_file,
+            allow_emblem_fallback=False,
         )
-        if resolved and resolved.is_file():
+        if resolved and resolved.is_file() and self.headshot_service.is_valid_transparent_png(resolved):
             self._sync_to_docker(resolved, f"{slug}.png")
             return resolved
+
+        # Purge any stale invalid/stenciled file so Remotion cleanly omits the avatar
+        self._purge_invalid_asset(f"{slug}.png")
         return None
 
     def get_player_portrait(
@@ -186,6 +190,21 @@ class PlayerAssetManager:
         except Exception as e:
             logger.warning("Failed to download player cutout from %s: %s", url, e)
         return False
+
+    def _purge_invalid_asset(self, filename: str) -> None:
+        """Removes stale keyhole-masked or dummy placeholder files across all asset directories."""
+        dirs = [
+            self.output_dir,
+            Path(r"C:\Users\mlkme\Desktop\cursor-mikow\remotion-server\public\assets\players"),
+            Path(__file__).resolve().parent.parent.parent / "assets" / "players",
+        ]
+        for d in dirs:
+            f = d / filename
+            if f.is_file():
+                try:
+                    f.unlink()
+                except Exception:
+                    pass
 
     def _sync_to_docker(self, local_file: Path, filename: str) -> None:
         """Copies the player portrait into Remotion public assets and Docker container asset directories."""

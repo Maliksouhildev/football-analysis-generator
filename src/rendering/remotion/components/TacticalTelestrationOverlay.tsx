@@ -519,6 +519,7 @@ const getPlayerPortraitSlug = (name: string): string => {
   if (!name || isForbiddenPlayer(name)) return '';
   const clean = name
     .split(' (')[0]
+    .replace(/#\d+\s*/g, '')
     .trim()
     .toLowerCase()
     .normalize('NFD')
@@ -526,7 +527,7 @@ const getPlayerPortraitSlug = (name: string): string => {
     .replace(/[^a-z0-9]/g, '_')
     .replace(/_+/g, '_')
     .replace(/^_|_$/g, '');
-  return PLAYER_SLUG_ALIASES[clean] || (Object.values(PLAYER_SLUG_ALIASES).includes(clean) ? clean : '');
+  return PLAYER_SLUG_ALIASES[clean] || clean;
 };
 
 interface SmoothedPosition {
@@ -6370,6 +6371,10 @@ export const TacticalTelestrationOverlay: React.FC<TacticalTelestrationProps> = 
                               }}
                               onError={(e) => {
                                 e.currentTarget.style.display = 'none';
+                                if (e.currentTarget.parentElement) {
+                                  e.currentTarget.parentElement.style.height = '0px';
+                                  e.currentTarget.parentElement.style.marginBottom = '0px';
+                                }
                               }}
                             />
                           )}
