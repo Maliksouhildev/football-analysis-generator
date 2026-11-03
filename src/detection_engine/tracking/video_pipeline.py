@@ -83,6 +83,7 @@ class VideoTrackingPipeline:
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Filter out TV overlays, scoreboards, and off-pitch personnel (cameramen/stewards).
+        Preserves real players (e.g. Balde on the bottom-left grass) while killing flat 2D TV graphics.
         """
         if len(boxes) == 0:
             return boxes, confs, clss
@@ -100,16 +101,34 @@ class VideoTrackingPipeline:
 
         keep_indices = []
         for i, b in enumerate(boxes):
-            x1, y1, x2, y2 = b
-            xc = (x1 + x2) / 2.0
+            x1, y1, x2, y2 = [int(v) for v in b]
+            xc = (x1 + x2) // 2
+            box_w = max(1, x2 - x1)
+            box_h = max(1, y2 - y1)
+            hw_ratio = float(box_h) / float(box_w)
 
             # Scoreboard deadzone (top left)
             if x1 < 0.20 * w and y1 < 0.18 * h:
                 continue
 
-            # Bottom broadcast overlay banner (TV player profile cards, e.g. Raphinha graphic)
-            if y2 > 0.84 * h and (x1 < 0.40 * w or x2 > 0.60 * w):
-                continue
+            # Check foot turf fraction
+            fy1 = max(0, y2 - 8)
+            fy2 = min(h, y2 + 4)
+            fx1 = max(0, x1)
+            fx2 = min(w, x2)
+            foot_patch = turf_mask[fy1:fy2, fx1:fx2]
+            foot_turf = float((foot_patch > 0).mean()) if foot_patch.size > 0 else 0.0
+
+            # Check overall box turf fraction
+            box_patch = turf_mask[y1:y2, x1:x2]
+            box_turf = float((box_patch > 0).mean()) if box_patch.size > 0 else 0.0
+
+            # Lower-third broadcast graphic banner check (y2 > 0.83 * H)
+            # Real players (like Balde at bottom-left) have hw_ratio >= 1.60 and green turf under their feet.
+            # 2D TV graphic portraits (like Raphinha banner) have hw_ratio ~ 1.15 and low box/foot turf.
+            if y2 > 0.83 * h:
+                if hw_ratio < 1.50 or box_turf < 0.28 or foot_turf < 0.30:
+                    continue
 
             # Playable pitch hull check (foot/ankle contact point)
             if hull is not None:
@@ -129,7 +148,7 @@ class VideoTrackingPipeline:
         return boxes[keep_indices], confs[keep_indices], clss[keep_indices]
 
     def _load_roster(self, path: Optional[str]) -> Dict[str, Any]:
-        """Load canonical match roster from JSON if available."""
+        """Load canonical match roster from JSON if available, combining starters + substitutes."""
         if path and os.path.exists(path):
             try:
                 with open(path, "r", encoding="utf-8") as f:
@@ -141,20 +160,31 @@ class VideoTrackingPipeline:
                     a_dict = raw.get("away_team", {})
 
                     if "madrid" in h_dict.get("name", "").lower():
-                        home_xi = h_dict.get("starting_xi", [])
-                        away_xi = a_dict.get("starting_xi", [])
+                        madrid_dict = h_dict
+                        barca_dict = a_dict
                     else:
-                        home_xi = a_dict.get("starting_xi", [])
-                        away_xi = h_dict.get("starting_xi", [])
+                        madrid_dict = a_dict
+                        barca_dict = h_dict
+
+                    # Combine starting XI + substitutes for full matchday squad
+                    m_starters = madrid_dict.get("starting_xi", [])
+                    m_subs = madrid_dict.get("substitutes", [])
+                    m_seen = {p["number"] for p in m_starters}
+                    home_squad = list(m_starters) + [p for p in m_subs if p.get("number") not in m_seen]
+
+                    b_starters = barca_dict.get("starting_xi", [])
+                    b_subs = barca_dict.get("substitutes", [])
+                    b_seen = {p["number"] for p in b_starters}
+                    away_squad = list(b_starters) + [p for p in b_subs if p.get("number") not in b_seen]
 
                     return {
                         "home_team": self.home_team_name,
                         "away_team": self.away_team_name,
-                        "home_active_xi": home_xi,
-                        "away_active_xi": away_xi,
+                        "home_active_xi": home_squad,
+                        "away_active_xi": away_squad,
                     }
 
-                # Schema 2: Direct active XI lists
+                # Schema 2: Direct active squad lists
                 if "home_active_xi" in raw:
                     return raw
             except Exception as e:

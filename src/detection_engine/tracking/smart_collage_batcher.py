@@ -46,7 +46,7 @@ class SmartCollageBatcher:
         crop_h: int = 150,
         crop_w: int = 80,
         cols_per_grid: int = 3,
-        min_tracklet_duration_sec: float = 0.8,
+        min_tracklet_duration_sec: float = 0.3,
     ):
         self.crop_h = crop_h
         self.crop_w = crop_w
@@ -263,10 +263,21 @@ class SmartCollageBatcher:
             elif t_str in ["away", "gk_away"]:
                 away_lcs.append(lc)
             elif t_str == "referee":
-                # Handle referee directly
-                lc.assigned_name = "Match Referee"
-                lc.assigned_number = 0
-                lc.assigned_confidence = 0.95
+                pass  # Handled below to enforce strictly Max 1 Referee
+
+                # Enforce strictly Max 1 Match Referee on the pitch
+        ref_lcs = [
+            lc for lc in valid_lifecycles
+            if team_assignments.get(lc.track_id, TeamClusterResult(lc.track_id, "unknown", 0.5, False)).team == "referee"
+        ]
+        if ref_lcs:
+            best_ref = min(
+                ref_lcs,
+                key=lambda lc: ((lc.get_average_center()[0] - 0.5 * 1920) ** 2 + (lc.get_average_center()[1] - 0.5 * 1080) ** 2)
+            )
+            best_ref.assigned_name = "Match Referee"
+            best_ref.assigned_number = 0
+            best_ref.assigned_confidence = 0.95
 
         # Render Home Grid
         home_payload = None
@@ -400,8 +411,23 @@ class SmartCollageBatcher:
             kit_desc = "pure WHITE" if payload.team_label == "home" else "BLAUGRANA (Blue/Red stripes)"
             roster_json = json.dumps(payload.active_roster, indent=2)
 
+            if payload.team_label == "home":
+                flank_guidance = """
+TACTICAL FLANK ORIENTATION (Real Madrid attacking Left-to-Right):
+- TOP of screen (y -> 0.0) is Real Madrid's LEFT FLANK: Left-Back (Ferland Mendy #23, Fran Garcia #20), Left-Wing (Vinicius Junior #7).
+- BOTTOM of screen (y -> 1.0) is Real Madrid's RIGHT FLANK: Right-Back (Lucas Vazquez #17), Right-Midfield (Federico Valverde #8).
+- Real Madrid Left-Back/Wing CANNOT be at the bottom of the screen!
+"""
+            else:
+                flank_guidance = """
+TACTICAL FLANK ORIENTATION (Barcelona attacking Right-to-Left):
+- TOP of screen (y -> 0.0) is Barcelona's RIGHT FLANK: Right-Back (Jules Kounde #23), Right-Wing (Lamine Yamal #19).
+- BOTTOM of screen (y -> 1.0) is Barcelona's LEFT FLANK: Left-Back (Alejandro Balde #3), Left-Wing (Raphinha #11).
+- Barcelona Left-Back (Alejandro Balde #3) is at the BOTTOM of the screen!
+"""
+
             prompt_text = f"""
-You are a broadcast football tactical analyst identifying players for {payload.team_name} in El Clásico.
+You are a broadcast football tactical analyst identifying players for {payload.team_name} in El Clasico.
 
 Images provided:
 1. Context Frame (Image 1): Broadcast camera shot showing active {payload.team_name} players labeled as T{{id}} (e.g. T8, T2, T11).
@@ -414,7 +440,7 @@ CRITICAL READING CONSTRAINTS:
 {roster_json}
 Kit Appearance: {payload.team_name} wears {kit_desc}. Goalkeeper wears orange/distinctive kit.
 4. PARTIAL VISIBILITY: Notice only {len(payload.track_ids)} players of {payload.team_name} are visible in this camera view. Do NOT force all 11 players.
-
+{flank_guidance}
 Return a strict JSON array of objects mapping each visible track to their player name:
 [
   {{
@@ -549,10 +575,30 @@ Output valid JSON ONLY.
         valid_candidates.sort(key=lambda x: x[2], reverse=True)
 
         # Greedy lock on high-confidence unique players
+        meta_by_id = {m["track_id"]: m for m in payload.tracklet_metadata}
         for tid, p, conf, reason in valid_candidates:
             if tid in final_assignments:
                 continue
             p_name = p["name"]
+            role = p.get("role", "CM")
+            t_meta = meta_by_id.get(tid, {})
+            t_ry = t_meta.get("relative_y", 0.5)
+
+            # Geometric flank firewall (unless super high confidence visible number >= 0.95)
+            if conf < 0.95:
+                if payload.team_label == "home":
+                    # Real Madrid: LB/LW must be top (t_ry < 0.60); RB/RW must be bottom (t_ry > 0.40)
+                    if role in ["LB", "LW"] and t_ry > 0.60:
+                        continue
+                    if role in ["RB", "RW"] and t_ry < 0.40:
+                        continue
+                else:
+                    # Barcelona: LB/LW (Balde) must be bottom (t_ry > 0.40); RB/RW (Yamal) must be top (t_ry < 0.60)
+                    if role in ["LB", "LW"] and t_ry < 0.40:
+                        continue
+                    if role in ["RB", "RW"] and t_ry > 0.60:
+                        continue
+
             if p_name.lower() not in assigned_names:
                 final_assignments[tid] = {
                     "track_id": tid,
@@ -590,13 +636,17 @@ Output valid JSON ONLY.
                     role = p.get("role", "CM")
                     # Target nominal (fx, fy) based on role
                     if payload.team_label == "home":
-                        # Defending left goal
-                        fx_map = {"LB": 0.25, "CB": 0.20, "RB": 0.25, "DM": 0.45, "CM": 0.55, "AM": 0.65, "LW": 0.75, "RW": 0.75, "CF": 0.85}
-                        fy_map = {"LB": 0.20, "CB": 0.50, "RB": 0.80, "DM": 0.50, "CM": 0.50, "AM": 0.50, "LW": 0.20, "RW": 0.80, "CF": 0.50}
+                        # Defending left goal, attacking left-to-right (+X)
+                        # TOP of screen (y -> 0.0) is LEFT flank (LB, LCB, LW)
+                        # BOTTOM of screen (y -> 1.0) is RIGHT flank (RB, RCB, RW)
+                        fx_map = {"GK": 0.05, "LB": 0.22, "LCB": 0.20, "CB": 0.20, "RCB": 0.20, "RB": 0.22, "DM": 0.40, "LCM": 0.50, "CM": 0.50, "RCM": 0.50, "AM": 0.65, "LW": 0.75, "CF": 0.85, "RW": 0.75}
+                        fy_map = {"GK": 0.50, "LB": 0.20, "LCB": 0.38, "CB": 0.50, "RCB": 0.62, "RB": 0.80, "DM": 0.50, "LCM": 0.35, "CM": 0.50, "RCM": 0.65, "AM": 0.50, "LW": 0.20, "CF": 0.50, "RW": 0.80}
                     else:
-                        # Defending right goal
-                        fx_map = {"RB": 0.75, "CB": 0.80, "LB": 0.75, "DM": 0.55, "CM": 0.45, "AM": 0.35, "RW": 0.25, "LW": 0.25, "CF": 0.15}
-                        fy_map = {"RB": 0.20, "CB": 0.50, "LB": 0.80, "DM": 0.50, "CM": 0.50, "AM": 0.50, "RW": 0.20, "LW": 0.80, "CF": 0.50}
+                        # Defending right goal, attacking right-to-left (-X)
+                        # TOP of screen (y -> 0.0) is RIGHT flank (RB, RCB, RW - Yamal #19, Kounde #23)
+                        # BOTTOM of screen (y -> 1.0) is LEFT flank (LB, LCB, LW - Balde #3, Raphinha #11)
+                        fx_map = {"GK": 0.95, "RB": 0.78, "RCB": 0.80, "CB": 0.80, "LCB": 0.80, "LB": 0.78, "DM": 0.60, "RCM": 0.50, "CM": 0.50, "LCM": 0.50, "AM": 0.35, "RW": 0.25, "CF": 0.15, "LW": 0.25}
+                        fy_map = {"GK": 0.50, "RB": 0.20, "RCB": 0.38, "CB": 0.50, "LCB": 0.62, "LB": 0.80, "DM": 0.50, "RCM": 0.35, "CM": 0.50, "LCM": 0.65, "AM": 0.50, "RW": 0.20, "CF": 0.50, "LW": 0.80}
 
                     fx = fx_map.get(role, 0.5)
                     fy = fy_map.get(role, 0.5)
