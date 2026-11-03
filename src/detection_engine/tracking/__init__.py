@@ -7,7 +7,7 @@ Team/GK Color Clustering (k=2 + Outlier Isolation), and Smart Collage Batching.
 from .shot_detector import ShotBoundaryDetector, ShotSegment
 from .bot_sort_tracker import BoTSORTTracker, TrackedObject, TrackletLifecycle
 from .team_color_clusterer import TeamColorClusterer, TeamClusterResult
-from .smart_collage_batcher import SmartCollageBatcher, CollageBatchPayload
+from .smart_collage_batcher import SmartCollageBatcher, TeamGridPayload
 
 __all__ = [
     "ShotBoundaryDetector",
@@ -18,5 +18,5 @@ __all__ = [
     "TeamColorClusterer",
     "TeamClusterResult",
     "SmartCollageBatcher",
-    "CollageBatchPayload",
+    "TeamGridPayload",
 ]

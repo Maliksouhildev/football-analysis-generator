@@ -241,13 +241,14 @@ class TeamColorClusterer:
             rel_x = (cx - min_x) / pitch_span  # 0.0 to 1.0
 
             # Spatial check:
-            # If near either extreme goal line (rel_x < 0.18 or rel_x > 0.82) -> Goalkeeper
-            if rel_x < 0.18:
-                team = "gk_home" if home_cluster_idx == 0 else "gk_away"
-                reason = f"Deepest player near left goal line (rel_x={rel_x:.2f})"
-            elif rel_x > 0.82:
-                team = "gk_away" if home_cluster_idx == 0 else "gk_home"
-                reason = f"Deepest player near right goal line (rel_x={rel_x:.2f})"
+            # Real Madrid (White, Home) is defending the left goal (rel_x < 0.35)
+            # Barcelona (Away) is defending the right goal (rel_x > 0.65)
+            if rel_x < 0.35:
+                team = "gk_home"
+                reason = f"Goalkeeper near left goal line / Real Madrid box (rel_x={rel_x:.2f})"
+            elif rel_x > 0.65:
+                team = "gk_away"
+                reason = f"Goalkeeper near right goal line / Barcelona box (rel_x={rel_x:.2f})"
             else:
                 # Central player with outlier color -> Referee
                 team = "referee"

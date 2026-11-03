@@ -1,132 +1,157 @@
 """
 Smart Collage Batcher & Pass-2 Identity Resolver.
-Generates multi-angle 3-crop tracklet strips (early, peak, late), a context frame with numbered boxes,
-and a 2D radar minimap. Resolves all tracklet identities in ONE single Gemini Flash API call per camera shot.
+- Splits Pass 2 into TWO separate compact 2D Grid Collages (Home vs Away) to prevent resolution crushing.
+- Upscales crops 2x with cv2.INTER_CUBIC + unsharp mask to maximize jersey number readability.
+- Formats Track IDs strictly as T{id} (never '#' prefix) to prevent ID -> jersey number contamination.
+- Removes synthetic full-pitch radar maps; relies strictly on annotated Context Frame.
+- Enforces Hard Team Firewalls and Strict 1-to-1 Bijection (Hungarian algorithm on remaining slots).
 """
 
 from dataclasses import dataclass, field
 import json
 import os
-from typing import Any, Dict, List, Optional, Tuple
+import re
+from typing import Any, Dict, List, Optional, Set, Tuple
+import urllib.request
+import base64
+
 import cv2
 import numpy as np
+from scipy.optimize import linear_sum_assignment
 
 from .bot_sort_tracker import TrackletLifecycle, TrackletCrop
 from .team_color_clusterer import TeamClusterResult
 
 
 @dataclass
-class CollageBatchPayload:
-    """Consolidated payload prepared for Pass-2 VLM Identity Resolution."""
+class TeamGridPayload:
+    """Team-specific 2D grid payload for Pass-2 VLM Identity Resolution."""
     shot_id: int
-    total_tracklets: int
-    home_visible: int
-    away_visible: int
-    gk_visible: int
-    ref_visible: int
-    montage_img: np.ndarray
+    team_label: str  # "home" or "away"
+    team_name: str   # "Real Madrid" or "Barcelona"
+    track_ids: List[int]
+    grid_img: np.ndarray
     context_frame_img: np.ndarray
-    radar_minimap_img: np.ndarray
     tracklet_metadata: List[Dict[str, Any]]
-    active_roster: Dict[str, Any]
+    active_roster: List[Dict[str, Any]]
 
 
 class SmartCollageBatcher:
     """
-    Assembles Pass-2 multi-angle visual strips and pitch context for 1-call VLM identity assignment.
+    Assembles Pass-2 2D grid collages and executes team-firewalled, 1-to-1 unique identity assignment.
     """
 
     def __init__(
         self,
-        crop_target_h: int = 140,
-        crop_target_w: int = 80,
-        label_card_w: int = 180,
-        min_tracklet_duration_sec: float = 1.0,
+        crop_h: int = 150,
+        crop_w: int = 80,
+        cols_per_grid: int = 3,
+        min_tracklet_duration_sec: float = 0.8,
     ):
-        self.crop_target_h = crop_target_h
-        self.crop_target_w = crop_target_w
-        self.label_card_w = label_card_w
+        self.crop_h = crop_h
+        self.crop_w = crop_w
+        self.cols_per_grid = cols_per_grid
         self.min_tracklet_duration_sec = min_tracklet_duration_sec
 
-    def render_tracklet_row(
+    def render_player_card(
         self,
         track_id: int,
-        team_info: Optional[TeamClusterResult],
+        team_str: str,
         crops: List[TrackletCrop],
         rel_pos: Tuple[float, float],
     ) -> np.ndarray:
         """
-        Render a single row in the collage:
-        [ Label Card (ID, Team, Rel Pos) | Crop 1 (Early) | Crop 2 (Peak) | Crop 3 (Late) ]
+        Render a 2D card for one tracked player:
+        Header: Track: T{track_id} | Pos: ({rx:.2f}, {ry:.2f})
+        Body: 3 crops (Early, Peak, Late) upscaled 2x and sharpened.
         """
-        row_h = self.crop_target_h + 30
-        row_w = self.label_card_w + (self.crop_target_w + 10) * 3 + 20
-        row_img = np.full((row_h, row_w, 3), 32, dtype=np.uint8)
+        # Card dimensions: 3 crops of width crop_w + margins + card header
+        card_w = self.crop_w * 3 + 24
+        header_h = 36
+        badge_h = 18
+        card_h = header_h + self.crop_h + badge_h + 12
+
+        card = np.full((card_h, card_w, 3), 36, dtype=np.uint8)
 
         # Team color banner
-        team_str = team_info.team if team_info else "unknown"
         if team_str == "home":
-            badge_color = (240, 240, 240)  # White
-            text_color = (20, 20, 20)
+            badge_color = (245, 245, 245)
+            text_color = (15, 15, 15)
         elif team_str == "away":
-            badge_color = (130, 40, 40)   # Blaugrana Red/Blue
+            badge_color = (140, 40, 40)
             text_color = (255, 255, 255)
         elif "gk" in team_str:
-            badge_color = (0, 140, 255)   # Orange
-            text_color = (0, 0, 0)
-        elif team_str == "referee":
-            badge_color = (0, 220, 220)   # Yellow
+            badge_color = (0, 140, 255)
             text_color = (0, 0, 0)
         else:
-            badge_color = (120, 120, 120)
-            text_color = (255, 255, 255)
+            badge_color = (0, 220, 220)
+            text_color = (0, 0, 0)
 
-        # Draw Label Card
-        cv2.rectangle(row_img, (5, 5), (self.label_card_w - 5, row_h - 5), badge_color, -1)
-        cv2.rectangle(row_img, (5, 5), (self.label_card_w - 5, row_h - 5), (80, 80, 80), 1)
+        # Header background
+        cv2.rectangle(card, (2, 2), (card_w - 2, header_h), badge_color, -1)
+        cv2.rectangle(card, (2, 2), (card_w - 2, card_h - 2), (90, 90, 90), 1)
 
-        cv2.putText(
-            row_img, f"Track #{track_id}", (12, 32),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.65, text_color, 2
-        )
-        cv2.putText(
-            row_img, f"Team: {team_str.upper()}", (12, 58),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.45, text_color, 1
-        )
-        cv2.putText(
-            row_img, f"Pos: ({rel_pos[0]:.2f}, {rel_pos[1]:.2f})", (12, 82),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.42, text_color, 1
-        )
+        # Header Text: STRICTLY "T{id}" - NO '#'
+        track_lbl = f"Track: T{track_id}"
+        pos_lbl = f"Pos: ({rel_pos[0]:.2f}, {rel_pos[1]:.2f})"
+        cv2.putText(card, track_lbl, (8, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.60, text_color, 2)
+        cv2.putText(card, pos_lbl, (card_w - 110, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.42, text_color, 1)
 
         # Draw 3 crops (Early, Peak, Late)
-        start_x = self.label_card_w + 10
+        start_y = header_h + 6
         for i, crop_obj in enumerate(crops[:3]):
-            cx = start_x + i * (self.crop_target_w + 10)
-            cy = 10
+            cx = 6 + i * (self.crop_w + 6)
+            cy = start_y
 
-            # Resize crop
-            resized = cv2.resize(
-                crop_obj.crop_img,
-                (self.crop_target_w, self.crop_target_h),
-                interpolation=cv2.INTER_AREA
-            )
-            row_img[cy:cy + self.crop_target_h, cx:cx + self.crop_target_w] = resized
+            # 2x upscale with INTER_CUBIC
+            raw_crop = crop_obj.crop_img
+            resized = cv2.resize(raw_crop, (self.crop_w, self.crop_h), interpolation=cv2.INTER_CUBIC)
 
-            # Border around crop
-            cv2.rectangle(
-                row_img, (cx, cy),
-                (cx + self.crop_target_w, cy + self.crop_target_h),
-                (180, 180, 180), 1
-            )
+            # Unsharp mask to make jersey numbers pop
+            gaussian = cv2.GaussianBlur(resized, (0, 0), 2.0)
+            sharpened = cv2.addWeighted(resized, 1.4, gaussian, -0.4, 0)
 
-            # Badge text at bottom
-            badge_txt = f"{crop_obj.label.upper()} {int(crop_obj.position_pct*100)}%"
+            card[cy:cy + self.crop_h, cx:cx + self.crop_w] = sharpened
+            cv2.rectangle(card, (cx, cy), (cx + self.crop_w, cy + self.crop_h), (140, 140, 140), 1)
+
+            # Sub-badge (EARLY, PEAK, LATE)
+            badge_txt = f"{crop_obj.label.upper()} {int(crop_obj.position_pct * 100)}%"
             cv2.putText(
-                row_img, badge_txt, (cx + 2, cy + self.crop_target_h + 16),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.36, (200, 200, 200), 1
+                card, badge_txt, (cx + 2, cy + self.crop_h + 14),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.35, (210, 210, 210), 1
             )
 
-        return row_img
+        return card
+
+    def render_team_2d_grid(
+        self,
+        cards: List[np.ndarray],
+        cols: int = 3,
+        pad: int = 12,
+    ) -> np.ndarray:
+        """
+        Arrange player cards into a compact 2D grid (e.g. 3 columns x N rows).
+        Keeps aspect ratio near 4:3 or 16:9 to avoid VLM downscale crushing.
+        """
+        if not cards:
+            return np.zeros((100, 100, 3), dtype=np.uint8)
+
+        card_h, card_w = cards[0].shape[:2]
+        n_cards = len(cards)
+        rows = int(np.ceil(n_cards / float(cols)))
+
+        grid_w = cols * card_w + (cols + 1) * pad
+        grid_h = rows * card_h + (rows + 1) * pad
+        grid = np.full((grid_h, grid_w, 3), 24, dtype=np.uint8)
+
+        for idx, card in enumerate(cards):
+            r = idx // cols
+            c = idx % cols
+            y = pad + r * (card_h + pad)
+            x = pad + c * (card_w + pad)
+            grid[y:y + card_h, x:x + card_w] = card
+
+        return grid
 
     def render_context_frame(
         self,
@@ -135,7 +160,8 @@ class SmartCollageBatcher:
         max_dim: int = 1280,
     ) -> np.ndarray:
         """
-        Draw numbered bounding boxes with team color borders on the mid-shot context frame.
+        Draw numbered bounding boxes with team colors on the Context Frame.
+        FORMATS TRACK LABELS STRICTLY AS "T{id}" - NEVER "#".
         """
         ctx = keyframe.copy()
         h, w = ctx.shape[:2]
@@ -144,66 +170,6 @@ class SmartCollageBatcher:
             x1, y1, x2, y2 = [int(v) for v in bbox]
             x1, y1 = max(0, x1), max(0, y1)
             x2, y2 = min(w, x2), min(h, y2)
-
-            if team == "home":
-                color = (255, 255, 255)
-            elif team == "away":
-                color = (60, 60, 220)
-            elif "gk" in team:
-                color = (0, 165, 255)
-            elif team == "referee":
-                color = (0, 240, 240)
-            else:
-                color = (0, 255, 0)
-
-            # Bounding box
-            cv2.rectangle(ctx, (x1, y1), (x2, y2), color, 2)
-
-            # Label banner
-            lbl = f"#{track_id}"
-            t_size = cv2.getTextSize(lbl, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)[0]
-            cv2.rectangle(ctx, (x1, max(0, y1 - 20)), (x1 + t_size[0] + 6, y1), color, -1)
-            cv2.putText(
-                ctx, lbl, (x1 + 3, max(14, y1 - 4)),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2
-            )
-
-        # Scale down if larger than max_dim
-        if max(h, w) > max_dim:
-            scale = max_dim / float(max(h, w))
-            ctx = cv2.resize(ctx, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
-
-        return ctx
-
-    def render_radar_minimap(
-        self,
-        tracklets_with_teams: List[Tuple[int, str, float, float]],  # (track_id, team, rel_x, rel_y)
-        w: int = 640,
-        h: int = 400,
-    ) -> np.ndarray:
-        """
-        Render a 2D radar diagram showing relative locations of each tracked player on the pitch.
-        """
-        radar = np.full((h, w, 3), (35, 95, 35), dtype=np.uint8)  # Grass green
-
-        # Pitch boundary & lines
-        cv2.rectangle(radar, (30, 25), (w - 30, h - 25), (240, 240, 240), 2)
-        cv2.line(radar, (w // 2, 25), (w // 2, h - 25), (240, 240, 240), 2)
-        cv2.circle(radar, (w // 2, h // 2), 45, (240, 240, 240), 2)
-
-        # Penalty boxes
-        box_w = 80
-        box_h = 160
-        cv2.rectangle(radar, (30, h // 2 - box_h // 2), (30 + box_w, h // 2 + box_h // 2), (240, 240, 240), 2)
-        cv2.rectangle(radar, (w - 30 - box_w, h // 2 - box_h // 2), (w - 30, h // 2 + box_h // 2), (240, 240, 240), 2)
-
-        # Plot players
-        field_w = w - 60
-        field_h = h - 50
-
-        for track_id, team, rel_x, rel_y in tracklets_with_teams:
-            px = int(30 + np.clip(rel_x, 0.0, 1.0) * field_w)
-            py = int(25 + np.clip(rel_y, 0.0, 1.0) * field_h)
 
             if team == "home":
                 color = (255, 255, 255)
@@ -218,20 +184,28 @@ class SmartCollageBatcher:
                 color = (0, 240, 240)
                 text_col = (0, 0, 0)
             else:
-                color = (180, 180, 180)
+                color = (0, 255, 0)
                 text_col = (0, 0, 0)
 
-            cv2.circle(radar, (px, py), 12, color, -1)
-            cv2.circle(radar, (px, py), 12, (20, 20, 20), 1)
+            # Draw bounding box
+            cv2.rectangle(ctx, (x1, y1), (x2, y2), color, 2)
 
+            # STRICTLY "T{id}" - NEVER "#"
+            lbl = f"T{track_id}"
+            t_size = cv2.getTextSize(lbl, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 2)[0]
+            cv2.rectangle(ctx, (x1, max(0, y1 - 22)), (x1 + t_size[0] + 6, y1), color, -1)
             cv2.putText(
-                radar, str(track_id), (px - 6, py + 4),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.38, text_col, 1
+                ctx, lbl, (x1 + 3, max(14, y1 - 5)),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.55, text_col, 2
             )
 
-        return radar
+        if max(h, w) > max_dim:
+            scale = max_dim / float(max(h, w))
+            ctx = cv2.resize(ctx, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
 
-    def build_batch_payload(
+        return ctx
+
+    def build_team_grid_payloads(
         self,
         shot_id: int,
         lifecycles: Dict[int, TrackletLifecycle],
@@ -239,89 +213,24 @@ class SmartCollageBatcher:
         frame_cache: Dict[int, np.ndarray],
         active_roster: Dict[str, Any],
         fps: float = 30.0,
-    ) -> Optional[CollageBatchPayload]:
+    ) -> Tuple[Optional[TeamGridPayload], Optional[TeamGridPayload], np.ndarray]:
         """
-        Build the consolidated Pass-2 batch payload for the entire camera shot.
+        Build TWO separate team payloads (Home vs Away) with 2D grids and a single Context Frame.
         """
-        # Filter for valid tracklets alive for >= min_tracklet_duration_sec
         valid_lifecycles = [
             lc for lc in lifecycles.values()
             if lc.duration_seconds(fps) >= self.min_tracklet_duration_sec
         ]
 
         if not valid_lifecycles:
-            return None
+            return None, None, np.zeros((100, 100, 3), dtype=np.uint8)
 
-        # Sort tracklets by team and left-to-right position
-        valid_lifecycles.sort(key=lambda lc: (
-            team_assignments.get(lc.track_id, TeamClusterResult(lc.track_id, "unknown", 0.5, False)).team,
-            lc.get_average_center()[0]
-        ))
-
-        # Extract crops and render rows
-        rows: List[np.ndarray] = []
-        tracklet_metadata: List[Dict[str, Any]] = []
-
-        home_cnt, away_cnt, gk_cnt, ref_cnt = 0, 0, 0, 0
-
-        # Calculate relative positions
-        all_centers = [lc.get_average_center() for lc in valid_lifecycles]
-        min_x = min(c[0] for c in all_centers)
-        max_x = max(c[0] for c in all_centers)
-        min_y = min(c[1] for c in all_centers)
-        max_y = max(c[1] for c in all_centers)
-        span_x = max(1.0, max_x - min_x)
-        span_y = max(1.0, max_y - min_y)
-
-        radar_records = []
-
-        for lc in valid_lifecycles:
-            tid = lc.track_id
-            t_info = team_assignments.get(tid)
-            team_str = t_info.team if t_info else "unknown"
-
-            if team_str == "home":
-                home_cnt += 1
-            elif team_str == "away":
-                away_cnt += 1
-            elif "gk" in team_str:
-                gk_cnt += 1
-            elif team_str == "referee":
-                ref_cnt += 1
-
-            crops = lc.extract_3_angle_crops(frame_cache)
-            if not crops:
-                continue
-
-            cx, cy = lc.get_average_center()
-            rel_x = (cx - min_x) / span_x
-            rel_y = (cy - min_y) / span_y
-            radar_records.append((tid, team_str, rel_x, rel_y))
-
-            row_img = self.render_tracklet_row(tid, t_info, crops, (rel_x, rel_y))
-            rows.append(row_img)
-
-            tracklet_metadata.append({
-                "track_id": tid,
-                "team": team_str,
-                "relative_x": round(rel_x, 3),
-                "relative_y": round(rel_y, 3),
-                "duration_frames": lc.total_frames,
-                "duration_sec": round(lc.duration_seconds(fps), 2),
-            })
-
-        if not rows:
-            return None
-
-        # Stack rows into single montage
-        montage = np.vstack(rows)
-
-        # Context frame: pick the median frame across all cached frames
+        # Context keyframe: median frame
         cached_keys = sorted(frame_cache.keys())
         mid_frame_idx = cached_keys[len(cached_keys) // 2]
         keyframe = frame_cache[mid_frame_idx]
 
-        # Gather active boxes at median frame
+        # Gather active boxes at keyframe
         active_boxes_at_keyframe = []
         for lc in valid_lifecycles:
             if mid_frame_idx in lc.frame_indices:
@@ -331,96 +240,206 @@ class SmartCollageBatcher:
                 active_boxes_at_keyframe.append((lc.track_id, bbox, t_str))
 
         context_frame = self.render_context_frame(keyframe, active_boxes_at_keyframe)
-        radar_minimap = self.render_radar_minimap(radar_records)
 
-        return CollageBatchPayload(
-            shot_id=shot_id,
-            total_tracklets=len(valid_lifecycles),
-            home_visible=home_cnt,
-            away_visible=away_cnt,
-            gk_visible=gk_cnt,
-            ref_visible=ref_cnt,
-            montage_img=montage,
-            context_frame_img=context_frame,
-            radar_minimap_img=radar_minimap,
-            tracklet_metadata=tracklet_metadata,
-            active_roster=active_roster,
-        )
+        # Separate lifecycles into Home vs Away groups
+        home_lcs: List[TrackletLifecycle] = []
+        away_lcs: List[TrackletLifecycle] = []
 
-    def resolve_identities_via_vlm(
+        all_centers = [lc.get_average_center() for lc in valid_lifecycles]
+        min_x = min(c[0] for c in all_centers)
+        max_x = max(c[0] for c in all_centers)
+        min_y = min(c[1] for c in all_centers)
+        max_y = max(c[1] for c in all_centers)
+        span_x = max(1.0, max_x - min_x)
+        span_y = max(1.0, max_y - min_y)
+
+        for lc in valid_lifecycles:
+            tid = lc.track_id
+            t_res = team_assignments.get(tid)
+            t_str = t_res.team if t_res else "unknown"
+
+            if t_str in ["home", "gk_home"]:
+                home_lcs.append(lc)
+            elif t_str in ["away", "gk_away"]:
+                away_lcs.append(lc)
+            elif t_str == "referee":
+                # Handle referee directly
+                lc.assigned_name = "Match Referee"
+                lc.assigned_number = 0
+                lc.assigned_confidence = 0.95
+
+        # Render Home Grid
+        home_payload = None
+        if home_lcs:
+            home_lcs.sort(key=lambda lc: lc.get_average_center()[0])
+            home_cards = []
+            home_meta = []
+            for lc in home_lcs:
+                tid = lc.track_id
+                t_res = team_assignments.get(tid)
+                t_str = t_res.team if t_res else "home"
+                crops = lc.extract_3_angle_crops(frame_cache)
+                if not crops:
+                    continue
+                cx, cy = lc.get_average_center()
+                rx = (cx - min_x) / span_x
+                ry = (cy - min_y) / span_y
+                card = self.render_player_card(tid, t_str, crops, (rx, ry))
+                home_cards.append(card)
+                home_meta.append({
+                    "track_label": f"T{tid}",
+                    "track_id": tid,
+                    "team": t_str,
+                    "relative_x": round(rx, 3),
+                    "relative_y": round(ry, 3),
+                })
+            if home_cards:
+                home_grid = self.render_team_2d_grid(home_cards, cols=self.cols_per_grid)
+                home_payload = TeamGridPayload(
+                    shot_id=shot_id,
+                    team_label="home",
+                    team_name=active_roster.get("home_team", "Real Madrid"),
+                    track_ids=[m["track_id"] for m in home_meta],
+                    grid_img=home_grid,
+                    context_frame_img=context_frame,
+                    tracklet_metadata=home_meta,
+                    active_roster=active_roster.get("home_active_xi", []),
+                )
+
+        # Render Away Grid
+        away_payload = None
+        if away_lcs:
+            away_lcs.sort(key=lambda lc: lc.get_average_center()[0])
+            away_cards = []
+            away_meta = []
+            for lc in away_lcs:
+                tid = lc.track_id
+                t_res = team_assignments.get(tid)
+                t_str = t_res.team if t_res else "away"
+                crops = lc.extract_3_angle_crops(frame_cache)
+                if not crops:
+                    continue
+                cx, cy = lc.get_average_center()
+                rx = (cx - min_x) / span_x
+                ry = (cy - min_y) / span_y
+                card = self.render_player_card(tid, t_str, crops, (rx, ry))
+                away_cards.append(card)
+                away_meta.append({
+                    "track_label": f"T{tid}",
+                    "track_id": tid,
+                    "team": t_str,
+                    "relative_x": round(rx, 3),
+                    "relative_y": round(ry, 3),
+                })
+            if away_cards:
+                away_grid = self.render_team_2d_grid(away_cards, cols=self.cols_per_grid)
+                away_payload = TeamGridPayload(
+                    shot_id=shot_id,
+                    team_label="away",
+                    team_name=active_roster.get("away_team", "Barcelona"),
+                    track_ids=[m["track_id"] for m in away_meta],
+                    grid_img=away_grid,
+                    context_frame_img=context_frame,
+                    tracklet_metadata=away_meta,
+                    active_roster=active_roster.get("away_active_xi", []),
+                )
+
+        return home_payload, away_payload, context_frame
+
+    def resolve_team_identities(
         self,
-        payload: CollageBatchPayload,
+        payload: TeamGridPayload,
         output_dir: str,
     ) -> Dict[int, Dict[str, Any]]:
         """
-        Send the combined Context Frame, Radar Minimap, and 3-Angle Montage to Gemini Flash
-        in ONE single API call to map all Track_IDs to confirmed player names.
-        Uses direct standard-library urllib REST calls with GEMINI_API_KEY.
+        Query Gemini Flash for ONE team's 2D grid collage against that team's strict roster.
+        Applies Hard Team Firewall and Strict 1-to-1 Bijection (Hungarian Matching).
         """
-        import base64
-        import re
-        import urllib.request
-
         os.makedirs(output_dir, exist_ok=True)
-
-        montage_path = os.path.join(output_dir, f"shot_{payload.shot_id:02d}_montage.png")
+        grid_path = os.path.join(output_dir, f"shot_{payload.shot_id:02d}_{payload.team_label}_grid.png")
         context_path = os.path.join(output_dir, f"shot_{payload.shot_id:02d}_context.png")
-        radar_path = os.path.join(output_dir, f"shot_{payload.shot_id:02d}_radar.png")
 
-        cv2.imwrite(montage_path, payload.montage_img)
+        cv2.imwrite(grid_path, payload.grid_img)
         cv2.imwrite(context_path, payload.context_frame_img)
-        cv2.imwrite(radar_path, payload.radar_minimap_img)
+
+        # Separate GK track from outfield tracks
+        gk_track_id: Optional[int] = None
+        for meta in payload.tracklet_metadata:
+            if "gk" in meta["team"]:
+                gk_track_id = meta["track_id"]
 
         api_key = os.environ.get("GEMINI_API_KEY", "").strip()
-        if not api_key:
-            return self._fallback_topological_resolution(payload)
+        vlm_results: List[Dict[str, Any]] = []
 
+        if api_key:
+            vlm_results = self._query_gemini_for_team(payload, grid_path, context_path, api_key)
+
+        # Enforce Hard Team Firewall & 1-to-1 Bijection in Python
+        final_assignments = self._enforce_strict_1to1_bijection(
+            payload=payload,
+            vlm_results=vlm_results,
+            gk_track_id=gk_track_id,
+        )
+
+        # Save diagnostics
+        diag_path = os.path.join(output_dir, f"shot_{payload.shot_id:02d}_{payload.team_label}_identities.json")
+        with open(diag_path, "w", encoding="utf-8") as f:
+            json.dump(final_assignments, f, indent=2)
+
+        return final_assignments
+
+    def _query_gemini_for_team(
+        self,
+        payload: TeamGridPayload,
+        grid_path: str,
+        context_path: str,
+        api_key: str,
+    ) -> List[Dict[str, Any]]:
+        """Direct REST call to Gemini Flash for a single team's grid."""
         try:
-            home_team = payload.active_roster.get("home_team", "Real Madrid")
-            away_team = payload.active_roster.get("away_team", "Barcelona")
-            home_players = payload.active_roster.get("home_active_xi", [])
-            away_players = payload.active_roster.get("away_active_xi", [])
+            kit_desc = "pure WHITE" if payload.team_label == "home" else "BLAUGRANA (Blue/Red stripes)"
+            roster_json = json.dumps(payload.active_roster, indent=2)
 
             prompt_text = f"""
-You are an expert football broadcast tactical analyst performing player identification for El Clásico ({home_team} vs {away_team}).
+You are a broadcast football tactical analyst identifying players for {payload.team_name} in El Clásico.
 
-We provide 3 images from ONE continuous camera shot:
-1. Context Frame (Image 1): Broadcast camera view with numbered bounding boxes (Track #ID) showing exact pitch location.
-2. 2D Radar Minimap (Image 2): Normalized pitch positions showing relative spatial formation.
-3. Multi-Angle Crop Montage (Image 3): 3 temporal angle crops (Early, Peak Sharpness, Late) for every Track #ID.
+Images provided:
+1. Context Frame (Image 1): Broadcast camera shot showing active {payload.team_name} players labeled as T{{id}} (e.g. T8, T2, T11).
+2. 2D Player Grid (Image 2): High-resolution crops (Early, Peak Sharpness, Late) for each {payload.team_name} track.
 
-CRITICAL TACTICAL CONSTRAINTS:
-- PARTIAL VISIBILITY: Only {payload.home_visible} of 11 {home_team} players and {payload.away_visible} of 11 {away_team} players are visible in this camera shot! Do NOT force-fit all 11 roster players.
-- Team Kits: {home_team} is in pure WHITE kits. {away_team} is in BLAUGRANA (Blue/Red) kits.
-- Goalkeepers wear distinctive non-outfield kits (Orange/Green/Yellow).
-- Jersey Numbers: Inspect the 3-crop strips carefully for visible kit numbers on backs, chests, or shorts.
-- Roster Lineups:
-  {home_team} Active Players: {json.dumps(home_players)}
-  {away_team} Active Players: {json.dumps(away_players)}
+CRITICAL READING CONSTRAINTS:
+1. TRACK LABELS ARE NOT JERSEY NUMBERS: The label "T11" means Track #11, NOT Jersey #11! The label "T8" means Track #8, NOT Jersey #8! Never confuse T{{id}} with a shirt number.
+2. READ PHYSICAL PRINTED DIGITS: Look closely at the player's back, shorts, and chest in the 3 crops for the actual printed digits (e.g. 17, 3, 8, 16, 19, 9, 7).
+3. STRICT ROSTER RESTRICTION: You may ONLY pick players from this {payload.team_name} active roster:
+{roster_json}
+Kit Appearance: {payload.team_name} wears {kit_desc}. Goalkeeper wears orange/distinctive kit.
+4. PARTIAL VISIBILITY: Notice only {len(payload.track_ids)} players of {payload.team_name} are visible in this camera view. Do NOT force all 11 players.
 
-Return a strict JSON array of objects mapping each Track #ID (integer) to:
+Return a strict JSON array of objects mapping each visible track to their player name:
 [
   {{
-    "track_id": integer,
+    "track_id": integer (e.g. 8),
+    "track_label": "T8",
     "player_name": string (exact name from the active roster),
-    "jersey_number": integer,
-    "team": "home" | "away" | "gk_home" | "gk_away" | "referee",
+    "jersey_number": integer (printed digit read from shirt/shorts),
     "confidence": float between 0.50 and 0.99,
-    "reasoning": string (e.g. "Visible #7 on back of white jersey", "Orange kit in penalty area -> Lunin", "Left flank relative position")
+    "reasoning": string (e.g. "Visible #17 on shirt back, defensive midfield position")
   }}
 ]
 
 Output valid JSON ONLY.
 """
 
-            # Encode 3 images to base64
-            parts = []
-            for img_p in [context_path, radar_path, montage_path]:
-                with open(img_p, "rb") as f:
-                    b64_data = base64.b64encode(f.read()).decode("utf-8")
-                parts.append({"inline_data": {"mime_type": "image/png", "data": b64_data}})
+            with open(context_path, "rb") as f:
+                ctx_b64 = base64.b64encode(f.read()).decode("utf-8")
+            with open(grid_path, "rb") as f:
+                grid_b64 = base64.b64encode(f.read()).decode("utf-8")
 
-            parts.append({"text": prompt_text})
+            parts = [
+                {"inline_data": {"mime_type": "image/png", "data": ctx_b64}},
+                {"inline_data": {"mime_type": "image/png", "data": grid_b64}},
+                {"text": prompt_text},
+            ]
 
             req_payload = {
                 "contents": [{"parts": parts}],
@@ -435,8 +454,8 @@ Output valid JSON ONLY.
             models_to_try = ["gemini-2.5-flash", "gemini-flash-lite-latest", "gemini-1.5-flash"]
             raw_text = None
 
-            for model_name in models_to_try:
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+            for m_name in models_to_try:
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{m_name}:generateContent?key={api_key}"
                 req = urllib.request.Request(url, data=req_data, headers=headers, method="POST")
                 try:
                     with urllib.request.urlopen(req, timeout=18) as resp:
@@ -446,15 +465,12 @@ Output valid JSON ONLY.
                             raw_text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "").strip()
                             if raw_text:
                                 break
-                except Exception as ex_m:
-                    print(f"[SmartCollageBatcher] Model {model_name} failed: {ex_m}. Trying next model...")
+                except Exception as ex:
                     continue
 
             if not raw_text:
-                print("[SmartCollageBatcher] All Gemini models failed. Falling back to topological resolution.")
-                return self._fallback_topological_resolution(payload)
+                return []
 
-            # Strip markdown formatting
             clean_text = raw_text.strip()
             if clean_text.startswith("```json"):
                 clean_text = clean_text[7:].strip()
@@ -464,73 +480,142 @@ Output valid JSON ONLY.
                 clean_text = clean_text[:-3].strip()
 
             parsed = json.loads(clean_text)
-
-            assignments: Dict[int, Dict[str, Any]] = {}
             if isinstance(parsed, list):
-                for item in parsed:
-                    tid = int(item.get("track_id", 0))
-                    if tid > 0:
-                        assignments[tid] = item
-            elif isinstance(parsed, dict):
-                if "tracks" in parsed and isinstance(parsed["tracks"], list):
-                    for item in parsed["tracks"]:
-                        tid = int(item.get("track_id", 0))
-                        if tid > 0:
-                            assignments[tid] = item
-                else:
-                    for k, v in parsed.items():
-                        if str(k).isdigit() and isinstance(v, dict):
-                            v["track_id"] = int(k)
-                            assignments[int(k)] = v
-
-            # Save diagnostics
-            diag_path = os.path.join(output_dir, f"shot_{payload.shot_id:02d}_vlm_identities.json")
-            with open(diag_path, "w", encoding="utf-8") as f:
-                json.dump(assignments, f, indent=2)
-
-            print(f"[SmartCollageBatcher] Successfully resolved {len(assignments)} tracklet identities via Gemini Flash!")
-            return assignments
+                return parsed
+            elif isinstance(parsed, dict) and "tracks" in parsed:
+                return parsed["tracks"]
+            return []
 
         except Exception as e:
-            print(f"[SmartCollageBatcher] VLM call failed ({e}). Falling back to topological resolution.")
-            return self._fallback_topological_resolution(payload)
+            print(f"[SmartCollageBatcher] VLM call failed for {payload.team_name}: {e}")
+            return []
 
-    def _fallback_topological_resolution(
+    def _enforce_strict_1to1_bijection(
         self,
-        payload: CollageBatchPayload,
+        payload: TeamGridPayload,
+        vlm_results: List[Dict[str, Any]],
+        gk_track_id: Optional[int],
     ) -> Dict[int, Dict[str, Any]]:
         """
-        Offline deterministic topological resolution when VLM is disabled.
+        Hard Python Enforcement:
+        1. Hard Team Firewall: Drop any player not in this team's active roster.
+        2. Goalkeeper Lock: Bind GK track to team's goalkeeper with conf=0.99.
+        3. Strict 1-to-1 Uniqueness: Greedy lock for visible jersey numbers (conf >= 0.90),
+           then Hungarian algorithm (linear_sum_assignment) on remaining slots.
         """
-        assignments: Dict[int, Dict[str, Any]] = {}
+        roster_by_name = {p["name"].lower(): p for p in payload.active_roster}
+        roster_by_num = {p["number"]: p for p in payload.active_roster}
 
-        home_players = payload.active_roster.get("home_active_xi", [])
-        away_players = payload.active_roster.get("away_active_xi", [])
+        final_assignments: Dict[int, Dict[str, Any]] = {}
+        assigned_names: Set[str] = set()
 
-        # Assign GK
-        for meta in payload.tracklet_metadata:
-            tid = meta["track_id"]
-            team = meta["team"]
+        # Step 1: Hard Goalkeeper Lock
+        gk_player = next((p for p in payload.active_roster if p.get("role") == "GK"), None)
+        if gk_track_id is not None and gk_player:
+            final_assignments[gk_track_id] = {
+                "track_id": gk_track_id,
+                "track_label": f"T{gk_track_id}",
+                "player_name": gk_player["name"],
+                "jersey_number": gk_player["number"],
+                "team": f"gk_{payload.team_label}",
+                "confidence": 0.99,
+                "reasoning": "Goalkeeper kit and goal area spatial lock",
+            }
+            assigned_names.add(gk_player["name"].lower())
 
-            if "gk" in team:
-                gk_name = "Andriy Lunin" if "home" in team else "Iñaki Peña"
-                gk_num = 13 if "home" in team else 13
-                assignments[tid] = {
+        # Step 2: Process VLM candidate assignments
+        # Filter: Must be in team roster and not GK
+        valid_candidates = []
+        for item in vlm_results:
+            tid = int(item.get("track_id", 0))
+            if tid == gk_track_id:
+                continue
+
+            raw_name = str(item.get("player_name", "")).strip()
+            raw_num = item.get("jersey_number")
+
+            matched_p = None
+            if raw_name.lower() in roster_by_name:
+                matched_p = roster_by_name[raw_name.lower()]
+            elif raw_num in roster_by_num:
+                matched_p = roster_by_num[raw_num]
+
+            if matched_p and matched_p.get("role") != "GK":
+                conf = float(item.get("confidence", 0.80))
+                reason = str(item.get("reasoning", "VLM identification"))
+                valid_candidates.append((tid, matched_p, conf, reason))
+
+        # Sort by confidence descending (high-confidence printed numbers first)
+        valid_candidates.sort(key=lambda x: x[2], reverse=True)
+
+        # Greedy lock on high-confidence unique players
+        for tid, p, conf, reason in valid_candidates:
+            if tid in final_assignments:
+                continue
+            p_name = p["name"]
+            if p_name.lower() not in assigned_names:
+                final_assignments[tid] = {
                     "track_id": tid,
-                    "player_name": gk_name,
-                    "jersey_number": gk_num,
-                    "team": team,
-                    "confidence": 0.95,
-                    "reasoning": "Goalkeeper kit and goal area spatial lock",
+                    "track_label": f"T{tid}",
+                    "player_name": p_name,
+                    "jersey_number": p["number"],
+                    "team": payload.team_label,
+                    "confidence": conf,
+                    "reasoning": reason,
                 }
-            elif team == "referee":
-                assignments[tid] = {
-                    "track_id": tid,
-                    "player_name": "Match Referee",
-                    "jersey_number": 0,
-                    "team": "referee",
-                    "confidence": 0.90,
-                    "reasoning": "Referee kit and central pitch position",
-                }
+                assigned_names.add(p_name.lower())
 
-        return assignments
+        # Step 3: Hungarian Bipartite Matching for any remaining unassigned tracks
+        unassigned_track_ids = [tid for tid in payload.track_ids if tid not in final_assignments]
+        available_outfield = [
+            p for p in payload.active_roster
+            if p.get("role") != "GK" and p["name"].lower() not in assigned_names
+        ]
+
+        if unassigned_track_ids and available_outfield:
+            # Formation nominal relative coordinates:
+            # Home (Real Madrid defending left): LB is top/left, RB is bottom/left, CB central, CM mid, ST right
+            # Away (Barcelona defending right): RB is top/right, LB is bottom/right, CB central, CM mid, ST left
+            cost_matrix = np.zeros((len(unassigned_track_ids), len(available_outfield)), dtype=np.float32)
+
+            # Map tracks to (rx, ry)
+            meta_by_id = {m["track_id"]: m for m in payload.tracklet_metadata}
+
+            for i, tid in enumerate(unassigned_track_ids):
+                m = meta_by_id.get(tid, {})
+                rx = m.get("relative_x", 0.5)
+                ry = m.get("relative_y", 0.5)
+
+                for j, p in enumerate(available_outfield):
+                    role = p.get("role", "CM")
+                    # Target nominal (fx, fy) based on role
+                    if payload.team_label == "home":
+                        # Defending left goal
+                        fx_map = {"LB": 0.25, "CB": 0.20, "RB": 0.25, "DM": 0.45, "CM": 0.55, "AM": 0.65, "LW": 0.75, "RW": 0.75, "CF": 0.85}
+                        fy_map = {"LB": 0.20, "CB": 0.50, "RB": 0.80, "DM": 0.50, "CM": 0.50, "AM": 0.50, "LW": 0.20, "RW": 0.80, "CF": 0.50}
+                    else:
+                        # Defending right goal
+                        fx_map = {"RB": 0.75, "CB": 0.80, "LB": 0.75, "DM": 0.55, "CM": 0.45, "AM": 0.35, "RW": 0.25, "LW": 0.25, "CF": 0.15}
+                        fy_map = {"RB": 0.20, "CB": 0.50, "LB": 0.80, "DM": 0.50, "CM": 0.50, "AM": 0.50, "RW": 0.20, "LW": 0.80, "CF": 0.50}
+
+                    fx = fx_map.get(role, 0.5)
+                    fy = fy_map.get(role, 0.5)
+                    dist = ((rx - fx) ** 2 + (ry - fy) ** 2) ** 0.5
+                    cost_matrix[i, j] = dist
+
+            row_ind, col_ind = linear_sum_assignment(cost_matrix)
+            for r, c in zip(row_ind, col_ind):
+                tid = unassigned_track_ids[r]
+                p = available_outfield[c]
+                final_assignments[tid] = {
+                    "track_id": tid,
+                    "track_label": f"T{tid}",
+                    "player_name": p["name"],
+                    "jersey_number": p["number"],
+                    "team": payload.team_label,
+                    "confidence": 0.75,
+                    "reasoning": f"Hungarian topological formation match ({p.get('role', 'CM')})",
+                }
+                assigned_names.add(p["name"].lower())
+
+        return final_assignments

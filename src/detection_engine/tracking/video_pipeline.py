@@ -20,7 +20,7 @@ from ultralytics import YOLO
 from .shot_detector import ShotBoundaryDetector, ShotSegment
 from .bot_sort_tracker import BoTSORTTracker, TrackedObject, TrackletLifecycle
 from .team_color_clusterer import TeamColorClusterer, TeamClusterResult
-from .smart_collage_batcher import SmartCollageBatcher, CollageBatchPayload
+from .smart_collage_batcher import SmartCollageBatcher, TeamGridPayload
 
 
 @dataclass
@@ -74,12 +74,89 @@ class VideoTrackingPipeline:
 
         self.roster: Dict[str, Any] = self._load_roster(canonical_roster_path)
 
+    def filter_detections_by_pitch(
+        self,
+        frame: np.ndarray,
+        boxes: np.ndarray,
+        confs: np.ndarray,
+        clss: np.ndarray,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Filter out TV overlays, scoreboards, and off-pitch personnel (cameramen/stewards).
+        """
+        if len(boxes) == 0:
+            return boxes, confs, clss
+
+        h, w = frame.shape[:2]
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        turf_mask = cv2.inRange(hsv, (32, 35, 35), (85, 255, 255))
+        contours, _ = cv2.findContours(turf_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        hull = None
+        if contours:
+            largest = max(contours, key=cv2.contourArea)
+            if cv2.contourArea(largest) > 0.15 * (w * h):
+                hull = cv2.convexHull(largest)
+
+        keep_indices = []
+        for i, b in enumerate(boxes):
+            x1, y1, x2, y2 = b
+            xc = (x1 + x2) / 2.0
+
+            # Scoreboard deadzone (top left)
+            if x1 < 0.20 * w and y1 < 0.18 * h:
+                continue
+
+            # Bottom broadcast overlay banner (TV player profile cards, e.g. Raphinha graphic)
+            if y2 > 0.84 * h and (x1 < 0.40 * w or x2 > 0.60 * w):
+                continue
+
+            # Playable pitch hull check (foot/ankle contact point)
+            if hull is not None:
+                pt_dist = cv2.pointPolygonTest(hull, (float(xc), float(y2)), False)
+                if pt_dist < 0:
+                    continue
+
+            keep_indices.append(i)
+
+        if not keep_indices:
+            return (
+                np.empty((0, 4), dtype=np.float32),
+                np.empty(0, dtype=np.float32),
+                np.empty(0, dtype=np.float32),
+            )
+
+        return boxes[keep_indices], confs[keep_indices], clss[keep_indices]
+
     def _load_roster(self, path: Optional[str]) -> Dict[str, Any]:
         """Load canonical match roster from JSON if available."""
         if path and os.path.exists(path):
             try:
                 with open(path, "r", encoding="utf-8") as f:
-                    return json.load(f)
+                    raw = json.load(f)
+
+                # Schema 1: Match metadata JSON with home_team/away_team objects
+                if isinstance(raw.get("home_team"), dict) and "starting_xi" in raw["home_team"]:
+                    h_dict = raw["home_team"]
+                    a_dict = raw.get("away_team", {})
+
+                    if "madrid" in h_dict.get("name", "").lower():
+                        home_xi = h_dict.get("starting_xi", [])
+                        away_xi = a_dict.get("starting_xi", [])
+                    else:
+                        home_xi = a_dict.get("starting_xi", [])
+                        away_xi = h_dict.get("starting_xi", [])
+
+                    return {
+                        "home_team": self.home_team_name,
+                        "away_team": self.away_team_name,
+                        "home_active_xi": home_xi,
+                        "away_active_xi": away_xi,
+                    }
+
+                # Schema 2: Direct active XI lists
+                if "home_active_xi" in raw:
+                    return raw
             except Exception as e:
                 print(f"[VideoTrackingPipeline] Could not load roster from {path}: {e}")
 
@@ -169,8 +246,8 @@ class VideoTrackingPipeline:
             tactical_shots += 1
             print(f"[VideoTrackingPipeline] Finalizing Shot #{s_id} (frames {shot_start_frame}..{frame_idx}): {len(self.tracker.lifecycles)} tracklets")
 
-            # PASS 2: Multi-angle batching + Single VLM Call
-            payload = self.batcher.build_batch_payload(
+            # PASS 2: Team-Split 2D Grid Collages + Strict 1-to-1 Bijection
+            home_payload, away_payload, context_frame = self.batcher.build_team_grid_payloads(
                 shot_id=s_id,
                 lifecycles=self.tracker.lifecycles,
                 team_assignments=shot_team_assignments,
@@ -179,30 +256,24 @@ class VideoTrackingPipeline:
                 fps=fps,
             )
 
-            if payload:
-                identities = self.batcher.resolve_identities_via_vlm(payload, output_dir)
-                for tid, id_data in identities.items():
-                    name = id_data.get("player_name")
-                    num = id_data.get("jersey_number")
-                    conf = id_data.get("confidence", 0.8)
-                    if name:
-                        all_identified_players.add(name)
-                    if tid in self.tracker.lifecycles:
-                        self.tracker.lifecycles[tid].assigned_name = name
-                        self.tracker.lifecycles[tid].assigned_number = num
-                        self.tracker.lifecycles[tid].assigned_confidence = conf
+            identities: Dict[int, Dict[str, Any]] = {}
+            if home_payload:
+                h_ids = self.batcher.resolve_team_identities(home_payload, output_dir)
+                identities.update(h_ids)
+            if away_payload:
+                a_ids = self.batcher.resolve_team_identities(away_payload, output_dir)
+                identities.update(a_ids)
 
-                # Propagate identities to frame history
-                for f_num, objs in active_track_history.items():
-                    if shot_start_frame <= f_num <= frame_idx:
-                        for obj in objs:
-                            if obj.track_id in identities:
-                                id_info = identities[obj.track_id]
-                                obj_name = id_info.get("player_name")
-                                obj_num = id_info.get("jersey_number")
-                                # Render on frame
-                                if video_writer and f_num in shot_frame_cache:
-                                    pass
+            for tid, id_data in identities.items():
+                name = id_data.get("player_name")
+                num = id_data.get("jersey_number")
+                conf = id_data.get("confidence", 0.8)
+                if name:
+                    all_identified_players.add(name)
+                if tid in self.tracker.lifecycles:
+                    self.tracker.lifecycles[tid].assigned_name = name
+                    self.tracker.lifecycles[tid].assigned_number = num
+                    self.tracker.lifecycles[tid].assigned_confidence = conf
 
             # Render cached frames for this shot to video
             if video_writer:
@@ -231,10 +302,12 @@ class VideoTrackingPipeline:
                             x1, y1, x2, y2 = [int(v) for v in obj.bbox]
                             cv2.rectangle(frame_render, (x1, y1), (x2, y2), box_color, 2)
 
-                            # Label text
-                            p_name = lc.assigned_name if (lc and lc.assigned_name) else f"Track #{obj.track_id}"
-                            p_num = f"#{lc.assigned_number} " if (lc and lc.assigned_number) else ""
-                            label = f"{p_num}{p_name}"
+                            # Label text: Strictly "T{track_id}" - NO '#' prefix for Track IDs
+                            if lc and lc.assigned_name:
+                                p_num = f"#{lc.assigned_number} " if lc.assigned_number else ""
+                                label = f"T{obj.track_id}: {p_num}{lc.assigned_name}"
+                            else:
+                                label = f"T{obj.track_id}"
 
                             t_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)[0]
                             cv2.rectangle(
@@ -296,6 +369,9 @@ class VideoTrackingPipeline:
                     boxes = results.boxes.xyxy.cpu().numpy()
                     confs = results.boxes.conf.cpu().numpy()
                     clss = results.boxes.cls.cpu().numpy()
+
+                    # Filter out TV overlays, scoreboards, and off-pitch personnel
+                    boxes, confs, clss = self.filter_detections_by_pitch(frame, boxes, confs, clss)
 
                     # BoT-SORT update with sparse optical flow CMC (with_reid=False)
                     tracked_objs = self.tracker.update_strided(frame, boxes, confs, clss, frame_idx)

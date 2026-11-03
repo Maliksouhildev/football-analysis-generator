@@ -133,7 +133,7 @@ class TestTeamColorClustererOutlierLogic:
 
 
 class TestSmartCollageBatcher:
-    def test_batch_payload_creation(self):
+    def test_team_split_grids_and_1to1_bijection(self):
         batcher = SmartCollageBatcher(min_tracklet_duration_sec=0.1)
 
         # Mock frame cache
@@ -143,7 +143,7 @@ class TestSmartCollageBatcher:
                 frame[y, x] = (x % 255, y % 255, (x + y) % 255)
         frame_cache = {0: frame, 10: frame, 20: frame}
 
-        # Mock lifecycles
+        # Mock lifecycles: 1 Home track (T1), 2 Away tracks (T2, T3)
         lc1 = TrackletLifecycle(
             track_id=1,
             start_frame=0,
@@ -162,20 +162,33 @@ class TestSmartCollageBatcher:
             confidences=[0.88, 0.88, 0.88],
             is_interpolated=[False, False, False],
         )
+        lc3 = TrackletLifecycle(
+            track_id=3,
+            start_frame=0,
+            end_frame=20,
+            frame_indices=[0, 10, 20],
+            bboxes=[[500, 200, 550, 320], [505, 200, 555, 320], [510, 200, 560, 320]],
+            confidences=[0.87, 0.87, 0.87],
+            is_interpolated=[False, False, False],
+        )
 
-        lifecycles = {1: lc1, 2: lc2}
+        lifecycles = {1: lc1, 2: lc2, 3: lc3}
         team_assignments = {
             1: TeamClusterResult(1, "home", 0.95, False),
             2: TeamClusterResult(2, "away", 0.92, False),
+            3: TeamClusterResult(3, "away", 0.90, False),
         }
         active_roster = {
             "home_team": "Real Madrid",
             "away_team": "Barcelona",
-            "home_active_xi": [{"name": "Vinícius Júnior", "number": 7}],
-            "away_active_xi": [{"name": "Robert Lewandowski", "number": 9}],
+            "home_active_xi": [{"name": "Vinicius Junior", "number": 7, "role": "LW"}],
+            "away_active_xi": [
+                {"name": "Marc Casado", "number": 17, "role": "DM"},
+                {"name": "Alejandro Balde", "number": 3, "role": "LB"},
+            ],
         }
 
-        payload = batcher.build_batch_payload(
+        home_payload, away_payload, context_frame = batcher.build_team_grid_payloads(
             shot_id=1,
             lifecycles=lifecycles,
             team_assignments=team_assignments,
@@ -184,10 +197,37 @@ class TestSmartCollageBatcher:
             fps=30.0,
         )
 
-        assert payload is not None
-        assert payload.total_tracklets == 2
-        assert payload.home_visible == 1
-        assert payload.away_visible == 1
-        assert payload.montage_img.shape[0] > 0
-        assert payload.context_frame_img.shape[0] > 0
-        assert payload.radar_minimap_img.shape[0] > 0
+        assert home_payload is not None
+        assert away_payload is not None
+        assert context_frame.shape[0] > 0
+
+        # Check Home Payload
+        assert home_payload.team_label == "home"
+        assert home_payload.track_ids == [1]
+        assert home_payload.grid_img.shape[0] > 0
+
+        # Check Away Payload
+        assert away_payload.team_label == "away"
+        assert away_payload.track_ids == [2, 3]
+        assert away_payload.grid_img.shape[0] > 0
+
+        # Test 1-to-1 Bijection & Duplicate Prevention
+        # Simulate VLM attempting to assign "Marc Casado" to BOTH T2 and T3
+        duplicate_vlm_results = [
+            {"track_id": 2, "player_name": "Marc Casado", "jersey_number": 17, "confidence": 0.95},
+            {"track_id": 3, "player_name": "Marc Casado", "jersey_number": 17, "confidence": 0.85},
+        ]
+
+        resolved = batcher._enforce_strict_1to1_bijection(
+            payload=away_payload,
+            vlm_results=duplicate_vlm_results,
+            gk_track_id=None,
+        )
+
+        # T2 should get Marc Casado (#17)
+        assert resolved[2]["player_name"] == "Marc Casado"
+        assert resolved[2]["jersey_number"] == 17
+
+        # T3 CANNOT get Marc Casado (duplicate prevented)! Must get remaining available player (Alejandro Balde #3)
+        assert resolved[3]["player_name"] == "Alejandro Balde"
+        assert resolved[3]["jersey_number"] == 3
