@@ -495,6 +495,7 @@ class PlayerIdentityResolver:
         frame: np.ndarray,
         tracks: List[Dict[str, Any]],
         output_path: Optional[Union[str, Path]] = "tracking_pass2_context_boxes.png",
+        assignments: Optional[Dict[int, Dict[str, Any]]] = None,
     ) -> np.ndarray:
         """
         Draws labeled tracking boxes (e.g. T1, T2, T18) and team color boundaries:
@@ -502,6 +503,7 @@ class PlayerIdentityResolver:
         - Purple / Blue (200, 50, 150) = Barcelona AWAY
         - Orange (0, 140, 255) = Goalkeeper
         - Cyan (255, 255, 0) = Referee
+        Displays resolved player names and jersey numbers when available.
         Saves output as tracking_pass2_context_boxes.png.
         """
         if frame is None or frame.size == 0:
@@ -520,17 +522,32 @@ class PlayerIdentityResolver:
             jc = str(tr.get("jersey_class", "")).upper()
             tm = str(tr.get("team", "")).lower()
 
-            if jc == "REFEREE" or tm == "referee":
+            asg = assignments.get(tid) if assignments else None
+            p_name = tr.get("name") or (asg.get("name") if asg else "")
+            p_num = tr.get("number") if tr.get("number") is not None else (asg.get("number") if asg else "")
+            p_role = tr.get("role") or (asg.get("role") if asg else "")
+            p_team = tr.get("team") or (asg.get("team") if asg else tm)
+
+            if p_team == "home":
+                color = (255, 255, 255)  # White
+            elif p_team == "away":
+                color = (220, 80, 160)  # Magenta / Purple-Blue
+            elif jc == "REFEREE" or tm == "referee":
                 color = (255, 255, 0)  # Cyan
-                tag = f"T{tid} [REF]"
             elif jc == "GOALKEEPER" or tm == "gk" or tr.get("is_gk"):
                 color = (0, 140, 255)  # Orange
+            else:
+                color = (255, 255, 255)
+
+            if p_name and p_name != "Unknown":
+                tag = f"T{tid} #{p_num} {p_name} ({p_role})"
+            elif jc == "REFEREE" or tm == "referee":
+                tag = f"T{tid} [REF]"
+            elif jc == "GOALKEEPER" or tm == "gk" or tr.get("is_gk"):
                 tag = f"T{tid} [GK]"
             elif jc in ("TEAM_AWAY", "AWAY", "TEAM_PURPLE", "TEAM_BLUE") or tm == "away":
-                color = (200, 50, 150)  # Purple / Blue
                 tag = f"T{tid} [AWAY]"
             else:
-                color = (255, 255, 255)  # White
                 tag = f"T{tid} [HOME]"
 
             bbox = tr.get("bbox")
@@ -1398,7 +1415,7 @@ Analyze the images and return strictly the JSON mapping:
 
         # 11. Always save annotated context frame for human inspection
         if frame is not None and frame.size > 0:
-            self._generate_annotated_context_frame(frame, tracks_at_freeze, output_path="tracking_pass2_context_boxes.png")
+            self._generate_annotated_context_frame(frame, tracks_at_freeze, output_path="tracking_pass2_context_boxes.png", assignments=assignments)
 
         # 12. Propagate Resolved Identities across full-clip tracks_per_frame
         if tracks_per_frame and isinstance(tracks_per_frame, dict):

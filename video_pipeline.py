@@ -233,7 +233,7 @@ def main():
 
     # Generate final annotated context boxes image in output directory
     annotated_path = output_dir / "tracking_pass2_context_boxes.png"
-    resolver._generate_annotated_context_frame(frame, tracks, output_path=annotated_path)
+    resolver._generate_annotated_context_frame(frame, tracks, output_path=annotated_path, assignments=assignments)
 
     # Save output JSON mapping
     json_path = output_dir / "player_identities.json"
@@ -259,6 +259,15 @@ def main():
 
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(output_payload, f, indent=2)
+
+    import shutil
+    brain_artifact_p = Path(r"C:\Users\Yacine\.gemini\antigravity\brain\81cf05f0-9be0-412d-a2c5-1dcb5e0b9048\tracking_pass2_context_boxes.png")
+    if annotated_path.exists():
+        try:
+            brain_artifact_p.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(str(annotated_path), str(brain_artifact_p))
+        except Exception as e:
+            logger.debug("Notice copying to brain artifact: %s", e)
 
     # -------------------------------------------------------------------------
     # Pretty-Print Final Results to Console
