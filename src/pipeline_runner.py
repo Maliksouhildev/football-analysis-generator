@@ -291,6 +291,7 @@ class TacticalPipelineRunner:
         matchday_data: Optional[Dict[str, Any]] = None,
         reddit_comments: Optional[List[str]] = None,
         force_refresh: bool = False,
+        overrides: Optional[Union[Dict[str, Any], str]] = None,
     ) -> Dict[str, Any]:
         # Parse metadata automatically from local video path if available
         match_date = ""
@@ -543,6 +544,26 @@ class TacticalPipelineRunner:
                 raise FileNotFoundError(error_msg)
         else:
             logger.info(f"[Idempotent Resume] All clips already extracted for {match_id}. Bypassing raw video requirement.")
+
+        # Attach overrides if provided
+        parsed_overrides = None
+        if overrides:
+            if isinstance(overrides, str):
+                try:
+                    if Path(overrides).is_file():
+                        with open(overrides, "r", encoding="utf-8") as f:
+                            parsed_overrides = json.load(f)
+                    else:
+                        parsed_overrides = json.loads(overrides)
+                except Exception as e:
+                    logger.warning("Failed to parse overrides in PipelineRunner: %s", e)
+                    parsed_overrides = {}
+            elif isinstance(overrides, dict):
+                parsed_overrides = overrides
+
+        if parsed_overrides:
+            for win in event_windows:
+                win["overrides"] = parsed_overrides
 
         # Process clips through Stages 2 (CLIPS_EXTRACTED) -> 3 (VISION_ANALYZED) -> 4 (AUDIO_LOCKED)
         synchronized_clips: List[Dict[str, Any]] = []
@@ -1508,6 +1529,7 @@ if __name__ == "__main__":
     parser.add_argument("--fixture-id", type=str, help="Unique fixture or match identifier")
     parser.add_argument("--db-path", type=str, default=None, help="Custom SQLite pipeline_state.db path")
     parser.add_argument("--force-refresh", action="store_true", help="Force re-run stages ignoring cached state")
+    parser.add_argument("--overrides", type=str, default=None, help="JSON string or path to JSON player identity overrides (e.g. '{\"T18\": 9}')")
     args = parser.parse_args()
 
     # Automatically extract teams and score if --video is provided without explicit teams
@@ -1535,5 +1557,6 @@ if __name__ == "__main__":
             render=not args.no_render,
             wait=args.wait,
             force_refresh=args.force_refresh,
+            overrides=args.overrides,
         )
         print(json.dumps(result, indent=2))

@@ -2991,7 +2991,11 @@ TASKS:
 
         # Resolve active roster state dynamically from matchday metadata
         from src.vision.match_roster_engine import ActiveXIResolver
-        active_resolver = ActiveXIResolver(match_data=ctx.get("match_data"))
+        active_resolver = ActiveXIResolver(
+            match_data=ctx.get("match_data"),
+            home_team=ctx.get("home_team") or cause_tel.get("home_team"),
+            away_team=ctx.get("away_team") or cause_tel.get("away_team"),
+        )
         match_min_cur = int(cause_tel.get("match_minute") or ctx.get("match_minute") or 0)
         active_state = active_resolver.get_active_players(match_minute=match_min_cur)
         cause_tel["active_roster_state"] = active_state.to_dict()
@@ -3091,6 +3095,7 @@ TASKS:
                     clip_id=cid,
                     api_key=os.environ.get("GEMINI_API_KEY"),
                     temporal_burst_frames=temporal_burst_frames,
+                    overrides=ctx.get("overrides") or cause_tel.get("overrides"),
                 )
                 identity_assignments = res_info.get("assignments", {})
                 cause_tel["player_identities"] = identity_assignments

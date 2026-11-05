@@ -53,7 +53,7 @@ K_VIDEO_MAP = {
 }
 
 
-def realign_cause_telestration(cause_tel: dict, tracks_per_frame: dict, freeze_frame: int, clip_id: str = ""):
+def realign_cause_telestration(cause_tel: dict, tracks_per_frame: dict, freeze_frame: int, clip_id: str = "", overrides: dict = None):
     """
     Re-aligns cause_telestration player coordinates to tracks_per_frame[str(freeze_frame)].
     Delegates authoritatively to TacticalVisionEngine.sanitize_v3_telestration to avoid team swaps and polygon corruption.
@@ -125,6 +125,7 @@ def realign_cause_telestration(cause_tel: dict, tracks_per_frame: dict, freeze_f
         tracks_at_freeze=tracks_at_freeze,
         clip_id=clip_id,
         freeze_frame_img=f_img,
+        event_context={"overrides": overrides} if overrides else None,
         tracks_per_frame=tracks_per_frame,
         freeze_frame=freeze_frame,
         homographies=homographies,
@@ -350,6 +351,25 @@ def ensure_clip_visual_cue_tags(sc: dict, vis: dict, cid: str) -> list:
 
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="Render masterclass tactical analysis video")
+    parser.add_argument("--force", action="store_true", help="Force re-generation of vision and audio checkpoints")
+    parser.add_argument("--audit", action="store_true", help="Run audit checks only")
+    parser.add_argument("--overrides", type=str, default=None, help="JSON string or path to JSON player identity overrides")
+    args, unknown = parser.parse_known_args()
+
+    cli_overrides = None
+    if args.overrides:
+        try:
+            if os.path.isfile(args.overrides):
+                with open(args.overrides, "r", encoding="utf-8") as f:
+                    cli_overrides = json.load(f)
+            else:
+                cli_overrides = json.loads(args.overrides)
+            print(f"Loaded CLI Player Overrides: {cli_overrides}")
+        except Exception as e:
+            print(f"Warning: Failed to parse --overrides ({e})")
+
     clip_ids = [
         "clip_01_left_wing",
         "clip_02_zone_14",
@@ -363,7 +383,7 @@ def main():
     audio_base = Path("F:/DockerRenders/assets/audio")
     audio_base.mkdir(parents=True, exist_ok=True)
 
-    if "--force" not in sys.argv:
+    if not args.force and "--force" not in sys.argv:
         print("=== STEP 0: Using Existing Verified Checkpoints (pass --force to clear) ===")
     else:
         print("=== STEP 0: Purging Stale Cached Audio-Locked JSON and WAV Files (--force) ===")
@@ -473,6 +493,7 @@ def main():
             "thesis": clip_theses.get(cid, f"Tactical analysis sequence for {cid.replace('_', ' ')}"),
             "home_team": vis_home,
             "away_team": vis_away,
+            "overrides": cli_overrides,
         }
 
         if vis_path.is_file():
@@ -744,8 +765,8 @@ def main():
             c_orig = sc.get("cause_frame_idx")
             if c_orig is not None and str(c_orig) in t_map and str(K) not in t_map:
                 t_map[str(K)] = t_map[str(c_orig)]
-            realign_cause_telestration(cause_tel, t_map, K, clip_id=cid)
-            if sc.get("is_set_piece_or_long_ball") or sc.get("is_set_piece"):
+            realign_cause_telestration(cause_tel, t_map, K, clip_id=cid, overrides=cli_overrides)
+            if sc.get("is_set_piece_or_long_ball") or sc.get("is_set_piece") or "clip_05" in cid or "clip_03" in cid:
                 cause_tel["is_set_piece_or_long_ball"] = True
                 cause_tel["is_set_piece"] = True
             is_tactical = sc.get("is_tactical", True)
@@ -950,7 +971,7 @@ def main():
         json.dump(payload, f, indent=2, cls=NumpyJSONEncoder)
     print(f"Saved masterclass payload with {len(active_segments)} segments (total {current_time:.2f}s) to {render_json_path}")
 
-    if "--audit" in sys.argv:
+    if args.audit or "--audit" in sys.argv:
         print("\n=== VISUAL SELF-AUDIT: Rendering Static Preview Images for all 5 clips ===")
         audit_dir = Path("F:/DockerRenders/audit_previews")
         audit_dir.mkdir(parents=True, exist_ok=True)
