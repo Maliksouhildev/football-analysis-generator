@@ -755,11 +755,36 @@ class PlayerIdentityResolver:
             return assignments
 
         if isinstance(overrides, str):
-            try:
-                overrides = json.loads(overrides)
-            except Exception as e:
-                logger.warning("Could not parse overrides JSON string '%s': %s", overrides, e)
-                return assignments
+            overrides = overrides.strip()
+            # If path to file
+            if Path(overrides).is_file():
+                try:
+                    with open(overrides, "r", encoding="utf-8") as f:
+                        overrides = json.load(f)
+                except Exception as e:
+                    logger.warning("Could not read overrides file '%s': %s", overrides, e)
+                    return assignments
+            elif overrides.startswith("{") and overrides.endswith("}"):
+                try:
+                    overrides = json.loads(overrides)
+                except Exception as e:
+                    logger.warning("Could not parse overrides JSON string '%s': %s", overrides, e)
+                    return assignments
+            else:
+                # Support convenient CLI key=val syntax: "T7=9,T12=11" or "T7:9,T12:11"
+                parsed = {}
+                for item in overrides.split(","):
+                    item = item.strip()
+                    if not item:
+                        continue
+                    if "=" in item:
+                        k, v = item.split("=", 1)
+                    elif ":" in item:
+                        k, v = item.split(":", 1)
+                    else:
+                        continue
+                    parsed[k.strip()] = v.strip()
+                overrides = parsed
 
         if not isinstance(overrides, dict):
             return assignments

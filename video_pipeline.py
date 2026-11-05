@@ -48,20 +48,46 @@ logging.basicConfig(
 logger = logging.getLogger("video_pipeline")
 
 
+def load_yolo_model():
+    """Loads local YOLO model from disk for robust player bounding box detection."""
+    candidates = [
+        "F:/DockerRenders/yolov8n.pt",
+        "yolov8n.pt",
+        Path.home() / ".cache/ultralytics/yolov8n.pt",
+    ]
+    for c in candidates:
+        if Path(c).is_file():
+            try:
+                from ultralytics import YOLO
+                return YOLO(str(c))
+            except Exception:
+                pass
+    try:
+        from ultralytics import YOLO
+        return YOLO("yolov8n.pt")
+    except Exception:
+        return None
+
+
 def run_pass1_local_detection(
     video_or_image_path: Path,
     target_frame_idx: int = 66,
     stride: int = 15,
-) -> Tuple[np.ndarray, List[Dict[str, Any]], Dict[str, Optional[np.ndarray]]]:
+    force_frame: bool = False,
+) -> Tuple[np.ndarray, List[Dict[str, Any]], Dict[str, Optional[np.ndarray]], int]:
     """
     Pass 1: Runs locally on CPU without lag:
     - Extracts freeze frame, prev frame (-stride), and next frame (+stride).
-    - Detects player bounding boxes and clusters jersey colors into HOME, AWAY, GK, REF.
-    - Assigns persistent track IDs (T1, T2...).
+    - If video has a close-up/celebration cut at target_frame_idx, scans for the wide tactical pitch frame.
+    - Uses YOLOv8/CV to detect real human players on the pitch.
+    - Clusters jersey colors into HOME, AWAY, GK, REF.
+    - NEVER generates fake/synthetic boxes on empty grass.
     """
     logger.info("Running Pass 1 (Local CPU Detection & Jersey Clustering)...")
 
     temporal_burst: Dict[str, Optional[np.ndarray]] = {"prev": None, "freeze": None, "next_1": None}
+    chosen_frame_idx = target_frame_idx
+    yolo_model = load_yolo_model()
 
     # Case A: Video Input
     if video_or_image_path.suffix.lower() in (".mp4", ".mkv", ".avi", ".mov", ".ts"):
@@ -71,6 +97,50 @@ def run_pass1_local_detection(
 
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         f_idx = min(max(0, target_frame_idx), max(0, total_frames - 1))
+
+        # Check if target frame is a close-up/celebration or has low player count
+        cap.set(cv2.CAP_PROP_POS_FRAMES, f_idx)
+        ret, frame_cand = cap.read()
+        probe_count = 0
+        if ret and frame_cand is not None:
+            fh_c = frame_cand.shape[0]
+            if yolo_model:
+                res_p = yolo_model.predict(frame_cand, classes=[0], conf=0.30, device="cpu", verbose=False)[0]
+                valid_p = [b for b in res_p.boxes if 0.03 <= (b.xyxy[0][3] - b.xyxy[0][1]).item() / fh_c <= 0.28]
+                probe_count = len(valid_p)
+            else:
+                probe_count = len(CVPlayerDetector.detect_players_on_pitch(frame_cand))
+
+        # If probe found < 5 tactical players, scan for the true wide tactical frame
+        if probe_count < 5 and total_frames > 30 and not force_frame:
+            logger.info("Target frame %d is a close-up/celebration shot (%d players). Scanning video for wide tactical pitch frame...", f_idx, probe_count)
+            best_f_idx = f_idx
+            best_count = probe_count
+            scan_step = max(15, total_frames // 40)
+            for cand_idx in range(0, total_frames, scan_step):
+                cap.set(cv2.CAP_PROP_POS_FRAMES, cand_idx)
+                ret_s, f_s = cap.read()
+                if not ret_s or f_s is None:
+                    continue
+                sh = f_s.shape[0]
+                s_count = 0
+                if yolo_model:
+                    res_s = yolo_model.predict(f_s, classes=[0], conf=0.30, device="cpu", verbose=False)[0]
+                    v_s = [b for b in res_s.boxes if 0.03 <= (b.xyxy[0][3] - b.xyxy[0][1]).item() / sh <= 0.28]
+                    s_count = len(v_s)
+                else:
+                    s_count = len(CVPlayerDetector.detect_players_on_pitch(f_s))
+
+                if s_count > best_count:
+                    best_count = s_count
+                    best_f_idx = cand_idx
+                if s_count >= 16:
+                    break
+
+            logger.info("Selected authentic wide tactical frame %d (%d on-pitch players).", best_f_idx, best_count)
+            f_idx = best_f_idx
+
+        chosen_frame_idx = f_idx
 
         # 1. Read freeze frame
         cap.set(cv2.CAP_PROP_POS_FRAMES, f_idx)
@@ -106,63 +176,63 @@ def run_pass1_local_detection(
         temporal_burst["freeze"] = frame
 
     fh, fw = frame.shape[:2]
-
-    # Detect candidate players
-    raw_detections = CVPlayerDetector.detect_players_on_pitch(frame)
     tracks: List[Dict[str, Any]] = []
 
-    if raw_detections:
-        for idx, det in enumerate(raw_detections):
-            tid = idx + 1
-            w_px = det.w_px
-            h_px = det.h_px
-            cx = (det.boot_x / 100.0) * fw
-            cy = (det.boot_y / 100.0) * fh
-            xmin = max(0, int(cx - w_px / 2.0))
-            xmax = min(fw, int(cx + w_px / 2.0))
-            ymin = max(0, int(cy - h_px))
-            ymax = min(fh, int(cy))
+    # Detect real players using YOLO
+    if yolo_model and frame is not None:
+        res = yolo_model.predict(frame, classes=[0], conf=0.30, device="cpu", verbose=False)[0]
+        boxes_list = []
+        for b in res.boxes:
+            x1, y1, x2, y2 = [int(v) for v in b.xyxy[0].tolist()]
+            bh = y2 - y1
+            # Require on-pitch tactical scale (3% to 30% of screen height)
+            if 0.03 <= bh / fh <= 0.30:
+                boxes_list.append((x1, y1, x2, y2, float(b.conf[0])))
 
-            team_str = det.team_hint
-            jc = "TEAM_HOME" if team_str == "home" else ("TEAM_AWAY" if team_str == "away" else "REFEREE")
+        # Sort left-to-right for consistent track labeling
+        boxes_list.sort(key=lambda item: item[0])
+
+        for idx, (x1, y1, x2, y2, conf) in enumerate(boxes_list):
+            tid = idx + 1
+            x_boot = (x1 + x2) / 2.0
+            y_boot = float(y2)
             tracks.append({
                 "track_id": tid,
-                "bbox": [ymin, xmin, ymax, xmax],
-                "x_pct": det.boot_x,
-                "y_pct": det.boot_y,
-                "team": team_str,
-                "jersey_class": jc,
+                "bbox": [y1, x1, y2, x2],
+                "x_pct": round(x_boot / fw * 100.0, 1),
+                "y_pct": round(y_boot / fh * 100.0, 1),
+                "team": "unknown",
+                "jersey_class": "UNKNOWN",
+                "confidence": conf,
             })
     else:
-        # Fallback grid of tactical points if CV detector is obstructed
-        logger.info("No turf contours found via default CV filter; generating standard tactical spread.")
-        tactical_slots = [
-            (10.0, 50.0, "gk", "GOALKEEPER"),
-            (25.0, 20.0, "home", "TEAM_HOME"), (22.0, 40.0, "home", "TEAM_HOME"),
-            (22.0, 60.0, "home", "TEAM_HOME"), (25.0, 80.0, "home", "TEAM_HOME"),
-            (45.0, 35.0, "home", "TEAM_HOME"), (45.0, 65.0, "home", "TEAM_HOME"),
-            (60.0, 50.0, "home", "TEAM_HOME"), (75.0, 20.0, "home", "TEAM_HOME"),
-            (85.0, 50.0, "home", "TEAM_HOME"), (75.0, 80.0, "home", "TEAM_HOME"),
-            (30.0, 25.0, "away", "TEAM_AWAY"), (25.0, 50.0, "away", "TEAM_AWAY"),
-            (30.0, 75.0, "away", "TEAM_AWAY"), (55.0, 35.0, "away", "TEAM_AWAY"),
-            (55.0, 65.0, "away", "TEAM_AWAY"), (70.0, 50.0, "away", "TEAM_AWAY"),
-            (80.0, 20.0, "away", "TEAM_AWAY"), (80.0, 80.0, "away", "TEAM_AWAY"),
-            (50.0, 50.0, "referee", "REFEREE"),
-        ]
-        for idx, (x, y, tm, jc) in enumerate(tactical_slots):
-            tid = idx + 1
-            cx = int(x * fw / 100.0)
-            cy = int(y * fh / 100.0)
-            bh = int(fh * 0.12)
-            bw = int(bh * 0.45)
-            tracks.append({
-                "track_id": tid,
-                "bbox": [max(0, cy - bh), max(0, cx - bw // 2), min(fh, cy), min(fw, cx + bw // 2)],
-                "x_pct": x,
-                "y_pct": y,
-                "team": tm,
-                "jersey_class": jc,
-            })
+        raw_detections = CVPlayerDetector.detect_players_on_pitch(frame)
+        if raw_detections:
+            for idx, det in enumerate(raw_detections):
+                tid = idx + 1
+                w_px = det.w_px
+                h_px = det.h_px
+                cx = (det.boot_x / 100.0) * fw
+                cy = (det.boot_y / 100.0) * fh
+                xmin = max(0, int(cx - w_px / 2.0))
+                xmax = min(fw, int(cx + w_px / 2.0))
+                ymin = max(0, int(cy - h_px))
+                ymax = min(fh, int(cy))
+
+                team_str = det.team_hint
+                jc = "TEAM_HOME" if team_str == "home" else ("TEAM_AWAY" if team_str == "away" else "REFEREE")
+                tracks.append({
+                    "track_id": tid,
+                    "bbox": [ymin, xmin, ymax, xmax],
+                    "x_pct": det.boot_x,
+                    "y_pct": det.boot_y,
+                    "team": team_str,
+                    "jersey_class": jc,
+                })
+
+    if not tracks:
+        logger.warning("Zero real on-pitch players detected in this frame. No synthetic boxes will be generated.")
+        return frame, [], temporal_burst, chosen_frame_idx
 
     # Classify jersey colors using multi-cue torso clustering
     try:
@@ -170,8 +240,8 @@ def run_pass1_local_detection(
     except Exception as e:
         logger.debug("Jersey clustering note: %s", e)
 
-    logger.info("Pass 1 Complete: %d tracks localized and clustered into team boundaries.", len(tracks))
-    return frame, tracks, temporal_burst
+    logger.info("Pass 1 Complete: %d real on-pitch tracks localized and clustered into team boundaries.", len(tracks))
+    return frame, tracks, temporal_burst, chosen_frame_idx
 
 
 def main():
@@ -188,6 +258,7 @@ def main():
     parser.add_argument("--output-dir", type=str, default="output", help="Directory for output JSON and images.")
     parser.add_argument("--api-key", type=str, default=None, help="Gemini API Key (optional, defaults to GEMINI_API_KEY env).")
     parser.add_argument("--no-vlm", action="store_true", help="Disable VLM and use local Hungarian solver only.")
+    parser.add_argument("--force-frame", action="store_true", help="Force exact frame index without scanning for wide tactical view.")
 
     args = parser.parse_args()
 
@@ -206,10 +277,18 @@ def main():
     # -------------------------------------------------------------------------
     # PASS 1: Local CPU Detection & Team Clustering
     # -------------------------------------------------------------------------
-    frame, tracks, temporal_burst = run_pass1_local_detection(
+    frame, tracks, temporal_burst, chosen_frame_idx = run_pass1_local_detection(
         video_or_image_path=input_path,
         target_frame_idx=args.frame_idx,
+        force_frame=args.force_frame,
     )
+
+    if not tracks:
+        print("\n" + "=" * 78)
+        print(f" [NOTICE] Zero on-pitch players detected in frame {chosen_frame_idx} (close-up/celebration view).")
+        print(" Zero synthetic boxes were generated. Pass a wide tactical frame or video with match play.")
+        print("=" * 78 + "\n")
+        return 0
 
     # -------------------------------------------------------------------------
     # PASS 2: VLM Verification + Geometry + Safety Valve Overrides
@@ -252,6 +331,7 @@ def main():
         "match": f"{args.home} vs {args.away}",
         "minute": args.minute,
         "period": period,
+        "frame_idx": chosen_frame_idx,
         "identifications": clean_mapping,
         "annotated_context_frame": str(annotated_path),
         "total_resolved": len(clean_mapping),
@@ -273,7 +353,7 @@ def main():
     # Pretty-Print Final Results to Console
     # -------------------------------------------------------------------------
     print("\n" + "=" * 78)
-    print(f" MATCHDAY PLAYER IDENTIFICATION MATRIX: {args.home.upper()} vs {args.away.upper()} ({args.minute}')")
+    print(f" MATCHDAY PLAYER IDENTIFICATION MATRIX: {args.home.upper()} vs {args.away.upper()} ({args.minute}' | Frame {chosen_frame_idx})")
     print("=" * 78)
     print(f" {'TRACK':<8} | {'TEAM':<6} | {'#':<3} | {'ROLE':<5} | {'PLAYER NAME':<24} | {'CONF':<6} | {'STATUS'}")
     print("-" * 78)
