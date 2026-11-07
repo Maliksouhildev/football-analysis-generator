@@ -24,3 +24,5 @@ scratch/
 tools/
 debug_outputs/
 
+
+!docs/images/*

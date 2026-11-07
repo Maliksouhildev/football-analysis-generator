@@ -29,56 +29,26 @@ Television tactical analysis (e.g. Sky Sports' Monday Night Football, Match of t
 
 ---
 
-## 🏛️ System Architecture
+## 📸 Broadcast-Grade Tactical Telestrations & Visual Outputs
 
-```mermaid
-flowchart TD
-    subgraph Video_Ingest["Footage Ingestion & Pre-processing"]
-        Feed["Broadcast Match Video (.mp4)"]
-        OCR["Sparse Clock OCR & Match Ingestor"]
-        Frames["Frame Sequence Extractor (T0 ... T4)"]
-    end
+<div align="center">
 
-    subgraph Pass1["Pass 1: Local Spatial Tracking (Zero Drift)"]
-        Turf["Sub-Pixel Turf Detector (CPU)"]
-        Tracker["Bot-SORT Continuous MOT"]
-        KitCluster["K-Means Kit Color Clusterer"]
-        Homography["Pitch Homography (TVCalib / Geometry)"]
-    end
+### 1. Volumetric Spotlights & Player Floor Rings
+![Tactical Spotlight Overlay](docs/images/tactical_spotlight_overlay.png)
 
-    subgraph Pass2["Pass 2: Cognitive Reasoning & Identification"]
-        Collage["Smart Collage Batcher"]
-        VLM["Google Gemini 2.5 Flash Vision"]
-        Roster["Dynamic Roster Engine (Rosters & Roles)"]
-        Resolver["1-to-1 Bijective Identity Resolver"]
-    end
+*Perspective-correct 3D pitch homography rendering volumetric spotlights and anchored floor rings under tracked players with sub-pixel turf grounding.*
 
-    subgraph Rendering["Tactical Telestration & Audio Engine"]
-        Renderer["Perspective Floor Rings & Volumetric Spotlights"]
-        Vectors["Aerodynamic Pass & Run Vectors"]
-        HUD["Glassmorphic Player HUD Badges"]
-        Audio["Audio Commentary Re-synthesizer"]
-    end
+---
 
-    subgraph Presentation["Delivery & Control Room"]
-        API["Tactical API Server (:5055)"]
-        Dash["Interactive Dashboard (dashboard.html)"]
-        N8N["n8n Orchestrator (workflow.ts)"]
-    end
+### 2. Tactical Heatmaps & Pass Networks
+<p align="center">
+  <img src="docs/images/heatmap_lamine_yamal.png" width="48%" alt="Lamine Yamal Tactical Heatmap" />
+  <img src="docs/images/pass_network_barcelona.png" width="48%" alt="FC Barcelona Pass Network Matrix" />
+</p>
 
-    Feed --> OCR --> Frames
-    Frames --> Turf --> Tracker --> KitCluster --> Homography
-    Homography --> Collage
-    Collage --> VLM
-    VLM --> Resolver
-    Roster --> Resolver
-    Resolver --> Renderer
-    Renderer --> Vectors --> HUD
-    HUD --> Audio
-    Renderer --> API
-    API <--> Dash
-    API <--> N8N
-```
+*Left: Dynamic spatial density heatmap generated for Lamine Yamal (Right Flank / Half-Space Penetration). Right: Passing network graph reflecting progressive ball progression and player connectivity.*
+
+</div>
 
 ---
 
@@ -93,27 +63,15 @@ flowchart TD
 
 ---
 
-## 🔬 Two-Pass Vision Pipeline
+## 🔬 Two-Pass Vision Pipeline Execution
 
-```mermaid
-sequenceDiagram
-    participant Video as Match Video
-    participant Pass1 as Local Engine (Pass 1)
-    participant VLM as Gemini Vision (Pass 2)
-    participant Resolver as Identity Resolver
-    participant Studio as Broadcast Renderer
-
-    Video->>Pass1: Stream Frames (T0 ... T4)
-    Pass1->>Pass1: Detect Turf Mask & Player BBoxes
-    Pass1->>Pass1: Bot-SORT Track ID Assignment
-    Pass1->>Pass1: Kit Color Clustering (Home vs Away vs Ref)
-    Pass1->>VLM: Batched Sprite Collage + Pitch Coordinates
-    VLM-->>Resolver: Jersey Numbers & Positional Observations
-    Resolver->>Resolver: Bijective Hungarian Match vs Roster
-    Resolver->>Studio: Final Grounded Player Metadata
-    Studio->>Studio: Render Volumetric Rings, Vectors & Badges
-    Studio-->>Video: Broadcast-Grade Tactical Masterclass
-```
+| Stage | Subsystem | Action & Technique |
+|:------|:----------|:-------------------|
+| **Frame Ingestion** | Ingestion Engine | Sparse clock OCR slices key buildup frames ($T_0 \dots T_4$) around shots, progressive carries, and turnovers. |
+| **Pass 1: Local MOT** | OpenCV + Bot-SORT | Sub-pixel turf mask filtering detects player bounding boxes; Bot-SORT assigns persistent track IDs; K-means clusters team kit colors. |
+| **Pass 2: VLM Identification** | Gemini 2.5 Flash | Single-call sprite collage passes cropped jerseys to Gemini Vision, extracting squad numbers and visual traits without API rate-limit stalls. |
+| **Bijective Resolution** | Hungarian Matching | Reconciles visual proposals against official match rosters, enforcing a 1-to-1 bijection of starting XI and tactical roles. |
+| **Broadcast Overlays** | Tactical Studio | Projects perspective floor rings, motion breadcrumb splines, speed readouts (km/h), and aerodynamic pass curves. |
 
 ---
 
