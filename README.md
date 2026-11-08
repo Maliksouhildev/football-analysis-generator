@@ -11,13 +11,13 @@
 
 **An autonomous AI vision pipeline and tactical studio transforming raw football match broadcast footage into professional tactical breakdowns, player tracking overlays, and broadcast-grade telestrations.**
 
-[Architecture](#-system-architecture) • [Key Capabilities](#-key-capabilities) • [Pipeline Walkthrough](#-two-pass-vision-pipeline) • [Quick Start](#-quick-start) • [Control Room](#-interactive-tactical-control-room)
+[Overview](#-overview) • [Visual Outputs](#-broadcast-grade-tactical-telestrations--visual-outputs) • [Key Capabilities](#-key-capabilities) • [Pipeline Walkthrough](#-two-pass-vision-pipeline-execution) • [Quick Start](#-quick-start) • [Control Room](#-interactive-tactical-control-room)
 
 </div>
 
 ---
 
-## 📖 Overview
+## 📋 Overview
 
 Television tactical analysis (e.g. Sky Sports' Monday Night Football, Match of the Day) requires sophisticated telestration: highlighting player positioning, projecting pass vectors, drawing defensive cover shadows, and calculating team press intensity.
 
@@ -52,13 +52,13 @@ Television tactical analysis (e.g. Sky Sports' Monday Night Football, Match of t
 
 ---
 
-## ✨ Key Capabilities
+## ⚡ Key Capabilities
 
-- 🎯 **Sub-Pixel Turf Grounding**: Local OpenCV spatial detection eliminates coordinate drifting and hallucinated positions on grass.
-- 📐 **Perspective Floor Rings & Spotlights**: Pitch homography maps 2D image coordinates to authentic 3D pitch planes, generating volumetric illumination under selected players.
+- 🌱 **Sub-Pixel Turf Grounding**: Local OpenCV spatial detection eliminates coordinate drifting and hallucinated positions on grass.
+- 💡 **Perspective Floor Rings & Spotlights**: Pitch homography maps 2D image coordinates to authentic 3D pitch planes, generating volumetric illumination under selected players.
 - 🏃 **Continuous Multi-Object Tracking (MOT)**: Tracks player trajectories across successive buildup frames ($T_0 \dots T_4$) with velocity estimation in km/h and motion breadcrumb splines.
-- 🧠 **Two-Pass Hybrid VLM Integration**: Couples fast local player proposals with a single batched sprite montage call to Gemini Vision, bypassing API rate limits while retaining maximum visual clarity.
-- 🎛️ **Dynamic Non-Hardcoded Rosters**: Reconciles lineups directly from official rosters, automatically assigning kit colors, squad numbers, and positional bounds.
+- 🤖 **Two-Pass Hybrid VLM Integration**: Couples fast local player proposals with a single batched sprite montage call to Gemini Vision, bypassing API rate limits while retaining maximum visual clarity.
+- 👥 **Dynamic Non-Hardcoded Rosters**: Reconciles lineups directly from official rosters, automatically assigning kit colors, squad numbers, and positional bounds.
 - 🖥️ **Interactive Tactical Control Room**: Zero-install HTML5/JS dashboard featuring real-time scrubber controls, layer toggles (rings, breadcrumbs, vectors, cards), and side-by-side buildup vs. outcome analysis.
 
 ---
@@ -109,7 +109,7 @@ PORT=5055
 To process a match video file with automated player tracking and tactical telestrations:
 
 ```bash
-python video_pipeline.py --input match_clip.mp4 --output tactical_masterclass.mp4
+python scripts/run_video_pipeline.py --input match_clip.mp4 --output tactical_masterclass.mp4
 ```
 
 ### 5. Launch the Tactical API Server & Dashboard
@@ -120,13 +120,13 @@ Start the local server listening on port `5055`:
 python vision_pipeline/api_server.py
 ```
 
-Now double-click or open [`dashboard.html`](dashboard.html) in any modern web browser to interact with the Tactical Control Room.
+Now double-click or open [`dashboard/index.html`](dashboard/index.html) in any modern web browser to interact with the Tactical Control Room.
 
 ---
 
-## 🎛️ Interactive Tactical Control Room
+## 🖥️ Interactive Tactical Control Room
 
-The bundled [`dashboard.html`](dashboard.html) is an interactive control room for tactical analysts:
+The bundled [`dashboard/index.html`](dashboard/index.html) is an interactive control room for tactical analysts:
 - **5-Stage Scrubber**: Move through sequence frames from defensive buildup to shot execution.
 - **Layer Visibility Toggles**: Toggle floor rings, velocity meters, breadcrumbs, and floating identity HUDs.
 - **Side-by-Side Verification**: Inspect raw broadcast footage against annotated tactical feeds.
@@ -149,7 +149,7 @@ python -m unittest discover -s tests
 
 ---
 
-## 🤝 Contributing & License
+## 📄 Contributing & License
 
 Contributions, tactical enhancements, and pull requests are welcomed.
 
