@@ -276,6 +276,11 @@ class VideoTrackingPipeline:
             tactical_shots += 1
             print(f"[VideoTrackingPipeline] Finalizing Shot #{s_id} (frames {shot_start_frame}..{frame_idx}): {len(self.tracker.lifecycles)} tracklets")
 
+            # Module 3: Camera Motion Compensated Tracklet Stitching
+            stitched = self.tracker.stitch_lifecycles(shot_frame_cache)
+            if stitched > 0:
+                print(f"[VideoTrackingPipeline] Stitched {stitched} fragmented tracklets via BoT-SORT GMC + Boot Appearance Gate")
+
             # PASS 2: Team-Split 2D Grid Collages + Strict 1-to-1 Bijection
             home_payload, away_payload, context_frame = self.batcher.build_team_grid_payloads(
                 shot_id=s_id,

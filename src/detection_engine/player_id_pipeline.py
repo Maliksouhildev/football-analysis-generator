@@ -29,6 +29,7 @@ import cv2
 import numpy as np
 
 from src.detection_engine.pitch_geometry import PitchGeometryEngine
+from src.detection_engine.tracking.smart_collage_batcher import compute_hungarian_2opt_swap_margins
 from src.detection_engine.types import (
     AffinityScoreBreakdown,
     CandidateBox,
@@ -1151,6 +1152,7 @@ class PlayerIDPipeline:
             cost_matrix = -S
             if has_scipy:
                 row_ind, col_ind = linear_sum_assignment(cost_matrix)
+                swap_margins = compute_hungarian_2opt_swap_margins(cost_matrix, row_ind, col_ind)
             else:
                 row_ind, col_ind = [], []
                 used_j = set()
@@ -1159,6 +1161,7 @@ class PlayerIDPipeline:
                     row_ind.append(i_idx)
                     col_ind.append(best_j)
                     used_j.add(best_j)
+                swap_margins = {r: 1.0 for r in row_ind}
 
             for r_i, c_j in zip(row_ind, col_ind):
                 act = team_actors[r_i]
@@ -1168,6 +1171,10 @@ class PlayerIDPipeline:
                 act.assigned_number = int(cand.get("number") or 0)
                 act.assigned_role = str(cand.get("role") or "MF")
                 raw_score = float(S[r_i, c_j])
+
+                margin = swap_margins.get(r_i, 1.0)
+                act.swap_margin = float(margin)
+                act.is_ambiguous = bool(margin < 0.15)
                 if act.ocr_number == act.assigned_number and act.ocr_number is not None:
                     act.assignment_method = "JERSEY_OCR_LOCKED+HUNGARIAN"
                     act.assignment_confidence = 0.98

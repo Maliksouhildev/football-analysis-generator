@@ -133,6 +133,34 @@ class PitchGeometryEngine:
             "banner_bbox": banner_bbox,
         }
 
+    @staticmethod
+    def get_turf_hull_bounds(
+        pitch_geom: Optional[Dict[str, Any]] = None,
+        frame_shape: Tuple[int, int] = (1080, 1920),
+        x_px: Optional[float] = None,
+    ) -> Tuple[float, float]:
+        """
+        Returns the top and bottom vertical bounds (in normalized [0.0, 1.0] coordinates)
+        of the visible turf convex hull for perspective lateral Y-axis normalization.
+        If x_px is provided and hull_pts exists, computes column-specific vertical bounds.
+        """
+        h = frame_shape[0]
+        if pitch_geom is None:
+            return 0.15, 0.95
+
+        hull_pts = pitch_geom.get("hull_pts")
+        if hull_pts is not None and len(hull_pts) >= 3 and x_px is not None:
+            pts = hull_pts.reshape(-1, 2)
+            # Find vertices close to x_px column (+- 40px)
+            col_pts = [p for p in pts if abs(p[0] - x_px) <= 60]
+            if len(col_pts) >= 2:
+                ys = [p[1] for p in col_pts]
+                return max(0.0, min(ys) / float(h)), min(1.0, max(ys) / float(h))
+
+        min_pct = float(pitch_geom.get("min_turf_y_pct", 15.0)) / 100.0
+        max_pct = float(pitch_geom.get("max_turf_y_pct", 95.0)) / 100.0
+        return max(0.0, min_pct), min(1.0, max_pct)
+
     def render_turf_poly_debug(
         self,
         frame: np.ndarray,

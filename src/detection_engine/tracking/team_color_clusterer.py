@@ -45,10 +45,15 @@ class TeamColorClusterer:
         self,
         frame: np.ndarray,
         bbox: List[float],
-    ) -> Optional[Dict[str, np.ndarray]]:
+        turf_l_ref: float = 52.0,
+    ) -> Optional[Dict[str, Any]]:
         """
         Extract non-turf color representation from the upper torso crop.
-        Filters out green pitch grass bleed.
+        Filters out green pitch grass bleed and implements shadow-invariant CIE LAB:
+        - Torso crop: 22% to 48% box height (dropping collar/neck and shorts waistband).
+        - Unscales OpenCV uint8 LAB to true CIE ranges (L* in [0, 100], a*, b* in [-128, 127]).
+        - Applies multiplicative cube-root reflectance ratio:
+          L*_norm = (L*_turf_ref + 16) * ((L*_torso + 16) / (L*_turf + 16)) - 16.
         """
         h, w = frame.shape[:2]
         x1, y1, x2, y2 = [int(v) for v in bbox]
@@ -59,8 +64,8 @@ class TeamColorClusterer:
         if box_w < 10 or box_h < 20:
             return None
 
-        # Torso crop: y from 12% to 48%, x centered (15% margins)
-        ty1 = y1 + int(box_h * 0.12)
+        # Torso crop: y from 22% to 48% (strictly avoids neck collar and shorts waistband)
+        ty1 = y1 + int(box_h * 0.22)
         ty2 = y1 + int(box_h * 0.48)
         tx1 = x1 + int(box_w * 0.15)
         tx2 = x2 - int(box_w * 0.15)
@@ -80,16 +85,58 @@ class TeamColorClusterer:
         valid_bgr = torso[non_turf_mask > 0]
 
         if len(valid_hsv) < 15:
-            # Fallback to entire torso if mask is overly aggressive
             valid_hsv = hsv.reshape(-1, 3)
             valid_bgr = torso.reshape(-1, 3)
 
         med_hsv = np.median(valid_hsv, axis=0)
         med_bgr = np.median(valid_bgr, axis=0)
 
-        # Normalize features into [0, 1] for clustering
-        # H in [0, 180] -> [0, 1], S in [0, 255] -> [0, 1], V in [0, 255] -> [0, 1]
+        # ---------------------------------------------------------------------
+        # Local Turf Lightness Extraction (L*_turf)
+        # ---------------------------------------------------------------------
+        # Sample pitch turf directly beneath feet / adjacent to player
+        fy1 = min(h, y2)
+        fy2 = min(h, y2 + max(8, int(box_h * 0.25)))
+        fx1 = max(0, x1 - 10)
+        fx2 = min(w, x2 + 10)
+        foot_patch = frame[fy1:fy2, fx1:fx2]
+        
+        l_turf_val = turf_l_ref
+        if foot_patch.size > 0:
+            foot_hsv = cv2.cvtColor(foot_patch, cv2.COLOR_BGR2HSV)
+            green_foot_mask = cv2.inRange(foot_hsv, (32, 35, 35), (85, 255, 255))
+            if cv2.countNonZero(green_foot_mask) >= 12:
+                foot_lab = cv2.cvtColor(foot_patch, cv2.COLOR_BGR2Lab)
+                green_lab = foot_lab[green_foot_mask > 0].astype(np.float32)
+                # Unscale OpenCV uint8 L_cv2 to true CIE L*
+                l_turf_val = float(np.median(green_lab[:, 0])) * (100.0 / 255.0)
+
+        # ---------------------------------------------------------------------
+        # Torso CIE LAB Unscaling & Shadow-Invariant Cube-Root Normalization
+        # ---------------------------------------------------------------------
+        torso_lab = cv2.cvtColor(torso, cv2.COLOR_BGR2Lab)
+        valid_lab = torso_lab[non_turf_mask > 0].astype(np.float32)
+        if len(valid_lab) < 15:
+            valid_lab = torso_lab.reshape(-1, 3).astype(np.float32)
+
+        med_lab_cv2 = np.median(valid_lab, axis=0)
+        # Unscale OpenCV uint8 LAB to true CIE ranges:
+        # L* in [0, 100], a* in [-128, 127], b* in [-128, 127]
+        l_torso_cie = float(med_lab_cv2[0]) * (100.0 / 255.0)
+        a_torso_cie = float(med_lab_cv2[1]) - 128.0
+        b_torso_cie = float(med_lab_cv2[2]) - 128.0
+
+        # Physical shadow invariance: L* + 16 scales with (k * R)^(1/3)
+        # Ratio cancels illumination multiplier k:
+        l_norm = (turf_l_ref + 16.0) * ((l_torso_cie + 16.0) / max(1.0, l_turf_val + 16.0)) - 16.0
+        l_norm = float(np.clip(l_norm, 0.0, 100.0))
+
+        # Normalized feature vector for clustering:
+        # Balanced: 0.5 * (L*_norm - 52.0) on lightness, 1.0 * a*, 1.0 * b* on chrominance
         norm_feat = np.array([
+            (0.5 * (l_norm - 52.0)) / 50.0,
+            a_torso_cie / 128.0,
+            b_torso_cie / 128.0,
             med_hsv[0] / 180.0,
             med_hsv[1] / 255.0,
             med_hsv[2] / 255.0,
@@ -100,6 +147,7 @@ class TeamColorClusterer:
 
         return {
             "norm_feat": norm_feat,
+            "lab": (l_norm, a_torso_cie, b_torso_cie),
             "hsv": (float(med_hsv[0]), float(med_hsv[1]), float(med_hsv[2])),
             "rgb": (float(med_bgr[2]), float(med_bgr[1]), float(med_bgr[0])),
         }
@@ -188,14 +236,14 @@ class TeamColorClusterer:
             c0, c1 = centroids[0], centroids[1]
 
         # Determine which cluster is Home (White) vs Away (Blaugrana/Dark)
-        # Real Madrid (White): High V, low S. Barcelona: High S, blue/red hues.
-        # c0/c1 feature format: [H/180, S/255, V/255, R/255, G/255, B/255]
-        v0, s0 = c0[2], c0[1]
-        v1, s1 = c1[2], c1[1]
+        # Real Madrid (White): High L*_norm, High V, low S. Barcelona: Lower L*, High S, blue/red hues.
+        # c0/c1 feature format: [L*_norm, a*, b*, H/180, S/255, V/255, R/255, G/255, B/255]
+        l0, s0, v0 = c0[0], c0[4], c0[5]
+        l1, s1, v1 = c1[0], c1[4], c1[5]
 
-        # Whiteness score = V - S
-        white_score_0 = v0 - s0
-        white_score_1 = v1 - s1
+        # Whiteness score = L*_norm + (V - S)
+        white_score_0 = l0 + (v0 - s0)
+        white_score_1 = l1 + (v1 - s1)
 
         if white_score_0 > white_score_1:
             home_cluster_idx = 0

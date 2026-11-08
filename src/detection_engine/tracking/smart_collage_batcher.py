@@ -245,13 +245,23 @@ class SmartCollageBatcher:
         home_lcs: List[TrackletLifecycle] = []
         away_lcs: List[TrackletLifecycle] = []
 
-        all_centers = [lc.get_average_center() for lc in valid_lifecycles]
-        min_x = min(c[0] for c in all_centers)
-        max_x = max(c[0] for c in all_centers)
-        min_y = min(c[1] for c in all_centers)
-        max_y = max(c[1] for c in all_centers)
-        span_x = max(1.0, max_x - min_x)
-        span_y = max(1.0, max_y - min_y)
+        # Derive camera zoom scale s_x from median player bounding box height (Bug 3 fix)
+        # Wide tactical cam: h_med ~ 85px -> s_x ~ 0.50; Tighter zoom: h_med ~ 130px -> s_x ~ 0.32
+        h_frame, w_frame = keyframe.shape[:2]
+        all_box_heights = [
+            (b[3] - b[1])
+            for lc in valid_lifecycles
+            for b in lc.bboxes
+            if (b[3] - b[1]) > 10
+        ]
+        h_med = float(np.median(all_box_heights)) if all_box_heights else 85.0
+        h_med_1080p = h_med * (1080.0 / max(1.0, float(h_frame)))
+        s_x = float(np.clip(42.5 / max(1.0, h_med_1080p), 0.30, 0.75))
+
+        # Turf hull vertical bounds for lateral Y mapping (Bug 4 fix)
+        turf_y_top = 0.15 * float(h_frame)
+        turf_y_bot = 0.92 * float(h_frame)
+        turf_y_span = max(10.0, turf_y_bot - turf_y_top)
 
         for lc in valid_lifecycles:
             tid = lc.track_id
@@ -265,7 +275,7 @@ class SmartCollageBatcher:
             elif t_str == "referee":
                 pass  # Handled below to enforce strictly Max 1 Referee
 
-                # Enforce strictly Max 1 Match Referee on the pitch
+        # Enforce strictly Max 1 Match Referee on the pitch
         ref_lcs = [
             lc for lc in valid_lifecycles
             if team_assignments.get(lc.track_id, TeamClusterResult(lc.track_id, "unknown", 0.5, False)).team == "referee"
@@ -293,8 +303,9 @@ class SmartCollageBatcher:
                 if not crops:
                     continue
                 cx, cy = lc.get_average_center()
-                rx = (cx - min_x) / span_x
-                ry = (cy - min_y) / span_y
+                # Normalized coordinate mapping without min-max stretch
+                rx = float(np.clip(cx / float(w_frame), 0.0, 1.0))
+                ry = float(np.clip((cy - turf_y_top) / turf_y_span, 0.0, 1.0))
                 card = self.render_player_card(tid, t_str, crops, (rx, ry))
                 home_cards.append(card)
                 home_meta.append({
@@ -303,6 +314,7 @@ class SmartCollageBatcher:
                     "team": t_str,
                     "relative_x": round(rx, 3),
                     "relative_y": round(ry, 3),
+                    "scale_sx": round(s_x, 3),
                 })
             if home_cards:
                 home_grid = self.render_team_2d_grid(home_cards, cols=self.cols_per_grid)
@@ -331,8 +343,8 @@ class SmartCollageBatcher:
                 if not crops:
                     continue
                 cx, cy = lc.get_average_center()
-                rx = (cx - min_x) / span_x
-                ry = (cy - min_y) / span_y
+                rx = float(np.clip(cx / float(w_frame), 0.0, 1.0))
+                ry = float(np.clip((cy - turf_y_top) / turf_y_span, 0.0, 1.0))
                 card = self.render_player_card(tid, t_str, crops, (rx, ry))
                 away_cards.append(card)
                 away_meta.append({
@@ -341,6 +353,7 @@ class SmartCollageBatcher:
                     "team": t_str,
                     "relative_x": round(rx, 3),
                     "relative_y": round(ry, 3),
+                    "scale_sx": round(s_x, 3),
                 })
             if away_cards:
                 away_grid = self.render_team_2d_grid(away_cards, cols=self.cols_per_grid)
@@ -650,22 +663,92 @@ Output valid JSON ONLY.
 
                     fx = fx_map.get(role, 0.5)
                     fy = fy_map.get(role, 0.5)
-                    dist = ((rx - fx) ** 2 + (ry - fy) ** 2) ** 0.5
+                    # Apply camera zoom scale s_x around formation center without min-max stretch
+                    s_x = float(m.get("scale_sx", 0.50))
+                    # Scale distance along X axis by zoom scale s_x
+                    dx = (rx - fx) * s_x
+                    dy = (ry - fy)
+                    dist = (dx ** 2 + dy ** 2) ** 0.5
                     cost_matrix[i, j] = dist
 
             row_ind, col_ind = linear_sum_assignment(cost_matrix)
+            swap_margins = compute_hungarian_2opt_swap_margins(cost_matrix, row_ind, col_ind)
+
             for r, c in zip(row_ind, col_ind):
                 tid = unassigned_track_ids[r]
                 p = available_outfield[c]
+                margin = swap_margins.get(r, 1.0)
+                is_ambiguous = (margin < 0.15)
+
+                reason_str = f"Hungarian topological formation match ({p.get('role', 'CM')})"
+                if is_ambiguous:
+                    reason_str += f" [AMBIGUITY FLAG: 2-opt swap margin={margin:.1%} < 15%]"
+
                 final_assignments[tid] = {
                     "track_id": tid,
                     "track_label": f"T{tid}",
                     "player_name": p["name"],
                     "jersey_number": p["number"],
                     "team": payload.team_label,
-                    "confidence": 0.75,
-                    "reasoning": f"Hungarian topological formation match ({p.get('role', 'CM')})",
+                    "confidence": 0.70 if is_ambiguous else 0.78,
+                    "is_ambiguous": is_ambiguous,
+                    "swap_margin": round(margin, 3),
+                    "reasoning": reason_str,
                 }
                 assigned_names.add(p["name"].lower())
 
         return final_assignments
+
+
+# =============================================================================
+# Module 4 Algorithmic Margin & 2-Opt Pairwise Utilities
+# =============================================================================
+
+def compute_hungarian_2opt_swap_margins(
+    cost_matrix: np.ndarray,
+    row_ind: np.ndarray,
+    col_ind: np.ndarray,
+    epsilon: float = 1e-6,
+) -> Dict[int, float]:
+    """
+    Computes the 2-opt pairwise swap margin for each assigned pair (i1, j1):
+    Delta C_swap(i1, i2) = ((C[i1, j2] + C[i2, j1]) - (C[i1, j1] + C[i2, j2])) / (abs(C[i1, j1]) + abs(C[i2, j2]) + eps)
+
+    By optimality of Hungarian assignment, numerator >= 0.
+    Returns: dict mapping row_idx i1 -> min_{i2 != i1} Delta C_swap(i1, i2).
+    Flag as ambiguous whenever margin < 0.15.
+    """
+    n_assigned = len(row_ind)
+    margins: Dict[int, float] = {}
+
+    if n_assigned < 2:
+        for r in row_ind:
+            margins[int(r)] = 1.0
+        return margins
+
+    assignment_map = {int(r): int(c) for r, c in zip(row_ind, col_ind)}
+    rows = list(assignment_map.keys())
+
+    for i1 in rows:
+        j1 = assignment_map[i1]
+        c11 = float(cost_matrix[i1, j1])
+        min_delta = float("inf")
+
+        for i2 in rows:
+            if i1 == i2:
+                continue
+            j2 = assignment_map[i2]
+            c22 = float(cost_matrix[i2, j2])
+            c12 = float(cost_matrix[i1, j2])
+            c21 = float(cost_matrix[i2, j1])
+
+            numerator = (c12 + c21) - (c11 + c22)
+            numerator = max(0.0, numerator)
+            denominator = abs(c11) + abs(c22) + epsilon
+            swap_margin = numerator / denominator
+            if swap_margin < min_delta:
+                min_delta = swap_margin
+
+        margins[i1] = float(min_delta) if min_delta != float("inf") else 1.0
+
+    return margins

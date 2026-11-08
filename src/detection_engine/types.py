@@ -112,6 +112,8 @@ class DetectedPitchActor:
     assignment_method: str = "UNASSIGNED"
     reasoning: str = ""
     affinity_breakdown: Optional[AffinityScoreBreakdown] = None
+    is_ambiguous: bool = False
+    swap_margin: float = 1.0
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -134,6 +136,8 @@ class DetectedPitchActor:
             "assigned_role": self.assigned_role,
             "assignment_confidence": round(float(self.assignment_confidence), 3),
             "assignment_method": self.assignment_method,
+            "is_ambiguous": self.is_ambiguous,
+            "swap_margin": round(float(self.swap_margin), 3),
             "reasoning": self.reasoning,
             "affinity_breakdown": self.affinity_breakdown.to_dict() if self.affinity_breakdown else None,
         }
