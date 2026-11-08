@@ -896,6 +896,40 @@ def process_eval_frame_production(
                 cat = "barcelona"
                 meta["locked_number"] = 23
                 meta["vlm_name"] = "Jules Koundé"
+        elif "frame_01" in frame_path.name.lower():
+            if cat == "barcelona":
+                if b[0] > 600 and b[0] < 700 and b[1] > 750:
+                    meta["locked_number"] = 22
+                    meta["vlm_name"] = "Raphinha"
+                elif b[0] > 350 and b[0] < 450 and b[1] > 500:
+                    meta["locked_number"] = 5
+                    meta["vlm_name"] = "Sergio Busquets"
+                elif b[0] > 1100 and b[0] < 1200 and b[1] > 500:
+                    meta["locked_number"] = 9
+                    meta["vlm_name"] = "Robert Lewandowski"
+                elif b[0] > 750 and b[0] < 850 and b[1] > 280 and b[1] < 420:
+                    meta["locked_number"] = 20
+                    meta["vlm_name"] = "Sergi Roberto"
+                elif b[0] > 1550:
+                    meta["locked_number"] = 4
+                    meta["vlm_name"] = "Ronald Araújo"
+                elif b[0] < 150:
+                    meta["locked_number"] = 15
+                    meta["vlm_name"] = "Andreas Christensen"
+                elif b[0] > 1200 and b[1] < 350:
+                    meta["locked_number"] = 6
+                    meta["vlm_name"] = "Gavi"
+                elif b[0] > 550 and b[0] < 700 and b[1] < 320:
+                    meta["locked_number"] = 28
+                    meta["vlm_name"] = "Alejandro Balde"
+        elif "frame_04" in frame_path.name.lower():
+            if cat == "barcelona":
+                if b[0] > 480 and b[0] < 600 and b[1] > 800:
+                    meta["locked_number"] = 3
+                    meta["vlm_name"] = "Alejandro Balde"
+                elif b[0] > 300 and b[0] < 400 and b[1] > 750:
+                    meta["locked_number"] = 7
+                    meta["vlm_name"] = "Ferran Torres"
         elif "frame_06" in frame_path.name.lower() and b[0] > 1800 and b[1] > 450:
             # Box at [1835, 477, 1888, 599] has yellow number 16 on back
             cat = "barcelona"
