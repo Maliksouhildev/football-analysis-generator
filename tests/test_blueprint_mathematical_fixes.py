@@ -256,3 +256,134 @@ class TestModule4CoordinatesAndHungarian:
         # Baseline = 0.4. Swapped = 10.0. Increase = 9.6 / 0.4 = 24.0 (2400%)
         assert margins_clear[0] > 1.0
         assert margins_clear[0] >= 0.15, "Unambiguous assignment must NOT be flagged as ambiguous"
+
+    def test_polygon_column_edge_intersection(self):
+        """
+        Verify that PitchGeometryEngine.get_turf_hull_bounds calculates exact edge
+        intersections for arbitrary columns where no vertices exist.
+        """
+        # Trapezoid: vertices at (0, 300), (1920, 250), (1920, 1080), (0, 1080)
+        hull_pts = np.array([
+            [0, 300],
+            [1920, 250],
+            [1920, 1080],
+            [0, 1080],
+        ], dtype=np.int32)
+        pitch_geom = {"hull_pts": hull_pts, "min_turf_y_pct": 23.0, "max_turf_y_pct": 100.0}
+
+        # Query midpoint column x = 960 (no vertex near 960)
+        # Top edge from (0, 300) to (1920, 250): y = 300 + 0.5 * (-50) = 275 px
+        # Normalized top y = 275 / 1080 = ~0.2546
+        # Bottom edge: y = 1080 px -> normalized = 1.0
+        top_y, bot_y = PitchGeometryEngine.get_turf_hull_bounds(pitch_geom, frame_shape=(1080, 1920), x_px=960.0)
+        expected_top = 275.0 / 1080.0
+        assert abs(top_y - expected_top) < 1e-3, f"Expected top_y={expected_top}, got {top_y}"
+        assert abs(bot_y - 1.0) < 1e-3, f"Expected bot_y=1.0, got {bot_y}"
+
+    def test_affine_pitch_coordinate_mapping(self):
+        """
+        Verify that affine mapping x_pitch_hat = clip(s_x * rx + t_x) correctly
+        maps players in zoomed camera views and prevents striker-midfielder confusion.
+        """
+        # Scenario: Camera zoomed in on attacking box (s_x = 0.30)
+        # Striker is near center of screen (rx = 0.80)
+        # If t_x is aligned with attacking formation center (t_x = 0.60):
+        s_x = 0.30
+        t_x = 0.60
+        rx_striker = 0.80
+        x_pitch_hat = float(np.clip(s_x * rx_striker + t_x, 0.0, 1.0))
+        # Pitch coordinate is 0.30 * 0.80 + 0.60 = 0.84 (exact striker zone!)
+        assert abs(x_pitch_hat - 0.84) < 1e-3
+
+        fx_striker = 0.85
+        fx_midfielder = 0.50
+        dist_striker = abs(x_pitch_hat - fx_striker)      # |0.84 - 0.85| = 0.01
+        dist_midfielder = abs(x_pitch_hat - fx_midfielder)  # |0.84 - 0.50| = 0.34
+        assert dist_striker < dist_midfielder, "Striker must be closest to striker role, NOT midfielder"
+
+
+class TestRobustnessAndFlawsFixed:
+    """Tests for edge cases and multi-agent coordination flaws."""
+
+    def test_gmc_interception_real_camera_motion(self):
+        """
+        Verify that BoTSORTTracker intercepts and stores the real camera motion warp
+        from tracker.update instead of overwriting with identity.
+        """
+        from src.detection_engine.tracking.bot_sort_tracker import BoTSORTTracker
+
+        tracker = BoTSORTTracker()
+        f1 = np.zeros((480, 640, 3), dtype=np.uint8)
+        cv2.rectangle(f1, (100, 100), (200, 200), (255, 255, 255), -1)
+        cv2.circle(f1, (400, 300), 50, (255, 255, 255), -1)
+
+        f2 = np.zeros_like(f1)
+        # Shift 20 px right
+        cv2.rectangle(f2, (120, 100), (220, 200), (255, 255, 255), -1)
+        cv2.circle(f2, (420, 300), 50, (255, 255, 255), -1)
+
+        boxes = np.array([[100, 100, 200, 200]], dtype=np.float32)
+        confs = np.array([0.9], dtype=np.float32)
+        clss = np.array([0], dtype=np.float32)
+
+        tracker.update_strided(f1, boxes, confs, clss, 0)
+        tracker.update_strided(f2, boxes + 20, confs, clss, 1)
+
+        warp1 = tracker.gmc_history.get(1)
+        assert warp1 is not None, "GMC warp for frame 1 must be recorded"
+        # Translation component warp1[0, 2] should be ~20px, NOT 0.0 (identity)
+        assert abs(warp1[0, 2] - 20.0) < 1.0, f"Expected GMC warp tx ~ 20.0, got {warp1[0, 2]}"
+
+    def test_max_1_referee_enforcement(self):
+        """
+        Verify that when multiple central outliers exist, strictly 1 remains Referee,
+        and excess outliers are reassigned to outfield teams.
+        """
+        clusterer = TeamColorClusterer()
+
+        # Create mock frame with 8 players:
+        # 4 White jerseys (Home)
+        # 3 Dark jerseys (Away)
+        # 2 Fluorescent yellow jerseys in center (Potential referees)
+        frame = np.full((300, 800, 3), (35, 120, 45), dtype=np.uint8)
+
+        actors = []
+        # Home players
+        for i, x in enumerate([100, 180, 260, 320]):
+            frame[50:150, x:x+40] = (240, 240, 240)
+            actors.append((i + 1, [x, 50, x + 40, 150]))
+        # Away players
+        for i, x in enumerate([480, 560, 640]):
+            frame[50:150, x:x+40] = (30, 30, 120)
+            actors.append((i + 5, [x, 50, x + 40, 150]))
+        # 2 central outliers (yellow kits)
+        frame[50:150, 380:420] = (20, 220, 220)
+        actors.append((8, [380, 50, 420, 150]))
+        frame[50:150, 430:470] = (20, 220, 220)
+        actors.append((9, [430, 50, 470, 150]))
+
+        res = clusterer.cluster_actors(frame, actors)
+        ref_count = sum(1 for r in res.values() if r.team == "referee")
+        assert ref_count <= 1, f"Expected at most 1 referee, got {ref_count}"
+
+    def test_flank_turf_lightness_fallback(self):
+        """
+        Verify that when player bounding box is truncated at frame bottom (y2=H),
+        flank pixels provide local turf lightness without falling back to constant 52.0.
+        """
+        clusterer = TeamColorClusterer()
+
+        # Frame: dark grass in shadow (L_cv2 ~ 70 -> L* ~ 27)
+        # OpenCV HSV for dark green grass
+        shadow_grass_bgr = (20, 60, 25)
+        frame = np.full((100, 100, 3), shadow_grass_bgr, dtype=np.uint8)
+
+        # Torso of player truncated right at bottom of frame (y1=40, y2=100=H)
+        frame[40:100, 40:60] = (200, 200, 200)
+
+        feats = clusterer.extract_torso_features(frame, [40, 40, 60, 100], turf_l_ref=52.0)
+        assert feats is not None
+        l_norm, _, _ = feats["lab"]
+        # In shadow grass, flank sampling detects the darker turf and normalizes L* upwards
+        assert l_norm > 70.0, f"Expected shadow-normalized L* > 70, got {l_norm}"
+

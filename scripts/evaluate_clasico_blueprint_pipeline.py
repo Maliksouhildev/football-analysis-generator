@@ -188,10 +188,11 @@ def process_eval_frame(
         cx = float(b[0] + b[2]) / 2.0
         cy = float(b[1] + b[3]) / 2.0
 
-        # Module 4: Normalized coordinates & hull-bounded lateral Y
+        # Module 4: Normalized coordinates & column-specific hull-bounded lateral Y
         x_norm = float(np.clip(cx / float(w), 0.0, 1.0))
-        y_span = max(0.10, max_turf_y - min_turf_y)
-        y_norm = float(np.clip((cy / float(h) - min_turf_y) / y_span, 0.0, 1.0))
+        top_y, bot_y = geom_engine.get_turf_hull_bounds(geom_res, frame_shape=(h, w), x_px=cx)
+        y_span = max(0.10, bot_y - top_y)
+        y_norm = float(np.clip((cy / float(h) - top_y) / y_span, 0.0, 1.0))
 
         item = {
             "track_id": tid,
@@ -214,6 +215,15 @@ def process_eval_frame(
         else:
             home_actors.append(item)  # default
 
+    # Enforce strictly Max 1 Match Referee on the pitch
+    if len(ref_actors) > 1:
+        ref_actors.sort(key=lambda a: (a["rx"] - 0.50) ** 2 + (a["ry"] - 0.50) ** 2)
+        excess_refs = ref_actors[1:]
+        ref_actors = [ref_actors[0]]
+        for extra in excess_refs:
+            extra["team"] = "home"
+            home_actors.append(extra)
+
     # 7. Module 4 Hungarian Assignment + 2-Opt Pairwise Swap Margin
     def solve_team_formation(actors_list: List[Dict[str, Any]], team_side: str) -> Dict[int, Dict[str, Any]]:
         if not actors_list:
@@ -229,8 +239,22 @@ def process_eval_frame(
         n_cand = len(outfield_pool)
         cost_matrix = np.zeros((n_act, n_cand), dtype=np.float32)
 
+        # Affine translation t_x: anchor to GK if present, else formation center
+        gk_m = next((act for act in gk_actors if (team_side == "home" and "home" in act["team"]) or (team_side == "away" and "away" in act["team"])), None)
+        f_mid_x = 0.50
+        screen_mid_x = float(np.median([act["rx"] for act in actors_list])) if actors_list else 0.50
+
+        if gk_m is not None:
+            gk_pitch_x = 0.05 if team_side == "home" else 0.95
+            t_x = gk_pitch_x - s_x * gk_m["rx"]
+        else:
+            t_x = f_mid_x - s_x * screen_mid_x
+
         for row_i, act in enumerate(actors_list):
             rx, ry = act["rx"], act["ry"]
+            act_sx = act.get("scale_sx", s_x)
+            x_pitch_hat = float(np.clip(act_sx * rx + t_x, 0.0, 1.0))
+
             for col_j, cand in enumerate(outfield_pool):
                 role = cand.get("role", "CM")
                 if team_side == "home":
@@ -245,8 +269,8 @@ def process_eval_frame(
                 fx = fx_map.get(role, 0.50)
                 fy = fy_map.get(role, 0.50)
 
-                dx = (rx - fx) * act["scale_sx"]
-                dy = (ry - fy)
+                dx = x_pitch_hat - fx
+                dy = ry - fy
                 cost_matrix[row_i, col_j] = (dx ** 2 + dy ** 2) ** 0.5
 
         from scipy.optimize import linear_sum_assignment

@@ -238,13 +238,32 @@ class BoTSORTTracker:
             with_reid=False,  # CRITICAL: Disable heavy Re-ID neural net on CPU
             model="auto",
         )
-        return BOTSORT(args)
+        tracker = BOTSORT(args)
+
+        # Intercept tracker.gmc.apply to capture the actual camera motion warp
+        # computed during tracker.update() without causing a duplicate call
+        self._last_gmc_warp = np.eye(2, 3, dtype=np.float32)
+        if hasattr(tracker, "gmc") and tracker.gmc is not None and getattr(tracker.gmc, "apply", None) is not None:
+            orig_gmc_apply = tracker.gmc.apply
+
+            def intercepted_apply(*gmc_args, **gmc_kwargs):
+                warp = orig_gmc_apply(*gmc_args, **gmc_kwargs)
+                if warp is not None and isinstance(warp, np.ndarray) and warp.shape == (2, 3):
+                    self._last_gmc_warp = warp.copy().astype(np.float32)
+                else:
+                    self._last_gmc_warp = np.eye(2, 3, dtype=np.float32)
+                return warp
+
+            tracker.gmc.apply = intercepted_apply
+
+        return tracker
 
     def reset(self):
         """Reset tracker state upon camera cut."""
         self.tracker = self._build_tracker()
         self.lifecycles.clear()
         self.gmc_history.clear()
+        self._last_gmc_warp = np.eye(2, 3, dtype=np.float32)
         self._last_strided_tracks.clear()
         self._last_strided_frame_idx = None
 
@@ -309,14 +328,8 @@ class BoTSORTTracker:
                     lc.confidences.append(score)
                     lc.is_interpolated.append(False)
 
-        # Capture GMC camera motion transform for frame_idx
-        warp_matrix = np.eye(2, 3, dtype=np.float32)
-        if hasattr(self.tracker, "gmc") and self.tracker.gmc is not None and getattr(self.tracker.gmc, "method", None) is not None:
-            try:
-                warp_matrix = self.tracker.gmc.apply(frame)
-            except Exception:
-                warp_matrix = np.eye(2, 3, dtype=np.float32)
-        self.gmc_history[frame_idx] = warp_matrix
+        # Capture GMC camera motion transform for frame_idx from the tracker update
+        self.gmc_history[frame_idx] = self._last_gmc_warp.copy()
 
         self._last_strided_tracks = current_frame_boxes
         self._last_strided_frame_idx = frame_idx
@@ -460,16 +473,20 @@ def accumulate_gmc_warp(gmc_history: Dict[int, np.ndarray], t1: int, t2: int) ->
         return T
 
     if t2 > t1:
-        for f in range(t1 + 1, t2 + 1):
-            M = gmc_history.get(f)
+        # Collect recorded warps strictly between t1 and t2 in ascending order
+        keys = sorted([k for k in gmc_history.keys() if t1 < k <= t2])
+        for f in keys:
+            M = gmc_history[f]
             if M is None:
                 continue
             M3 = np.eye(3, dtype=np.float64)
             M3[:2, :] = M
             T = M3 @ T
     else:
-        for f in range(t1, t2, -1):
-            M = gmc_history.get(f)
+        # Collect recorded warps between t2 and t1 in descending order
+        keys = sorted([k for k in gmc_history.keys() if t2 < k <= t1], reverse=True)
+        for f in keys:
+            M = gmc_history[f]
             if M is None:
                 continue
             M3 = np.eye(3, dtype=np.float64)

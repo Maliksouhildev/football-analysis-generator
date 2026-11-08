@@ -101,7 +101,7 @@ class TeamColorClusterer:
         fx2 = min(w, x2 + 10)
         foot_patch = frame[fy1:fy2, fx1:fx2]
         
-        l_turf_val = turf_l_ref
+        l_turf_val = None
         if foot_patch.size > 0:
             foot_hsv = cv2.cvtColor(foot_patch, cv2.COLOR_BGR2HSV)
             green_foot_mask = cv2.inRange(foot_hsv, (32, 35, 35), (85, 255, 255))
@@ -110,6 +110,23 @@ class TeamColorClusterer:
                 green_lab = foot_lab[green_foot_mask > 0].astype(np.float32)
                 # Unscale OpenCV uint8 L_cv2 to true CIE L*
                 l_turf_val = float(np.median(green_lab[:, 0])) * (100.0 / 255.0)
+
+        # Flank sampling fallback: if player is at bottom frame border, sample turf flanking the box
+        if l_turf_val is None:
+            flank_left = frame[y1:y2, max(0, x1 - 25):x1]
+            flank_right = frame[y1:y2, x2:min(w, x2 + 25)]
+            for patch in (flank_left, flank_right):
+                if patch.size > 0:
+                    patch_hsv = cv2.cvtColor(patch, cv2.COLOR_BGR2HSV)
+                    patch_mask = cv2.inRange(patch_hsv, (32, 35, 35), (85, 255, 255))
+                    if cv2.countNonZero(patch_mask) >= 15:
+                        patch_lab = cv2.cvtColor(patch, cv2.COLOR_BGR2Lab)
+                        green_lab = patch_lab[patch_mask > 0].astype(np.float32)
+                        l_turf_val = float(np.median(green_lab[:, 0])) * (100.0 / 255.0)
+                        break
+
+        if l_turf_val is None:
+            l_turf_val = turf_l_ref
 
         # ---------------------------------------------------------------------
         # Torso CIE LAB Unscaling & Shadow-Invariant Cube-Root Normalization
@@ -311,6 +328,33 @@ class TeamColorClusterer:
                 dominant_hsv=feat_dict["hsv"],
                 dominant_rgb=feat_dict["rgb"],
             )
+
+        # Enforce strictly Max 1 Match Referee among outliers
+        ref_ids = [aid for aid, r in results.items() if r.team == "referee"]
+        if len(ref_ids) > 1:
+            # Score referees by proximity to pitch center (rel_x=0.50)
+            def ref_center_dist(aid):
+                cx_val = next(r[3] for r in valid_records if r[0] == aid)
+                rel = (cx_val - min_x) / pitch_span
+                return abs(rel - 0.50)
+
+            ref_ids.sort(key=ref_center_dist)
+            for extra_id in ref_ids[1:]:
+                rec = next(r for r in valid_records if r[0] == extra_id)
+                feat = rec[2]["norm_feat"]
+                d0 = np.linalg.norm(feat - c0)
+                d1 = np.linalg.norm(feat - c1)
+                assigned_cluster = 0 if d0 < d1 else 1
+                fallback_team = "home" if assigned_cluster == home_cluster_idx else "away"
+
+                results[extra_id] = TeamClusterResult(
+                    actor_id=extra_id,
+                    team=fallback_team,
+                    confidence=0.72,
+                    is_outlier=False,
+                    dominant_hsv=rec[2]["hsv"],
+                    dominant_rgb=rec[2]["rgb"],
+                )
 
         # Fill in any missing actors
         for actor_id, _ in actors:

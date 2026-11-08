@@ -31,6 +31,11 @@ class PitchGeometryEngine:
         Segments green turf, fits convex hull, detects physical pitch lines via Hough lines,
         detects broadcast overlay banners, and classifies camera perspective / shot type.
         """
+        return self._analyze_impl(frame)
+
+    analyze_frame = analyze
+
+    def _analyze_impl(self, frame: np.ndarray) -> Dict[str, Any]:
         h, w = frame.shape[:2]
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
@@ -150,12 +155,30 @@ class PitchGeometryEngine:
 
         hull_pts = pitch_geom.get("hull_pts")
         if hull_pts is not None and len(hull_pts) >= 3 and x_px is not None:
-            pts = hull_pts.reshape(-1, 2)
-            # Find vertices close to x_px column (+- 40px)
-            col_pts = [p for p in pts if abs(p[0] - x_px) <= 60]
-            if len(col_pts) >= 2:
-                ys = [p[1] for p in col_pts]
-                return max(0.0, min(ys) / float(h)), min(1.0, max(ys) / float(h))
+            pts = hull_pts.reshape(-1, 2).astype(np.float64)
+            n_pts = len(pts)
+            y_intersections = []
+
+            for i in range(n_pts):
+                p1 = pts[i]
+                p2 = pts[(i + 1) % n_pts]
+                x1, y1 = float(p1[0]), float(p1[1])
+                x2, y2 = float(p2[0]), float(p2[1])
+
+                # Check if vertical line x = x_px crosses this edge segment
+                if (x1 <= x_px <= x2) or (x2 <= x_px <= x1):
+                    dx = x2 - x1
+                    if abs(dx) > 1e-4:
+                        t = (x_px - x1) / dx
+                        y_val = y1 + t * (y2 - y1)
+                        y_intersections.append(y_val)
+                    else:
+                        y_intersections.extend([y1, y2])
+
+            if len(y_intersections) >= 2:
+                min_y = float(min(y_intersections)) / float(h)
+                max_y = float(max(y_intersections)) / float(h)
+                return float(np.clip(min_y, 0.0, 1.0)), float(np.clip(max_y, 0.0, 1.0))
 
         min_pct = float(pitch_geom.get("min_turf_y_pct", 15.0)) / 100.0
         max_pct = float(pitch_geom.get("max_turf_y_pct", 95.0)) / 100.0

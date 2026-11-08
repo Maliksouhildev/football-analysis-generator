@@ -21,6 +21,7 @@ from scipy.optimize import linear_sum_assignment
 
 from .bot_sort_tracker import TrackletLifecycle, TrackletCrop
 from .team_color_clusterer import TeamClusterResult
+from ..pitch_geometry import PitchGeometryEngine
 
 
 @dataclass
@@ -47,11 +48,13 @@ class SmartCollageBatcher:
         crop_w: int = 80,
         cols_per_grid: int = 3,
         min_tracklet_duration_sec: float = 0.3,
+        geom_engine: Optional[PitchGeometryEngine] = None,
     ):
         self.crop_h = crop_h
         self.crop_w = crop_w
         self.cols_per_grid = cols_per_grid
         self.min_tracklet_duration_sec = min_tracklet_duration_sec
+        self.geom_engine = geom_engine or PitchGeometryEngine()
 
     def render_player_card(
         self,
@@ -258,10 +261,8 @@ class SmartCollageBatcher:
         h_med_1080p = h_med * (1080.0 / max(1.0, float(h_frame)))
         s_x = float(np.clip(42.5 / max(1.0, h_med_1080p), 0.30, 0.75))
 
-        # Turf hull vertical bounds for lateral Y mapping (Bug 4 fix)
-        turf_y_top = 0.15 * float(h_frame)
-        turf_y_bot = 0.92 * float(h_frame)
-        turf_y_span = max(10.0, turf_y_bot - turf_y_top)
+        # Pitch turf hull bounds for lateral Y mapping (Bug 4 fix)
+        pitch_geom = self.geom_engine.analyze_frame(keyframe) if (self.geom_engine and keyframe is not None and keyframe.size > 0) else None
 
         for lc in valid_lifecycles:
             tid = lc.track_id
@@ -305,7 +306,11 @@ class SmartCollageBatcher:
                 cx, cy = lc.get_average_center()
                 # Normalized coordinate mapping without min-max stretch
                 rx = float(np.clip(cx / float(w_frame), 0.0, 1.0))
-                ry = float(np.clip((cy - turf_y_top) / turf_y_span, 0.0, 1.0))
+                top_y, bot_y = PitchGeometryEngine.get_turf_hull_bounds(
+                    pitch_geom=pitch_geom, frame_shape=(h_frame, w_frame), x_px=cx
+                )
+                y_span = max(0.10, bot_y - top_y)
+                ry = float(np.clip((cy / float(h_frame) - top_y) / y_span, 0.0, 1.0))
                 card = self.render_player_card(tid, t_str, crops, (rx, ry))
                 home_cards.append(card)
                 home_meta.append({
@@ -344,7 +349,11 @@ class SmartCollageBatcher:
                     continue
                 cx, cy = lc.get_average_center()
                 rx = float(np.clip(cx / float(w_frame), 0.0, 1.0))
-                ry = float(np.clip((cy - turf_y_top) / turf_y_span, 0.0, 1.0))
+                top_y, bot_y = PitchGeometryEngine.get_turf_hull_bounds(
+                    pitch_geom=pitch_geom, frame_shape=(h_frame, w_frame), x_px=cx
+                )
+                y_span = max(0.10, bot_y - top_y)
+                ry = float(np.clip((cy / float(h_frame) - top_y) / y_span, 0.0, 1.0))
                 card = self.render_player_card(tid, t_str, crops, (rx, ry))
                 away_cards.append(card)
                 away_meta.append({
@@ -638,12 +647,34 @@ Output valid JSON ONLY.
             cost_matrix = np.zeros((len(unassigned_track_ids), len(available_outfield)), dtype=np.float32)
 
             # Map tracks to (rx, ry)
+            # Map tracks to (rx, ry)
             meta_by_id = {m["track_id"]: m for m in payload.tracklet_metadata}
+
+            # Determine camera translation t_x for affine mapping: x_pitch_hat = s_x * rx + t_x
+            gk_m = next((m for m in payload.tracklet_metadata if m.get("team") in ("gk_home", "gk_away")), None)
+            f_mid_x = 0.50
+            unassigned_xs = [
+                meta_by_id[tid].get("relative_x", 0.5)
+                for tid in unassigned_track_ids
+                if tid in meta_by_id
+            ]
+            screen_mid_x = float(np.median(unassigned_xs)) if unassigned_xs else 0.50
+            global_sx = float(payload.tracklet_metadata[0].get("scale_sx", 0.50)) if payload.tracklet_metadata else 0.50
+
+            if gk_m is not None:
+                gk_pitch_x = 0.05 if payload.team_label == "home" else 0.95
+                t_x = gk_pitch_x - global_sx * float(gk_m.get("relative_x", 0.5))
+            else:
+                t_x = f_mid_x - global_sx * screen_mid_x
 
             for i, tid in enumerate(unassigned_track_ids):
                 m = meta_by_id.get(tid, {})
                 rx = m.get("relative_x", 0.5)
                 ry = m.get("relative_y", 0.5)
+                player_sx = float(m.get("scale_sx", global_sx))
+
+                # Module 4: Affine coordinate mapping x_pitch_hat = s_x * x_screen + t_x
+                x_pitch_hat = float(np.clip(player_sx * rx + t_x, 0.0, 1.0))
 
                 for j, p in enumerate(available_outfield):
                     role = p.get("role", "CM")
@@ -663,13 +694,11 @@ Output valid JSON ONLY.
 
                     fx = fx_map.get(role, 0.5)
                     fy = fy_map.get(role, 0.5)
-                    # Apply camera zoom scale s_x around formation center without min-max stretch
-                    s_x = float(m.get("scale_sx", 0.50))
-                    # Scale distance along X axis by zoom scale s_x
-                    dx = (rx - fx) * s_x
-                    dy = (ry - fy)
-                    dist = (dx ** 2 + dy ** 2) ** 0.5
-                    cost_matrix[i, j] = dist
+
+                    # True 2D Euclidean distance in pitch coordinate space
+                    dx = x_pitch_hat - fx
+                    dy = ry - fy
+                    cost_matrix[i, j] = (dx ** 2 + dy ** 2) ** 0.5
 
             row_ind, col_ind = linear_sum_assignment(cost_matrix)
             swap_margins = compute_hungarian_2opt_swap_margins(cost_matrix, row_ind, col_ind)
@@ -713,27 +742,30 @@ def compute_hungarian_2opt_swap_margins(
     """
     Computes the 2-opt pairwise swap margin for each assigned pair (i1, j1):
     Delta C_swap(i1, i2) = ((C[i1, j2] + C[i2, j1]) - (C[i1, j1] + C[i2, j2])) / (abs(C[i1, j1]) + abs(C[i2, j2]) + eps)
+    Also evaluates 1-opt alternative match against unassigned candidate roles.
 
     By optimality of Hungarian assignment, numerator >= 0.
-    Returns: dict mapping row_idx i1 -> min_{i2 != i1} Delta C_swap(i1, i2).
+    Returns: dict mapping row_idx i1 -> min Delta C_swap(i1).
     Flag as ambiguous whenever margin < 0.15.
     """
     n_assigned = len(row_ind)
     margins: Dict[int, float] = {}
 
-    if n_assigned < 2:
-        for r in row_ind:
-            margins[int(r)] = 1.0
+    if n_assigned < 1:
         return margins
 
     assignment_map = {int(r): int(c) for r, c in zip(row_ind, col_ind)}
     rows = list(assignment_map.keys())
+    assigned_cols = set(assignment_map.values())
+    total_cols = cost_matrix.shape[1]
+    unassigned_cols = [c for c in range(total_cols) if c not in assigned_cols]
 
     for i1 in rows:
         j1 = assignment_map[i1]
         c11 = float(cost_matrix[i1, j1])
         min_delta = float("inf")
 
+        # 1. 2-opt pairwise swap against all other assigned players
         for i2 in rows:
             if i1 == i2:
                 continue
@@ -748,6 +780,14 @@ def compute_hungarian_2opt_swap_margins(
             swap_margin = numerator / denominator
             if swap_margin < min_delta:
                 min_delta = swap_margin
+
+        # 2. 1-opt alternative match against unassigned roles
+        for j_free in unassigned_cols:
+            c_free = float(cost_matrix[i1, j_free])
+            delta_free = max(0.0, c_free - c11)
+            free_margin = delta_free / (abs(c11) + epsilon)
+            if free_margin < min_delta:
+                min_delta = free_margin
 
         margins[i1] = float(min_delta) if min_delta != float("inf") else 1.0
 
