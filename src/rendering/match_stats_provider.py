@@ -1504,7 +1504,22 @@ class MatchStatsProvider:
         num_match = re.search(r'#?(\d+)', clean_query)
         target_number = int(num_match.group(1)) if num_match else None
 
-        # 1. Direct key match in verified authentic match stats
+        # 1. Check official async match statistics engine (Sofascore / Fotmob DataFrames)
+        try:
+            from src.scraper.async_match_stats import AsyncMatchStatsScraper
+            if not hasattr(self, "_async_scraper"):
+                self._async_scraper = AsyncMatchStatsScraper()
+            official_stats = self._async_scraper.get_player_stats(clean_query, team=team_hint)
+            if official_stats:
+                base_dict = dict(AUTH_MATCH_STATS.get(clean_query, {}))
+                base_dict.update(official_stats)
+                res = self._enrich_stats(base_dict)
+                self._memory_cache[clean_query] = res
+                return res
+        except Exception as e:
+            logger.debug("AsyncMatchStatsScraper lookup notice: %s", e)
+
+        # 2. Direct key match in verified authentic match stats
         if clean_query in AUTH_MATCH_STATS:
             res = self._enrich_stats(AUTH_MATCH_STATS[clean_query])
             self._memory_cache[clean_query] = res
@@ -1563,11 +1578,6 @@ class MatchStatsProvider:
                     if not team_hint or team_hint.lower() in entry.get("clubName", "").lower():
                         best_match = entry
                         break
-
-        if best_match:
-            res = self._enrich_stats(best_match)
-            self._memory_cache[clean_query] = res
-            return res
 
         # Check official async match statistics engine (Sofascore / Fotmob DataFrames)
         try:

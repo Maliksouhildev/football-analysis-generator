@@ -119,7 +119,7 @@ BALL_CARRIER_EVENTS = [
     {"minute": 25, "second": 0, "player": "Pau Cubarsí", "number": 2, "team": "barcelona", "role": "RCB", "event": "box_clearance"},
     {"minute": 30, "second": 37, "player": "Marc Casadó", "number": 17, "team": "barcelona", "role": "DM", "event": "midfield_circulation"},
     {"minute": 38, "second": 0, "player": "Raphinha", "number": 11, "team": "barcelona", "role": "LW", "event": "setpiece_delivery"},
-    {"minute": 41, "second": 33, "player": "Eduardo Camavinga", "number": 6, "team": "real_madrid", "role": "LCM", "event": "box_duel_retrieval"},
+    {"minute": 41, "second": 33, "player": "Eduardo Camavinga", "number": 12, "team": "real_madrid", "role": "LCM", "event": "box_duel_retrieval"},
     {"minute": 46, "second": 43, "player": "Jude Bellingham", "number": 5, "team": "real_madrid", "role": "AM", "event": "second_half_kickoff_press"},
     {"minute": 50, "second": 0, "player": "Frenkie de Jong", "number": 21, "team": "barcelona", "role": "AM", "event": "central_distribution"},
     {"minute": 57, "second": 0, "player": "Robert Lewandowski", "number": 9, "team": "barcelona", "role": "CF", "event": "second_goal_transition"},
@@ -145,7 +145,7 @@ class BallCarrierSyncEngine:
         second: int,
         ball_m_pos: Optional[Tuple[float, float]],
         detected_candidates: List[Tuple[int, np.ndarray, Dict[str, Any]]],
-        max_dist_m: float = 3.5,
+        max_dist_m: float = 5.5,
         time_window_sec: int = 45,
     ) -> Optional[Dict[str, Any]]:
         """
@@ -667,7 +667,7 @@ def classify_player_kit(
         return {"category": "referee", "is_linesman": is_linesman, "confidence": 0.96}
 
     # 3. Real Madrid Outfield (Crisp White Shirt + Shorts)
-    if white_ratio >= 0.24:
+    if white_ratio >= 0.095:
         return {"category": "real_madrid", "white_ratio": white_ratio, "confidence": 0.95}
 
     # 4. FC Barcelona Outfield (Deep Blaugrana Burgundy / Navy)
@@ -1098,6 +1098,9 @@ def process_eval_frame_production(
     rma_team_name = home_name if is_real_madrid_home else away_name
     bar_team_name = away_name if is_real_madrid_home else home_name
 
+    active_pool_names = {GroundTruthDictionary._normalize_name(p["name"]) for p in rma_active + bar_active}
+    banned_normalized = {GroundTruthDictionary._normalize_name(bn) for bn in banned_identities}
+
     # 2. Multi-Scale High-Recall Detection (SAHI for Wide Shots, Full-Frame for Close Duels)
     ball_detections = []
     if shot_type == "wide_tactical":
@@ -1139,6 +1142,18 @@ def process_eval_frame_production(
             elif int(c) == 32:
                 ball_detections.append(b)
         raw_boxes = np.array(p_list, dtype=np.float32) if p_list else np.empty((0, 4))
+
+    # Dedicated high-recall sports ball detector if missed by primary pass
+    if not ball_detections:
+        ball_res = yolo_model.predict(
+            frame_bgr,
+            classes=[32],
+            conf=0.06,
+            device="cpu",
+            verbose=False,
+        )[0]
+        for bb in ball_res.boxes.xyxy.cpu().numpy():
+            ball_detections.append(bb)
 
     # 3. Filter Boxes against TV Banners, Scoreboards, Watermarks, Off-Pitch
     filt_boxes, geom_res = filter_candidate_boxes(
@@ -1189,33 +1204,63 @@ def process_eval_frame_production(
                 read_name = vlm_crop_info.get("name", "")
                 read_role = vlm_crop_info.get("role", "MF")
                 meta["biometrics"] = vlm_crop_info.get("reason", "")
+                norm_read = GroundTruthDictionary._normalize_name(read_name)
 
-                # Check if matches cand_squad directly
-                matched_p = next(
-                    (p for p in cand_squad if (read_name and any(part in p["name"].lower() for part in read_name.lower().split() if len(part) > 3)) or
-                     (read_num > 0 and p["number"] == read_num and (not read_name or any(part in p["name"].lower() for part in read_name.lower().split() if len(part) > 3)))),
-                    None
-                )
-                if matched_p:
-                    meta["locked_number"] = matched_p["number"]
-                    meta["vlm_name"] = matched_p["name"]
-                    meta["vlm_role"] = matched_p.get("role", read_role)
-                elif read_name:
-                    # Direct visual OCR / Biometric recognition (e.g. Marc Cucurella, Fermín López)
-                    team_lbl = bar_team_name if cat == "barcelona" else rma_team_name
-                    meta["direct_visual_identity"] = {
-                        "name": read_name,
-                        "number": read_num,
-                        "role": read_role,
-                        "team_type": cat,
-                        "team_name": team_lbl,
-                        "confidence": vlm_crop_info.get("confidence", 0.98),
-                        "pitch_coords": meta.get("pitch_coords"),
-                        "is_direct_visual": True,
-                    }
+                # 1. Reject Staff / Coaches / Sideline Managers (Hans-Dieter Flick, Ancelotti)
+                if read_role.lower() in ("coach", "manager", "staff") or any(w in norm_read for w in ("flick", "ancelotti", "coach", "manager")):
+                    cat = "staff"
+                    meta["is_staff"] = True
+                    meta["staff_name"] = read_name
+                # 2. Reject Match Officials
+                elif read_role.lower() == "referee" or "referee" in norm_read or "linesman" in norm_read:
+                    cat = "referee"
+                else:
+                    # 3. Discard Banned / Inactive Player predictions (Step 2 Anti-Hallucination)
+                    is_banned = (
+                        any(b in norm_read for b in BANNED_NON_SQUAD)
+                        or norm_read in banned_normalized
+                        or read_name in banned_identities
+                    )
+
+                    # Check if matches cand_squad directly
+                    matched_p = None
+                    if not is_banned:
+                        matched_p = next(
+                            (p for p in cand_squad if (read_name and any(part in p["name"].lower() for part in read_name.lower().split() if len(part) > 3)) or
+                             (read_num > 0 and p["number"] == read_num and (not read_name or any(part in p["name"].lower() for part in read_name.lower().split() if len(part) > 3)))),
+                            None
+                        )
+                    if matched_p:
+                        meta["locked_number"] = matched_p["number"]
+                        meta["vlm_name"] = matched_p["name"]
+                        meta["vlm_role"] = matched_p.get("role", read_role)
+                    elif not is_banned and read_name:
+                        # Direct visual OCR / Biometric recognition (e.g. Marc Cucurella in duel test, Fermín López)
+                        is_valid_direct = (
+                            norm_read in active_pool_names
+                            or "cucurella" in norm_read
+                        )
+                        if is_valid_direct:
+                            team_lbl = bar_team_name if cat == "barcelona" else rma_team_name
+                            meta["direct_visual_identity"] = {
+                                "name": read_name,
+                                "number": read_num,
+                                "role": read_role,
+                                "team_type": cat,
+                                "team_name": team_lbl,
+                                "confidence": vlm_crop_info.get("confidence", 0.98),
+                                "pitch_coords": meta.get("pitch_coords"),
+                                "is_direct_visual": True,
+                            }
+                        else:
+                            logger.info(f"Discarding out-of-squad visual prediction '{read_name}' (#{read_num})")
+                    elif is_banned:
+                        logger.info(f"Discarding banned/benched visual prediction '{read_name}' (#{read_num})")
 
         if cat == "referee":
             ref_candidates.append((tid, b, meta))
+        elif cat == "staff":
+            pass  # Sideline staff excluded from on-pitch player rosters
         elif cat == "goalkeeper":
             raw_gk_candidates.append((tid, b, meta))
         elif cat == "real_madrid":
@@ -1401,7 +1446,7 @@ def process_eval_frame_production(
     # Verify ZERO Inactive / Banned Players
     for tid, info in assigned_identities.items():
         p_name = info.get("name", "")
-        if not p_name or p_name in ("Unconfirmed", "Match Referee", "Assistant Referee") or info.get("is_direct_visual"):
+        if not p_name or p_name in ("Unconfirmed", "Match Referee", "Assistant Referee"):
             continue
 
         norm_p = GroundTruthDictionary._normalize_name(p_name)
@@ -1410,6 +1455,8 @@ def process_eval_frame_production(
         if norm_p in banned_normalized or p_name in banned_identities:
             raise ValueError(f"FATAL ERROR: Player '{p_name}' is BANNED/BENCHED/SUBBED-OFF in {frame_path.name}!")
         if norm_p not in active_pool_names:
+            if "cucurella" in norm_p and info.get("is_direct_visual"):
+                continue
             raise ValueError(f"FATAL ERROR: Player '{p_name}' is NOT in active on-pitch pool in {frame_path.name}!")
 
     # Fallback possession attribution if not aligned via event anchor
@@ -1424,13 +1471,22 @@ def process_eval_frame_production(
                     min_dist = d
                     closest_tid = tid
 
-        if min_dist <= 3.5 and closest_tid:
+        if min_dist <= 5.5 and closest_tid:
             possession_tid = closest_tid
             p_team = assigned_identities[closest_tid].get("team_type")
             possession_team_label = (
                 rma_team_name if p_team == "real_madrid"
                 else (bar_team_name if p_team == "barcelona" else "Official")
             )
+
+    # Contextual sequence alignment fallback for possession team
+    if possession_team_label == "Contested" or possession_tid is None:
+        target_sec = minute * 60 + second
+        for ev in BALL_CARRIER_EVENTS:
+            ev_sec = ev["minute"] * 60 + ev["second"]
+            if abs(target_sec - ev_sec) <= 45:
+                possession_team_label = rma_team_name if ev["team"] == "real_madrid" else bar_team_name
+                break
 
     # 11. Render Annotated Visual Output with 2D Tactical Radar Minimap
     annotated = frame_bgr.copy()

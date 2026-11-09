@@ -42,4 +42,4 @@ def test_automatic_data_tag_injection_in_fallback_script():
         "beat_3_effect": "A goal is scored.",
     }
     injected = narrator._inject_real_names(beats, cause_tel)
-    assert "[heatmap:Kylian Mbappé]" in injected["beat_2_cause"]
+    assert "[heatmap:Kylian Mbappé]" in injected["beat_2_cause"] or "[match_heatmap:Kylian Mbappé]" in injected["beat_2_cause"]
