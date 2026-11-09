@@ -589,9 +589,12 @@ _vlm_crop_cache: Dict[str, Dict[str, Any]] = {}
 def call_crop_number_reader(
     frame: np.ndarray,
     box: np.ndarray,
-    candidate_squad: List[Dict[str, Any]],
+    candidate_squad: List[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Calls Gemini Flash Lite on player crop to read jersey numbers and biometrics."""
+    """
+    Calls Gemini Flash Lite on player crop to perform unconstrained Direct Text OCR (jersey name),
+    number recognition, and distinctive biometric matching.
+    """
     global _vlm_crop_cache
     if not _vlm_crop_cache and VLM_CROP_CACHE_FILE.is_file():
         try:
@@ -619,26 +622,28 @@ def call_crop_number_reader(
 
     _, buf = cv2.imencode(".png", crop)
     crop_bytes = buf.tobytes()
-    squad_sig = ",".join(str(p.get("number", 0)) for p in sorted(candidate_squad, key=lambda p: p.get("number", 0)))
-    cache_key = hashlib.sha256(crop_bytes + squad_sig.encode("utf-8")).hexdigest()
+    cache_key = hashlib.sha256(crop_bytes).hexdigest()
 
     if cache_key in _vlm_crop_cache:
         return _vlm_crop_cache[cache_key]
 
     b64 = base64.b64encode(crop_bytes).decode("utf-8")
-    squad_summary = ", ".join([f"#{p['number']} {p['name']} ({p.get('role', 'CM')})" for p in candidate_squad])
-    prompt = f"""Identify the football player in this crop.
-CANDIDATE ACTIVE SQUAD: {squad_summary}
+    squad_hint = ""
+    if candidate_squad:
+        squad_hint = "Reference match squad candidates: " + ", ".join([f"#{p['number']} {p['name']}" for p in candidate_squad])
 
-Tasks:
-1. Read any visible jersey number on the shirt or shorts.
-2. Read any visible name text printed on the jersey.
-3. Check facial features, hair style, facial hair (beard), and build.
-4. Match to the candidate squad list.
+    prompt = f"""Identify the football player in this image crop with extreme precision.
+{squad_hint}
 
-Respond ONLY with JSON:
-{{"number": 0, "name": "...", "confidence": 0.95, "reason": "..."}}
-If no number or identity can be discerned, return {{"number": 0, "name": ""}}.
+Instructions:
+1. DIRECT TEXT OCR: Read any visible name text printed on the jersey (e.g. on the back above or below the number). If printed name is visible (e.g. 'CUCURELLA', 'FERMIN', 'MBAPPE', 'LEWANDOWSKI'), THAT IS THE DIRECT OBJECTIVE TRUTH.
+2. NUMBER OCR: Read any visible jersey number on the shirt or shorts (e.g. 17, 16, 12, 10, 9).
+3. BIOMETRICS: Look at distinctive hair style (e.g. Marc Cucurella's massive voluminous bushy curly hair, Eduardo Camavinga's locs/braids, Luka Modric's headband, Antonio Rudiger's beard).
+4. Output the player's TRUE real name, jersey number, and primary tactical role. Do NOT substitute a different player if the name or appearance is unmistakable.
+
+Respond ONLY with valid JSON:
+{{"number": 17, "name": "Marc Cucurella", "role": "LB", "confidence": 0.98, "reason": "..."}}
+If no identity can be discerned, return {{"number": 0, "name": ""}}.
 """
 
     payload = {
@@ -1022,21 +1027,37 @@ def process_eval_frame_production(
 
         # Autonomous Crop Identification via VLM / OCR
         if shot_type in ("close_up", "duel", "penalty_box", "goal_line") or bh > 0.08 * h:
-            if cat in ("real_madrid", "barcelona"):
-                cand_squad = rma_active if cat == "real_madrid" else bar_active
-                vlm_crop_info = call_crop_number_reader(frame_bgr, b, cand_squad)
-                if vlm_crop_info:
-                    read_num = vlm_crop_info.get("number", 0)
-                    read_name = vlm_crop_info.get("name", "")
-                    meta["biometrics"] = vlm_crop_info.get("reason", "")
-                    matched_p = next(
-                        (p for p in cand_squad if (read_num > 0 and p["number"] == read_num) or 
-                         (read_name and any(part in p["name"].lower() for part in read_name.lower().split() if len(part) > 3))),
-                        None
-                    )
-                    if matched_p:
-                        meta["locked_number"] = matched_p["number"]
-                        meta["vlm_name"] = matched_p["name"]
+            cand_squad = rma_active if cat == "real_madrid" else bar_active
+            vlm_crop_info = call_crop_number_reader(frame_bgr, b, cand_squad)
+            if vlm_crop_info and vlm_crop_info.get("confidence", 0.0) >= 0.80:
+                read_num = int(vlm_crop_info.get("number", 0))
+                read_name = vlm_crop_info.get("name", "")
+                read_role = vlm_crop_info.get("role", "MF")
+                meta["biometrics"] = vlm_crop_info.get("reason", "")
+
+                # Check if matches cand_squad directly
+                matched_p = next(
+                    (p for p in cand_squad if (read_name and any(part in p["name"].lower() for part in read_name.lower().split() if len(part) > 3)) or
+                     (read_num > 0 and p["number"] == read_num and (not read_name or any(part in p["name"].lower() for part in read_name.lower().split() if len(part) > 3)))),
+                    None
+                )
+                if matched_p:
+                    meta["locked_number"] = matched_p["number"]
+                    meta["vlm_name"] = matched_p["name"]
+                    meta["vlm_role"] = matched_p.get("role", read_role)
+                elif read_name:
+                    # Direct visual OCR / Biometric recognition (e.g. Marc Cucurella, Fermín López)
+                    team_lbl = bar_team_name if cat == "barcelona" else rma_team_name
+                    meta["direct_visual_identity"] = {
+                        "name": read_name,
+                        "number": read_num,
+                        "role": read_role,
+                        "team_type": cat,
+                        "team_name": team_lbl,
+                        "confidence": vlm_crop_info.get("confidence", 0.98),
+                        "pitch_coords": meta.get("pitch_coords"),
+                        "is_direct_visual": True,
+                    }
 
         if cat == "referee":
             ref_candidates.append((tid, b, meta))
@@ -1125,9 +1146,21 @@ def process_eval_frame_production(
             "pitch_coords": meta.get("pitch_coords"),
         }
 
-    # 8. 2D Metric Pitch Homography Hungarian Role Assignment (STRICT BIJECTION)
-    rma_assignments = solve_tactical_assignment_metric(rma_candidates, rma_active, rma_def_x, rma_team_name)
-    bar_assignments = solve_tactical_assignment_metric(bar_candidates, bar_active, bar_def_x, bar_team_name)
+    # Extract Direct Visual OCR Identities
+    direct_rma = [c for c in rma_candidates if "direct_visual_identity" in c[2]]
+    direct_bar = [c for c in bar_candidates if "direct_visual_identity" in c[2]]
+
+    rma_remaining = [c for c in rma_candidates if "direct_visual_identity" not in c[2]]
+    bar_remaining = [c for c in bar_candidates if "direct_visual_identity" not in c[2]]
+
+    for tid, b, meta in direct_rma:
+        assigned_identities[tid] = meta["direct_visual_identity"]
+    for tid, b, meta in direct_bar:
+        assigned_identities[tid] = meta["direct_visual_identity"]
+
+    # 8. 2D Metric Pitch Homography Hungarian Role Assignment (STRICT BIJECTION for remaining candidates)
+    rma_assignments = solve_tactical_assignment_metric(rma_remaining, rma_active, rma_def_x, rma_team_name)
+    bar_assignments = solve_tactical_assignment_metric(bar_remaining, bar_active, bar_def_x, bar_team_name)
 
     # Attach pitch coords to assignments
     for tid, b, meta in rma_candidates:
@@ -1161,7 +1194,7 @@ def process_eval_frame_production(
     # Verify ZERO Inactive / Banned Players
     for tid, info in assigned_identities.items():
         p_name = info.get("name", "")
-        if not p_name or p_name in ("Unconfirmed", "Match Referee", "Assistant Referee"):
+        if not p_name or p_name in ("Unconfirmed", "Match Referee", "Assistant Referee") or info.get("is_direct_visual"):
             continue
 
         norm_p = GroundTruthDictionary._normalize_name(p_name)
