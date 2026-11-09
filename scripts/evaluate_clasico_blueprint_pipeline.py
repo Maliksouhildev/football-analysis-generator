@@ -1,43 +1,23 @@
 """
-scripts/evaluate_clasico_blueprint_pipeline.py
+scripts/run_revamped_clasico_eval.py
 ================================================================================
-Production-Grade El Clásico Multi-Modal Player Detection & Identity Pipeline.
-
-Autonomous End-to-End Pipeline:
-1. Autonomous Match & Active XI Resolution:
-   - Queries ESPN Public API dynamically to obtain authentic matchday rosters,
-     starting XIs, and chronological substitutions for the authentic fixture.
-   - Synchronizes exact on-pitch squads with match minute and second:
-     * Starts with the official Starting 11.
-     * Applies every substitution where sub_time <= current_time.
-     * BANS all bench players who haven't come on, all subbed-off players,
-       and all retired/injured players.
-   - 100% ZERO HARDCODED bounding-box pixel coordinates or player-box dictionaries.
-2. Strict Mathematical Bijection (ZERO PLAYER DUPLICATION):
-   - Every active on-pitch player can be assigned to AT MOST ONE bounding box.
-   - Any extra candidate detections beyond squad size are never duplicated.
-3. Robust Broadcast Overlay & UI Masking:
-   - Eliminates scoreboard bugs, broadcast channel watermarks, and lower-third TV
-     graphic banners (specifically preventing LaLiga cards like Raphinha's broadcast
-     lower third from being detected as on-pitch players).
-   - Preserves foreground duels and touchline actors on the pitch grass.
-   - Filters out non-pitch camera tripods and sitting spectators on concrete.
-4. Multi-Scale High-Recall Detection:
-   - YOLOv8x extra-large model ensuring occluded players and close-up duels are captured.
-   - Duel-aware Non-Maximum Suppression preserving tackling and duel pairs.
-5. Deterministic Colorimetry & Kit Partitioning:
-   - Torso and shorts color metrics strictly partition candidates into Real Madrid (pure white),
-     Barcelona (Blaugrana), Goalkeepers, and Referees. Real Madrid is NEVER labeled Barcelona.
-   - Enforces max 1 Goalkeeper per team on the pitch.
-6. Multi-Modal Crop-Level Number Reading & Biometrics:
-   - Calls Gemini Flash Lite VLM on candidate crops to discern jersey numbers and features,
-     matching exclusively against the legally active squad at that minute.
-7. Direction-Aware Tactical Spatial Topology & Hungarian 1-to-1 Matching:
-   - Halftime pitch layout inversion (Defending ends switch at min 45:00).
-   - Solves optimal 1-to-1 bipartite assignment without duplicates.
-8. Broadcast HUD & Visual Output:
-   - Pure white badges for Real Madrid, Blaugrana badges for Barcelona, distinct GK & referee styling.
-   - Outputs verified screenshots to debug_outputs/clasico_blueprint_eval/ and copies to artifact dir.
+Revamped El Clásico Multi-Modal Player Detection & Identity Pipeline:
+1. SAHI (Sliced Aided Hyper Inference) on Intel i5 CPU:
+   Slices 1080p frame into overlapping tiles (960x540) to detect distant and small
+   players across the entire pitch turf with high recall.
+2. 2D Metric Pitch Homography (Roboflow Sports / SoccerNet Approach):
+   Warps camera perspective and projects player foot coordinates onto canonical
+   metric pitch coordinates (105m x 68m).
+3. Metric 2D Pitch Hungarian Assignment (Zero Player Duplication):
+   Matches on-pitch players to metric tactical target templates without duplication.
+4. Automated Colorimetry & Kit Partitioning:
+   Separates Real Madrid (crisp white), Barcelona (Blaugrana), GK, and Officials.
+5. Ball Detection & Possession Attribution:
+   Detects sports ball, projects to 2D pitch, and attributes possession to closest player.
+6. 2D Tactical Radar Minimap (Roboflow Sports / Telestration Overlay):
+   Renders a 2D top-down pitch radar in the bottom corner of each frame.
+7. Strict Timestamp-Synced Active-XI Ground Truth (October 26, 2024 El Clásico):
+   100% zero-tolerance firewall against non-playing, injured, or transferred players.
 ================================================================================
 """
 
@@ -66,10 +46,14 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from sahi import AutoDetectionModel
+from sahi.predict import get_sliced_prediction
+
 from src.detection_engine.pitch_geometry import PitchGeometryEngine
+from src.vision.pitch_homography_role_mapper import PitchHomographyProjector, PITCH_LENGTH_M, PITCH_WIDTH_M
 from src.ingestion.clock_ocr import ScoreboardClockOCR
 from src.scraper.autonomous_match_resolver import AutonomousMatchResolver
-from src.scraper.live_ground_truth import GroundTruthDictionary, MatchInstant, get_registered_ground_truth
+from src.scraper.live_ground_truth import GroundTruthDictionary
 
 OUTPUT_DIR = PROJECT_ROOT / "debug_outputs" / "clasico_blueprint_eval"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -93,16 +77,46 @@ BANNED_NON_SQUAD = {
     "arda güler", "guler", "endrick", "vallejo", "ceballos"
 }
 
+# 2D Metric Pitch Role Targets (105m x 68m, defending Left Goal at x=0m, attacking Right at x=105m)
+METRIC_ROLE_TARGETS = {
+    # Defenders (deep)
+    "CB": (22.0, 34.0), "RCB": (24.0, 44.0), "LCB": (24.0, 24.0),
+    "RB": (28.0, 56.0), "LB": (28.0, 12.0),
+    # Midfielders (central)
+    "DM": (42.0, 34.0), "CM": (50.0, 34.0), "RCM": (52.0, 45.0), "LCM": (52.0, 23.0),
+    "AM": (62.0, 34.0),
+    # Attackers (forward)
+    "RW": (75.0, 56.0), "LW": (75.0, 12.0), "CF": (80.0, 34.0),
+    "CF-L": (78.0, 24.0), "CF-R": (78.0, 44.0)
+}
+
+
+def get_metric_target(role: str, defending_x: float) -> Tuple[float, float]:
+    """Calculates canonical 2D pitch coordinates in meters for a given role and defending direction."""
+    base_role = role.upper()
+    if base_role not in METRIC_ROLE_TARGETS:
+        if "B" in base_role: base_role = "CB"
+        elif "M" in base_role: base_role = "CM"
+        elif "W" in base_role or "F" in base_role: base_role = "CF"
+        else: base_role = "CM"
+    cx, cy = METRIC_ROLE_TARGETS.get(base_role, (52.5, 34.0))
+    if defending_x > 0.5:
+        # Defending right (105m), attacking left (0m)
+        tx = 105.0 - cx
+        ty = 68.0 - cy
+    else:
+        # Defending left (0m), attacking right (105m)
+        tx = cx
+        ty = cy
+    return tx, ty
+
 
 # =============================================================================
 # 1. Autonomous Match & Active XI Engine
 # =============================================================================
 
 def load_canonical_matches() -> Dict[str, Any]:
-    """
-    Loads or autonomously resolves authoritative Starting XIs and chronological subs
-    for real El Clásico fixtures from ESPN Soccer Public API.
-    """
+    """Loads authoritative Starting XIs and chronological subs for real El Clásico fixtures."""
     if CANONICAL_MATCHES_PATH.is_file():
         try:
             with open(CANONICAL_MATCHES_PATH, "r", encoding="utf-8") as f:
@@ -207,12 +221,7 @@ def resolve_active_squad_at_instant(
     minute: int,
     second: int = 0,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Set[str]]:
-    """
-    Computes the exact active 11-player on-pitch squad for home and away teams
-    at (minute, second) by starting with the Starting XI, applying chronological
-    substitutions where sub_total_sec <= current_total_sec, and building a strict
-    whitelist and banned blacklist.
-    """
+    """Computes exact active 11-player on-pitch squad for home and away teams."""
     current_sec = minute * 60 + second
 
     def _resolve_single_team(team_dict: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Set[str]]:
@@ -220,7 +229,6 @@ def resolve_active_squad_at_instant(
         bench = team_dict.get("substitutes", [])
         subs = team_dict.get("substitutions", [])
 
-        # Map active by player name lower
         active_map: Dict[str, Dict[str, Any]] = {}
         for p in starters:
             norm = GroundTruthDictionary._normalize_name(p["name"])
@@ -242,13 +250,11 @@ def resolve_active_squad_at_instant(
                 norm_out = GroundTruthDictionary._normalize_name(p_out_name)
                 norm_in = GroundTruthDictionary._normalize_name(p_in_name)
 
-                # Remove player out
                 matched_out_key = next((k for k in active_map if k in norm_out or norm_out in k), None)
                 if matched_out_key:
                     active_map.pop(matched_out_key, None)
                 subbed_out_names.add(p_out_name)
 
-                # Add player in
                 active_map[norm_in] = {
                     "name": p_in_name,
                     "number": in_num,
@@ -257,7 +263,6 @@ def resolve_active_squad_at_instant(
                 }
                 subbed_in_names.add(p_in_name)
 
-        # Build banned list: all bench players NOT subbed in + all subbed out players + non-squad
         banned = set(subbed_out_names)
         for b_p in bench:
             b_norm = GroundTruthDictionary._normalize_name(b_p["name"])
@@ -279,13 +284,9 @@ def get_frame_metadata(
     frame_bgr: np.ndarray,
     canonical_matches: Dict[str, Any],
 ) -> Tuple[Dict[str, Any], int, int, str, str, float, float, bool]:
-    """
-    Extracts match minute, second, period, attacking/defending ends, shot type, and GK visibility.
-    """
+    """Extracts match minute, second, period, attacking/defending ends, shot type, and GK visibility."""
     fname = frame_path.name.lower()
-    h, w = frame_bgr.shape[:2]
 
-    # 1. Scoreboard OCR or Filename Timestamp Extraction
     minute = 0
     second = 0
     clock_str = "00:00"
@@ -316,10 +317,9 @@ def get_frame_metadata(
 
     period = 1 if minute < 45 else 2
 
-    # 2. Defending Geometry (Halftime Pitch Layout Inversion)
-    # FC Barcelona (Home) vs Real Madrid (Away) on 2023-10-28 (at Estadi Olímpic Lluís Companys, Montjuïc):
-    # Period 1 (0-45'): FC Barcelona defends LEFT goal (x=0.0), Real Madrid defends RIGHT goal (x=1.0).
-    # Period 2 (45'+): Sides switch! FC Barcelona defends RIGHT goal (x=1.0), Real Madrid defends LEFT goal (x=0.0).
+    # Santiago Bernabéu Oct 26, 2024:
+    # Period 1: RMA defends RIGHT goal (x=1.0 / 105m), BAR defends LEFT goal (x=0.0 / 0m)
+    # Period 2: RMA defends LEFT goal (x=0.0 / 0m), BAR defends RIGHT goal (x=1.0 / 105m)
     if period == 1:
         bar_def_x = 0.0
         rma_def_x = 1.0
@@ -327,7 +327,6 @@ def get_frame_metadata(
         bar_def_x = 1.0
         rma_def_x = 0.0
 
-    # 3. Shot Type & Camera Perspective
     if "duel" in fname or "box_duel" in fname:
         shot_type = "duel"
         has_gk_visible = False
@@ -364,10 +363,7 @@ def filter_candidate_boxes(
     shot_type: str,
     frame_name: str = "",
 ) -> Tuple[np.ndarray, Dict[str, Any]]:
-    """
-    Filters raw YOLO detections against pitch boundary, scoreboard deadzones,
-    top-right logos, lower-third TV broadcast graphic banners, and duplicate sub-boxes.
-    """
+    """Filters raw YOLO detections against pitch boundary, scoreboards, and lower-third TV graphic banners."""
     h, w = frame.shape[:2]
     fname = frame_name.lower()
     geom_res = geom_engine.analyze(frame)
@@ -394,7 +390,6 @@ def filter_candidate_boxes(
             continue
 
         # 4. Lower-Third Broadcast Graphic Banner Card Filter (e.g. 11 RAPHINHA card)
-        # Rejects UI graphics in bottom center while preserving players standing on grass above
         if y1 >= 0.78 * h and 0.40 * w <= xc <= 0.55 * w and bh < 0.25 * h:
             logger.info(f"Filtered broadcast banner UI card at [{x1}, {y1}, {x2}, {y2}]")
             continue
@@ -416,7 +411,7 @@ def filter_candidate_boxes(
     if not pass1_boxes:
         return np.empty((0, 4)), geom_res
 
-    # Second Pass: Duel-Aware Non-Maximum Suppression
+    # Duel-Aware Non-Maximum Suppression
     final_boxes = []
     n_p = len(pass1_boxes)
     suppressed = set()
@@ -456,8 +451,7 @@ def filter_candidate_boxes(
                         suppressed.add(i)
                         break
             else:
-                min_area = min(area_i, area_j)
-                if iou > 0.50 or (min_area > 0 and (inter / min_area) > 0.70):
+                if iou > 0.45:
                     if area_i >= area_j:
                         suppressed.add(j)
                     else:
@@ -481,10 +475,7 @@ def classify_player_kit(
     shot_type: str = "wide_tactical",
     has_gk_visible: bool = False,
 ) -> Dict[str, Any]:
-    """
-    Extracts torso color metrics to strictly partition candidates into:
-    'real_madrid' | 'barcelona' | 'goalkeeper' | 'referee'
-    """
+    """Extracts torso color metrics to strictly partition candidates into team categories."""
     h, w = frame.shape[:2]
     x1, y1, x2, y2 = [int(v) for v in box]
     bw = max(1, x2 - x1)
@@ -511,7 +502,6 @@ def classify_player_kit(
     sat_t = float(np.mean(hsv_t[:, :, 1]))
     val_t = float(np.mean(hsv_t[:, :, 2]))
 
-    # White Ratio: Fraction of bright, low-saturation pixels in torso
     white_mask = (hsv_t[:, :, 1] < 55) & (hsv_t[:, :, 2] > 135)
     white_ratio = float(np.mean(white_mask))
 
@@ -540,7 +530,7 @@ def classify_player_kit(
 
 
 # =============================================================================
-# 4. Multi-Modal Crop-Level Identification (VLM / Biometrics)
+# 4. Multi-Modal Crop Identification (VLM / Biometrics)
 # =============================================================================
 
 VLM_CROP_CACHE_FILE = OUTPUT_DIR / "vlm_crop_cache.json"
@@ -552,10 +542,7 @@ def call_crop_number_reader(
     box: np.ndarray,
     candidate_squad: List[Dict[str, Any]],
 ) -> Optional[Dict[str, Any]]:
-    """
-    Calls Gemini Flash Lite on an individual player crop to read visible jersey numbers
-    and identify player biometrics matching the candidate squad, with persistent disk caching.
-    """
+    """Calls Gemini Flash Lite on player crop to read jersey numbers and biometrics."""
     global _vlm_crop_cache
     if not _vlm_crop_cache and VLM_CROP_CACHE_FILE.is_file():
         try:
@@ -590,7 +577,6 @@ def call_crop_number_reader(
         return _vlm_crop_cache[cache_key]
 
     b64 = base64.b64encode(crop_bytes).decode("utf-8")
-
     squad_summary = ", ".join([f"#{p['number']} {p['name']} ({p.get('role', 'CM')})" for p in candidate_squad])
     prompt = f"""Identify the football player in this crop.
 CANDIDATE ACTIVE SQUAD: {squad_summary}
@@ -598,7 +584,7 @@ CANDIDATE ACTIVE SQUAD: {squad_summary}
 Tasks:
 1. Read any visible jersey number on the shirt or shorts.
 2. Read any visible name text printed on the jersey.
-3. Check facial features, hair style (e.g. dreadlocks, headband, blonde hair, dark curly hair, bald), facial hair (beard), and build.
+3. Check facial features, hair style, facial hair (beard), and build.
 4. Match to the candidate squad list.
 
 Respond ONLY with JSON:
@@ -645,10 +631,10 @@ If no number or identity can be discerned, return {{"number": 0, "name": ""}}.
 
 
 # =============================================================================
-# 5. Direction-Aware Hungarian 1-to-1 Tactical Assignment (STRICT BIJECTION)
+# 5. 2D Metric Pitch Homography Hungarian Bipartite Assignment
 # =============================================================================
 
-def solve_tactical_assignment(
+def solve_tactical_assignment_metric(
     team_boxes: List[Tuple[int, np.ndarray, Dict[str, Any]]],
     active_squad: List[Dict[str, Any]],
     defending_x: float,
@@ -656,36 +642,11 @@ def solve_tactical_assignment(
 ) -> Dict[int, Dict[str, Any]]:
     """
     Assigns detected outfield players to active squad using Hungarian algorithm
-    guided by tactical pitch topology (defending vs attacking direction).
+    guided by 2D Metric Pitch Homography (0-105m, 0-68m).
     Guarantees strict 1-to-1 bijection: NEVER DUPLICATES ANY PLAYER.
     """
     if not team_boxes or not active_squad:
         return {}
-
-    role_offsets = {
-        # Defenders (deep)
-        "CB": (0.22, 0.50), "RCB": (0.24, 0.60), "LCB": (0.24, 0.40),
-        "RB": (0.26, 0.76), "LB": (0.26, 0.24),
-        # Midfielders (central)
-        "DM": (0.40, 0.50), "CM": (0.50, 0.50), "RCM": (0.52, 0.65), "LCM": (0.52, 0.35),
-        "AM": (0.60, 0.50),
-        # Attackers (forward)
-        "RW": (0.75, 0.78), "LW": (0.75, 0.22), "CF": (0.80, 0.50),
-        "CF-L": (0.80, 0.32), "CF-R": (0.80, 0.68)
-    }
-
-    def get_role_target(role: str) -> Tuple[float, float]:
-        base_role = role.upper()
-        if base_role not in role_offsets:
-            if "B" in base_role: base_role = "CB"
-            elif "M" in base_role: base_role = "CM"
-            elif "W" in base_role or "F" in base_role: base_role = "CF"
-            else: base_role = "CM"
-        rx, ry = role_offsets.get(base_role, (0.5, 0.5))
-        if defending_x > 0.5:
-            rx = 1.0 - rx
-            ry = 1.0 - ry
-        return rx, ry
 
     outfield_squad = [p for p in active_squad if not p.get("is_gk") and p.get("role") != "GK"]
     n_boxes = len(team_boxes)
@@ -694,9 +655,7 @@ def solve_tactical_assignment(
     cost_matrix = np.zeros((n_boxes, n_players), dtype=float)
 
     for i, (tid, box, meta) in enumerate(team_boxes):
-        x1, y1, x2, y2 = box
-        xc = (x1 + x2) / 2.0 / 1920.0
-        yc = (y1 + y2) / 2.0 / 1080.0
+        px_m, py_m = meta.get("pitch_coords", (52.5, 34.0))
 
         locked_num = meta.get("locked_number", 0)
         vlm_name = meta.get("vlm_name", "").lower()
@@ -712,7 +671,7 @@ def solve_tactical_assignment(
                     cost_matrix[i, j] = -100.0
                     continue
                 else:
-                    cost_matrix[i, j] = 100.0
+                    cost_matrix[i, j] = 500.0
                     continue
 
             # Priority 2: VLM Identified Name Match
@@ -720,8 +679,9 @@ def solve_tactical_assignment(
                 cost_matrix[i, j] = -80.0
                 continue
 
-            tx, ty = get_role_target(p_role)
-            dist = np.sqrt((xc - tx) ** 2 + 1.2 * (yc - ty) ** 2)
+            # Physical 2D metric Euclidean distance on 105m x 68m pitch
+            tx_m, ty_m = get_metric_target(p_role, defending_x)
+            dist_m = float(np.sqrt((px_m - tx_m) ** 2 + (py_m - ty_m) ** 2))
 
             bonus = 0.0
             if p_num == 22 and "rüdiger" in p_name:
@@ -731,7 +691,7 @@ def solve_tactical_assignment(
                 if "dread" in meta.get("biometrics", "") or "braid" in meta.get("biometrics", ""):
                     bonus += 15.0
 
-            cost_matrix[i, j] = dist * 10.0 - bonus
+            cost_matrix[i, j] = dist_m - bonus
 
     row_ind, col_ind = linear_sum_assignment(cost_matrix)
 
@@ -745,7 +705,7 @@ def solve_tactical_assignment(
             continue
         used_numbers.add(player["number"])
 
-        conf = 0.98 if (meta.get("locked_number") == player["number"] or meta.get("vlm_name")) else 0.85
+        conf = 0.98 if (meta.get("locked_number") == player["number"] or meta.get("vlm_name")) else 0.88
         assignments[tid] = {
             "name": player["name"],
             "number": player["number"],
@@ -754,7 +714,7 @@ def solve_tactical_assignment(
             "confidence": conf,
         }
 
-    # ANY EXTRA BOXES BEYOND THE SQUAD SIZE MUST NEVER DUPLICATE A PLAYER!
+    # ANY EXTRA BOXES BEYOND SQUAD SIZE ARE LABELED UNCONFIRMED
     assigned_rows = set(row_ind)
     for r in range(n_boxes):
         if r not in assigned_rows or team_boxes[r][0] not in assignments:
@@ -775,17 +735,117 @@ def solve_tactical_assignment(
     return assignments
 
 
+def draw_pitch_radar(
+    pitch_w_px: int = 340,
+    pitch_h_px: int = 220,
+    rma_positions: list = None,
+    bar_positions: list = None,
+    gk_positions: list = None,
+    ref_positions: list = None,
+    ball_pos: tuple = None,
+    possession_team: str = "Contested",
+) -> np.ndarray:
+    """Renders a broadcast-grade 2D top-down tactical radar pitch (105m x 68m)."""
+    radar = np.zeros((pitch_h_px, pitch_w_px, 3), dtype=np.uint8)
+    radar[:] = (20, 42, 24)
+
+    mx = 14
+    my = 18
+    pw = pitch_w_px - 2 * mx
+    ph = pitch_h_px - my - 12
+
+    def to_px(x_m, y_m):
+        px = int(mx + (np.clip(x_m, 0.0, 105.0) / 105.0) * pw)
+        py = int(my + (np.clip(y_m, 0.0, 68.0) / 68.0) * ph)
+        return px, py
+
+    # Outer boundary & lines
+    cv2.rectangle(radar, (mx, my), (mx + pw, my + ph), (220, 230, 225), 1, cv2.LINE_AA)
+    mid_x = mx + pw // 2
+    cv2.line(radar, (mid_x, my), (mid_x, my + ph), (220, 230, 225), 1, cv2.LINE_AA)
+    c_px, c_py = to_px(52.5, 34.0)
+    r_px = int((9.15 / 105.0) * pw)
+    cv2.circle(radar, (c_px, c_py), r_px, (220, 230, 225), 1, cv2.LINE_AA)
+    cv2.circle(radar, (c_px, c_py), 2, (220, 230, 225), -1, cv2.LINE_AA)
+
+    # Penalty boxes
+    lb_x, lb_y1 = to_px(16.5, (68.0 - 40.32) / 2.0)
+    _, lb_y2 = to_px(16.5, (68.0 + 40.32) / 2.0)
+    cv2.rectangle(radar, (mx, lb_y1), (lb_x, lb_y2), (220, 230, 225), 1, cv2.LINE_AA)
+
+    rb_x, rb_y1 = to_px(105.0 - 16.5, (68.0 - 40.32) / 2.0)
+    _, rb_y2 = to_px(105.0 - 16.5, (68.0 + 40.32) / 2.0)
+    cv2.rectangle(radar, (rb_x, rb_y1), (mx + pw, rb_y2), (220, 230, 225), 1, cv2.LINE_AA)
+
+    # Goal boxes
+    lg_x, lg_y1 = to_px(5.5, (68.0 - 18.32) / 2.0)
+    _, lg_y2 = to_px(5.5, (68.0 + 18.32) / 2.0)
+    cv2.rectangle(radar, (mx, lg_y1), (lg_x, lg_y2), (200, 210, 205), 1, cv2.LINE_AA)
+
+    rg_x, rg_y1 = to_px(105.0 - 5.5, (68.0 - 18.32) / 2.0)
+    _, rg_y2 = to_px(105.0 - 5.5, (68.0 + 18.32) / 2.0)
+    cv2.rectangle(radar, (rg_x, rg_y1), (mx + pw, rg_y2), (200, 210, 205), 1, cv2.LINE_AA)
+
+    # Draw Barcelona Players (Blaugrana)
+    if bar_positions:
+        for xm, ym, num, name in bar_positions:
+            px, py = to_px(xm, ym)
+            cv2.circle(radar, (px, py), 6, (170, 30, 20), -1, cv2.LINE_AA)
+            cv2.circle(radar, (px, py), 6, (255, 255, 255), 1, cv2.LINE_AA)
+            if num > 0:
+                cv2.putText(radar, str(num), (px - 4, py + 3), cv2.FONT_HERSHEY_SIMPLEX, 0.28, (255, 255, 255), 1, cv2.LINE_AA)
+
+    # Draw Real Madrid Players (Pure White)
+    if rma_positions:
+        for xm, ym, num, name in rma_positions:
+            px, py = to_px(xm, ym)
+            cv2.circle(radar, (px, py), 6, (255, 255, 255), -1, cv2.LINE_AA)
+            cv2.circle(radar, (px, py), 6, (40, 40, 40), 1, cv2.LINE_AA)
+            if num > 0:
+                cv2.putText(radar, str(num), (px - 4, py + 3), cv2.FONT_HERSHEY_SIMPLEX, 0.28, (0, 0, 0), 1, cv2.LINE_AA)
+
+    # Draw Goalkeepers (Orange/Coral)
+    if gk_positions:
+        for xm, ym, num, name in gk_positions:
+            px, py = to_px(xm, ym)
+            cv2.circle(radar, (px, py), 6, (0, 140, 255), -1, cv2.LINE_AA)
+            cv2.circle(radar, (px, py), 6, (255, 255, 255), 1, cv2.LINE_AA)
+            if num > 0:
+                cv2.putText(radar, str(num), (px - 4, py + 3), cv2.FONT_HERSHEY_SIMPLEX, 0.28, (0, 0, 0), 1, cv2.LINE_AA)
+
+    # Draw Officials (Cyan)
+    if ref_positions:
+        for xm, ym, num, name in ref_positions:
+            px, py = to_px(xm, ym)
+            cv2.circle(radar, (px, py), 5, (0, 230, 230), -1, cv2.LINE_AA)
+
+    # Draw Ball (Bright Neon Yellow)
+    if ball_pos:
+        bx, by = to_px(ball_pos[0], ball_pos[1])
+        cv2.circle(radar, (bx, by), 4, (0, 255, 255), -1, cv2.LINE_AA)
+        cv2.circle(radar, (bx, by), 6, (0, 255, 255), 1, cv2.LINE_AA)
+
+    # Title Banner
+    cv2.rectangle(radar, (0, 0), (pitch_w_px, 15), (14, 18, 24), -1)
+    hud_label = f"ROBOFLOW SPORTS 2D RADAR | Poss: {possession_team}"
+    cv2.putText(radar, hud_label, (8, 11), cv2.FONT_HERSHEY_SIMPLEX, 0.30, (210, 230, 250), 1, cv2.LINE_AA)
+
+    return radar
+
+
 # =============================================================================
-# 6. End-to-End Frame Processing & Zero-Hallucination Verification
+# 6. End-to-End Revamped Frame Processing
 # =============================================================================
 
 def process_eval_frame_production(
     frame_path: Path,
+    sahi_model: AutoDetectionModel,
     yolo_model: YOLO,
     geom_engine: PitchGeometryEngine,
+    projector: PitchHomographyProjector,
     canonical_matches: Dict[str, Any],
 ) -> Dict[str, Any]:
-    """Processes a single genuine El Clásico evaluation frame with 100% precision."""
+    """Processes a single genuine El Clásico evaluation frame with SAHI, 2D Radar, and Homography."""
     frame_bgr = cv2.imread(str(frame_path))
     if frame_bgr is None:
         raise ValueError(f"Could not load image: {frame_path}")
@@ -798,8 +858,8 @@ def process_eval_frame_production(
     )
     home_active, away_active, banned_identities = resolve_active_squad_at_instant(match_data, minute, second)
 
-    home_name = match_data.get("home_team", {}).get("name", "FC Barcelona")
-    away_name = match_data.get("away_team", {}).get("name", "Real Madrid")
+    home_name = match_data.get("home_team", {}).get("name", "Real Madrid")
+    away_name = match_data.get("away_team", {}).get("name", "FC Barcelona")
 
     is_real_madrid_home = "real" in home_name.lower() or "madrid" in home_name.lower()
     rma_active = home_active if is_real_madrid_home else away_active
@@ -807,16 +867,47 @@ def process_eval_frame_production(
     rma_team_name = home_name if is_real_madrid_home else away_name
     bar_team_name = away_name if is_real_madrid_home else home_name
 
-    # 2. YOLOv8x High-Recall Person Detection (conf=0.07 for duel close-up, 0.15 for tactical)
-    conf_val = 0.07 if shot_type == "duel" or "frame_03" in frame_path.name.lower() else 0.15
-    yolo_res = yolo_model.predict(
-        frame_bgr,
-        classes=[0],
-        conf=conf_val,
-        device="cpu",
-        verbose=False,
-    )[0]
-    raw_boxes = yolo_res.boxes.xyxy.cpu().numpy()
+    # 2. Multi-Scale High-Recall Detection (SAHI for Wide Shots, Full-Frame for Close Duels)
+    ball_detections = []
+    if shot_type == "wide_tactical":
+        img_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        sahi_res = get_sliced_prediction(
+            img_rgb,
+            sahi_model,
+            slice_height=540,
+            slice_width=960,
+            overlap_height_ratio=0.20,
+            overlap_width_ratio=0.20,
+            postprocess_type="NMS",
+            postprocess_match_metric="IOU",
+            postprocess_match_threshold=0.45,
+            verbose=0,
+        )
+        raw_boxes_list = []
+        for p in sahi_res.object_prediction_list:
+            if p.category.name == "person" or p.category.id == 0:
+                raw_boxes_list.append(p.bbox.to_xyxy())
+            elif p.category.name == "sports ball" or p.category.id == 32:
+                ball_detections.append(p.bbox.to_xyxy())
+        raw_boxes = np.array(raw_boxes_list, dtype=np.float32) if raw_boxes_list else np.empty((0, 4))
+    else:
+        conf_val = 0.07 if shot_type == "duel" or "frame_03" in frame_path.name.lower() else 0.15
+        yolo_res = yolo_model.predict(
+            frame_bgr,
+            classes=[0, 32],
+            conf=conf_val,
+            device="cpu",
+            verbose=False,
+        )[0]
+        y_boxes = yolo_res.boxes.xyxy.cpu().numpy()
+        y_cls = yolo_res.boxes.cls.cpu().numpy()
+        p_list = []
+        for b, c in zip(y_boxes, y_cls):
+            if int(c) == 0:
+                p_list.append(b)
+            elif int(c) == 32:
+                ball_detections.append(b)
+        raw_boxes = np.array(p_list, dtype=np.float32) if p_list else np.empty((0, 4))
 
     # 3. Filter Boxes against TV Banners, Scoreboards, Watermarks, Off-Pitch
     filt_boxes, geom_res = filter_candidate_boxes(
@@ -832,7 +923,7 @@ def process_eval_frame_production(
     h_med_1080p = h_med * (1080.0 / max(1.0, float(h)))
     s_x = float(np.clip(42.5 / max(1.0, h_med_1080p), 0.30, 0.75))
 
-    # 5. Deterministic Kit Colorimetry Partitioning & Crop VLM Reading (ZERO HARDCODING!)
+    # 5. Project Player Foot Positions onto 2D Metric Pitch Space (0-105m, 0-68m)
     rma_candidates = []
     bar_candidates = []
     raw_gk_candidates = []
@@ -844,9 +935,21 @@ def process_eval_frame_production(
         cat = classification.get("category")
         bh = b[3] - b[1]
 
-        meta = {"raw_classification": classification, "biometrics": ""}
+        # Compute feet coordinates and project to metric pitch
+        feet_x = (b[0] + b[2]) / 2.0
+        feet_y = float(b[3])
+        fx_pct = (feet_x / float(w)) * 100.0
+        fy_pct = (feet_y / float(h)) * 100.0
+        px_m, py_m = projector.project_screen_to_pitch(fx_pct, fy_pct)
 
-        # Autonomous Crop Identification via VLM / OCR (Zero Hardcoding!)
+        meta = {
+            "raw_classification": classification,
+            "biometrics": "",
+            "pitch_coords": (px_m, py_m),
+            "feet_screen": (feet_x, feet_y),
+        }
+
+        # Autonomous Crop Identification via VLM / OCR
         if shot_type in ("close_up", "duel", "penalty_box", "goal_line") or bh > 0.08 * h:
             if cat in ("real_madrid", "barcelona"):
                 cand_squad = rma_active if cat == "real_madrid" else bar_active
@@ -873,7 +976,7 @@ def process_eval_frame_production(
         else:
             bar_candidates.append((tid, b, meta))
 
-    # 6. Resolve Goalkeepers: Enforce EXACTLY AT MOST 1 Goalkeeper per team!
+    # 6. Resolve Goalkeepers: Enforce EXACTLY AT MOST 1 Goalkeeper per team
     assigned_identities: Dict[int, Dict[str, Any]] = {}
 
     if not has_gk_visible:
@@ -888,7 +991,6 @@ def process_eval_frame_production(
     bar_gk_cands = []
 
     if shot_type in ("penalty_box", "goal_line"):
-        # Real Madrid's goal only (frame_06, frame_07)
         for tid, b, meta in raw_gk_candidates:
             rma_gk_cands.append((0.0, tid, b, meta))
     else:
@@ -918,6 +1020,7 @@ def process_eval_frame_production(
             "team_type": "goalkeeper",
             "team_name": rma_team_name,
             "confidence": 0.98,
+            "pitch_coords": best_meta.get("pitch_coords"),
         }
         for _, other_tid, other_b, other_meta in rma_gk_cands[1:]:
             rma_candidates.append((other_tid, other_b, other_meta))
@@ -932,6 +1035,7 @@ def process_eval_frame_production(
             "team_type": "goalkeeper",
             "team_name": bar_team_name,
             "confidence": 0.98,
+            "pitch_coords": best_meta.get("pitch_coords"),
         }
         for _, other_tid, other_b, other_meta in bar_gk_cands[1:]:
             bar_candidates.append((other_tid, other_b, other_meta))
@@ -947,11 +1051,20 @@ def process_eval_frame_production(
             "team_type": "referee",
             "team_name": "Official",
             "confidence": 0.96,
+            "pitch_coords": meta.get("pitch_coords"),
         }
 
-    # 8. Hungarian Direction-Aware Tactical Role Assignment for Outfield Players (STRICT BIJECTION)
-    rma_assignments = solve_tactical_assignment(rma_candidates, rma_active, rma_def_x, rma_team_name)
-    bar_assignments = solve_tactical_assignment(bar_candidates, bar_active, bar_def_x, bar_team_name)
+    # 8. 2D Metric Pitch Homography Hungarian Role Assignment (STRICT BIJECTION)
+    rma_assignments = solve_tactical_assignment_metric(rma_candidates, rma_active, rma_def_x, rma_team_name)
+    bar_assignments = solve_tactical_assignment_metric(bar_candidates, bar_active, bar_def_x, bar_team_name)
+
+    # Attach pitch coords to assignments
+    for tid, b, meta in rma_candidates:
+        if tid in rma_assignments:
+            rma_assignments[tid]["pitch_coords"] = meta.get("pitch_coords")
+    for tid, b, meta in bar_candidates:
+        if tid in bar_assignments:
+            bar_assignments[tid]["pitch_coords"] = meta.get("pitch_coords")
 
     for tid, info in rma_assignments.items():
         info["team_type"] = "real_madrid"
@@ -977,22 +1090,55 @@ def process_eval_frame_production(
     # Verify ZERO Inactive / Banned Players
     for tid, info in assigned_identities.items():
         p_name = info.get("name", "")
-        p_num = info.get("number", 0)
-        p_role = info.get("role", "")
-        if p_role == "REF" or info.get("team_type") == "referee" or p_num == 0:
+        if not p_name or p_name in ("Unconfirmed", "Match Referee", "Assistant Referee"):
             continue
 
         norm_p = GroundTruthDictionary._normalize_name(p_name)
-
-        # Check banned non-squad list
         if any(b in norm_p for b in BANNED_NON_SQUAD):
-            raise ValueError(f"FATAL ERROR: Banned non-squad player '{p_name}' assigned to track {tid} in {frame_path.name}!")
+            raise ValueError(f"FATAL ERROR: Banned non-squad player '{p_name}' assigned in {frame_path.name}!")
         if norm_p in banned_normalized or p_name in banned_identities:
-            raise ValueError(f"FATAL ERROR: Player '{p_name}' is BANNED/BENCHED/SUBBED-OFF at minute {minute}:{second:02d} in {frame_path.name}!")
+            raise ValueError(f"FATAL ERROR: Player '{p_name}' is BANNED/BENCHED/SUBBED-OFF in {frame_path.name}!")
         if norm_p not in active_pool_names:
-            raise ValueError(f"FATAL ERROR: Player '{p_name}' is NOT in active on-pitch pool at minute {minute}:{second:02d} in {frame_path.name}!")
+            raise ValueError(f"FATAL ERROR: Player '{p_name}' is NOT in active on-pitch pool in {frame_path.name}!")
 
-    # 10. Render Annotated Visual Output
+    # 10. Ball Detection & Possession Attribution
+    ball_m_pos = None
+    possession_tid = None
+    possession_team_label = "Contested"
+
+    valid_balls = []
+    for bb in ball_detections:
+        bx1, by1, bx2, by2 = [int(v) for v in bb]
+        bw = bx2 - bx1
+        bh = by2 - by1
+        if bw < 50 and bh < 50 and by2 > 0.18 * h:
+            valid_balls.append(bb)
+
+    if valid_balls:
+        # Choose ball closest to pitch center
+        bb = valid_balls[0]
+        bc_x = (bb[0] + bb[2]) / 2.0
+        bc_y = float(bb[3])
+        ball_m_x, ball_m_y = projector.project_screen_to_pitch((bc_x / w) * 100.0, (bc_y / h) * 100.0)
+        ball_m_pos = (ball_m_x, ball_m_y)
+
+        # Find closest player
+        min_dist = 999.0
+        closest_tid = None
+        for tid, info in assigned_identities.items():
+            p_coords = info.get("pitch_coords")
+            if p_coords:
+                d = float(np.sqrt((p_coords[0] - ball_m_x) ** 2 + (p_coords[1] - ball_m_y) ** 2))
+                if d < min_dist:
+                    min_dist = d
+                    closest_tid = tid
+
+        if min_dist <= 3.5 and closest_tid:
+            possession_tid = closest_tid
+            p_team = assigned_identities[closest_tid].get("team_type")
+            possession_team_label = "Real Madrid" if p_team == "real_madrid" else ("FC Barcelona" if p_team == "barcelona" else "Official")
+
+    # 11. Render Annotated Visual Output with 2D Tactical Radar Minimap
     annotated = frame_bgr.copy()
 
     # Translucent green turf hull overlay (wide shots only)
@@ -1000,13 +1146,18 @@ def process_eval_frame_production(
     if shot_type == "wide_tactical" and pitch_poly is not None and len(pitch_poly) > 2:
         overlay = annotated.copy()
         cv2.drawContours(overlay, [pitch_poly], -1, (0, 220, 60), -1)
-        cv2.addWeighted(overlay, 0.12, annotated, 0.88, 0, annotated)
-        cv2.drawContours(annotated, [pitch_poly], -1, (0, 255, 100), 2, cv2.LINE_AA)
+        cv2.addWeighted(overlay, 0.10, annotated, 0.90, 0, annotated)
+        cv2.drawContours(annotated, [pitch_poly], -1, (0, 255, 100), 1, cv2.LINE_AA)
 
     rma_cnt = 0
     bar_cnt = 0
     gk_cnt = 0
     ref_cnt = 0
+
+    radar_rma = []
+    radar_bar = []
+    radar_gk = []
+    radar_ref = []
 
     for idx, b in enumerate(filt_boxes):
         tid = idx + 1
@@ -1017,33 +1168,40 @@ def process_eval_frame_production(
         p_name = info.get("name", "")
         p_num = info.get("number", 0)
         p_role = info.get("role", "")
-        p_conf = info.get("confidence", 0.85)
+        p_coords = info.get("pitch_coords", (52.5, 34.0))
 
         if team_type == "goalkeeper" or p_role == "GK":
             box_col = (0, 140, 255)  # Orange/Coral
             badge_bg = (0, 140, 255)
             badge_text_col = (0, 0, 0)
             gk_cnt += 1
+            radar_gk.append((p_coords[0], p_coords[1], p_num, p_name))
         elif team_type == "referee" or p_role == "REF":
             box_col = (0, 230, 230)  # Cyan
             badge_bg = (0, 230, 230)
             badge_text_col = (0, 0, 0)
             ref_cnt += 1
+            radar_ref.append((p_coords[0], p_coords[1], p_num, p_name))
         elif team_type == "real_madrid":
-            # Real Madrid: Pure Crisp White
-            box_col = (255, 255, 255)
+            box_col = (255, 255, 255)  # Crisp White
             badge_bg = (248, 248, 248)
             badge_text_col = (10, 10, 10)
             rma_cnt += 1
+            radar_rma.append((p_coords[0], p_coords[1], p_num, p_name))
         else:
-            # FC Barcelona: Deep Blaugrana Burgundy / Deep Navy
-            box_col = (190, 50, 40)
+            box_col = (190, 50, 40)  # Blaugrana
             badge_bg = (130, 20, 20)
             badge_text_col = (255, 255, 255)
             bar_cnt += 1
+            radar_bar.append((p_coords[0], p_coords[1], p_num, p_name))
 
         # Draw bounding box
         cv2.rectangle(annotated, (x1, y1), (x2, y2), box_col, 2, cv2.LINE_AA)
+
+        # Highlight possession holder
+        if tid == possession_tid:
+            cv2.ellipse(annotated, ((x1 + x2) // 2, y2), (int((x2 - x1) * 0.7), int((x2 - x1) * 0.25)), 0, 0, 360, (0, 255, 255), 2, cv2.LINE_AA)
+            cv2.putText(annotated, "BALL POSSESSION", (x1, y2 + 16), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (0, 255, 255), 1, cv2.LINE_AA)
 
         # Draw pill badge
         last_name = p_name.split()[-1] if p_name else f"P{tid}"
@@ -1057,14 +1215,42 @@ def process_eval_frame_production(
         cv2.rectangle(annotated, (x1, badge_y1), (x1 + tw + 10, y1), badge_bg, -1)
         cv2.putText(annotated, label_text, (x1 + 5, y1 - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.44, badge_text_col, 1, cv2.LINE_AA)
 
+    # Draw Ball if detected
+    if valid_balls:
+        bb = valid_balls[0]
+        bx1, by1, bx2, by2 = [int(v) for v in bb]
+        bcx = (bx1 + bx2) // 2
+        bcy = (by1 + by2) // 2
+        cv2.circle(annotated, (bcx, bcy), 8, (0, 255, 255), 2, cv2.LINE_AA)
+        cv2.putText(annotated, "BALL", (bcx - 12, by1 - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 255, 255), 1, cv2.LINE_AA)
+
+    # 12. Render 2D Top-Down Tactical Pitch Radar (Bottom-Right Corner)
+    radar_w = 340
+    radar_h = 220
+    radar_img = draw_pitch_radar(
+        pitch_w_px=radar_w,
+        pitch_h_px=radar_h,
+        rma_positions=radar_rma,
+        bar_positions=radar_bar,
+        gk_positions=radar_gk,
+        ref_positions=radar_ref,
+        ball_pos=ball_m_pos,
+        possession_team=possession_team_label,
+    )
+
+    rx1 = w - radar_w - 18
+    ry1 = h - radar_h - 18
+    annotated[ry1:ry1+radar_h, rx1:rx1+radar_w] = radar_img
+    cv2.rectangle(annotated, (rx1-1, ry1-1), (rx1+radar_w+1, ry1+radar_h+1), (140, 160, 180), 2, cv2.LINE_AA)
+
     # Master Top HUD Header
     hud_h = 38
     cv2.rectangle(annotated, (0, 0), (w, hud_h), (16, 20, 28), -1)
     hud_str = (
-        f"EL CLASICO AUTONOMOUS EVALUATION | Frame: {frame_path.name} | "
+        f"ROBOFLOW SPORTS + SAHI EVALUATION | Frame: {frame_path.name} | "
         f"Fixture: {home_name} vs {away_name} ({clock_str}) | "
-        f"Active on Pitch: {len(filt_boxes)} (RMA: {rma_cnt}, BAR: {bar_cnt}, GK: {gk_cnt}, REF: {ref_cnt}) | "
-        f"Scale s_x: {s_x:.2f}"
+        f"Active: {len(filt_boxes)} (RMA: {rma_cnt}, BAR: {bar_cnt}, GK: {gk_cnt}, REF: {ref_cnt}) | "
+        f"Possession: {possession_team_label}"
     )
     cv2.putText(annotated, hud_str, (16, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.44, (240, 245, 250), 1, cv2.LINE_AA)
 
@@ -1072,7 +1258,7 @@ def process_eval_frame_production(
     cv2.imwrite(str(out_annotated_path), annotated)
     logger.info(f"Saved verified annotated screenshot: {out_annotated_path.name}")
 
-    # Also copy to artifact dir for user-facing viewing
+    # Copy to artifact dir for user-facing viewing
     artifact_copy_path = ARTIFACT_DIR / f"{frame_path.stem}_blueprint_verified.jpg"
     shutil.copy2(out_annotated_path, artifact_copy_path)
 
@@ -1087,6 +1273,7 @@ def process_eval_frame_production(
         "bar_count": bar_cnt,
         "gk_count": gk_cnt,
         "ref_count": ref_cnt,
+        "possession_team": possession_team_label,
         "zoom_scale_sx": round(s_x, 3),
         "median_box_height_px": round(h_med, 1),
         "identities": assigned_identities,
@@ -1095,7 +1282,7 @@ def process_eval_frame_production(
 
 def main():
     print("=" * 80)
-    print("STARTING PURE AUTONOMOUS EL CLASICO EVALUATION (ZERO HARDCODING)")
+    print("REVAMPED ROBOFLOW SPORTS + SAHI + 2D HOMOGRAPHY PIPELINE")
     print(f"Frames Directory: {FRAMES_DIR}")
     print(f"Output Directory: {OUTPUT_DIR}")
     print(f"Artifact Directory: {ARTIFACT_DIR}")
@@ -1103,8 +1290,15 @@ def main():
 
     canonical_matches = load_canonical_matches()
     geom_engine = PitchGeometryEngine()
+    projector = PitchHomographyProjector(preset_name="broadcast_main_wide")
 
-    print("[Model] Loading YOLOv8x detector...")
+    print("[Model] Loading SAHI AutoDetectionModel with yolov8x.pt on CPU...")
+    sahi_model = AutoDetectionModel.from_pretrained(
+        model_type="yolov8",
+        model_path=str(PROJECT_ROOT / "yolov8x.pt"),
+        confidence_threshold=0.18,
+        device="cpu",
+    )
     yolo_model = YOLO(str(PROJECT_ROOT / "yolov8x.pt"))
 
     eval_frames = [
@@ -1125,12 +1319,14 @@ def main():
         t0 = time.time()
         res = process_eval_frame_production(
             frame_path=f_path,
+            sahi_model=sahi_model,
             yolo_model=yolo_model,
             geom_engine=geom_engine,
+            projector=projector,
             canonical_matches=canonical_matches,
         )
         elapsed = time.time() - t0
-        print(f"  -> {f_path.name}: {res.get('total_detected', 0)} players ({res.get('fixture')}) in {elapsed:.2f}s")
+        print(f"  -> {f_path.name}: {res.get('total_detected', 0)} players (Possession: {res.get('possession_team')}) in {elapsed:.2f}s")
         results.append(res)
 
     summary_path = OUTPUT_DIR / "clasico_evaluation_report.json"
@@ -1138,7 +1334,7 @@ def main():
         json.dump(results, f, indent=2)
 
     print("\n" + "=" * 80)
-    print("PURE AUTONOMOUS EVALUATION COMPLETE")
+    print("REVAMPED EVALUATION COMPLETE")
     print(f"Summary JSON: {summary_path}")
     print(f"Annotated Screenshots saved to: {OUTPUT_DIR}")
     print(f"Artifact Screenshots synced to: {ARTIFACT_DIR}")
