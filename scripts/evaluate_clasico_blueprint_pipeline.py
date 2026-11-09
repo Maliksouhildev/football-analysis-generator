@@ -87,7 +87,10 @@ logger = logging.getLogger("evaluate_clasico_blueprint_pipeline")
 BANNED_NON_SQUAD = {
     "benzema", "busquets", "casemiro", "bale", "ronaldo", "messi", "suarez",
     "neymar", "marcelo", "varane", "isco", "asensio", "hazard", "courtois",
-    "mbappe", "mbappé", "militao", "militão", "endrick", "arda güler", "guler", "vallejo"
+    "alaba", "david alaba", "carvajal", "dani carvajal", "ferran torres", "ferran",
+    "ter stegen", "christensen", "araujo", "kroos", "toni kroos", "kepa",
+    "nacho", "joselu", "gündogan", "gundogan", "cancelo", "félix", "felix",
+    "arda güler", "guler", "endrick", "vallejo", "ceballos"
 }
 
 
@@ -105,14 +108,14 @@ def load_canonical_matches() -> Dict[str, Any]:
             with open(CANONICAL_MATCHES_PATH, "r", encoding="utf-8") as f:
                 d = json.load(f)
                 matches = d.get("matches", d)
-                if matches and "barcelona_vs_real_madrid_2023_oct28" in matches:
+                if matches and "real_madrid_vs_barcelona_2024_oct26" in matches:
                     return matches
         except Exception as e:
             logger.warning(f"Error reading {CANONICAL_MATCHES_PATH}: {e}")
 
-    logger.info("[AutonomousResolver] Querying ESPN Public API for authentic matchday data (2023-10-28)...")
+    logger.info("[AutonomousResolver] Querying ESPN Public API for authentic matchday data (2024-10-26)...")
     resolver = AutonomousMatchResolver()
-    res = resolver.resolve(home="Barcelona", away="Real Madrid", date="2023-10-28")
+    res = resolver.resolve(home="Real Madrid", away="Barcelona", date="2024-10-26")
 
     rosters = res.get("rosters", {})
     home_players = rosters.get("home", [])
@@ -132,10 +135,10 @@ def load_canonical_matches() -> Dict[str, Any]:
         {
             "minute": s["minute"],
             "second": s.get("second", 0),
-            "player_out": s["player_out"],
-            "player_in": s["player_in"],
-            "in_number": s["in_num"],
-            "in_role": s.get("in_role", "MF"),
+            "player_out": s.get("player_out") or s.get("out", {}).get("name", ""),
+            "player_in": s.get("player_in") or s.get("in", {}).get("name", ""),
+            "in_number": s.get("in_num") or s.get("in_number", 0),
+            "in_role": s.get("in_role") or s.get("in", {}).get("role", "MF"),
         }
         for s in subs if s.get("team") == "home"
     ]
@@ -143,10 +146,10 @@ def load_canonical_matches() -> Dict[str, Any]:
         {
             "minute": s["minute"],
             "second": s.get("second", 0),
-            "player_out": s["player_out"],
-            "player_in": s["player_in"],
-            "in_number": s["in_num"],
-            "in_role": s.get("in_role", "MF"),
+            "player_out": s.get("player_out") or s.get("out", {}).get("name", ""),
+            "player_in": s.get("player_in") or s.get("in", {}).get("name", ""),
+            "in_number": s.get("in_num") or s.get("in_number", 0),
+            "in_role": s.get("in_role") or s.get("in", {}).get("role", "MF"),
         }
         for s in subs if s.get("team") == "away"
     ]
@@ -161,23 +164,23 @@ def load_canonical_matches() -> Dict[str, Any]:
     ]
 
     match_payload = {
-        "date": "2023-10-28",
+        "date": "2024-10-26",
         "competition": "La Liga EA Sports Matchday 11",
-        "venue": "Estadi Olímpic Lluís Companys (Montjuïc)",
-        "score": res.get("score", "1 - 2"),
+        "venue": "Santiago Bernabéu",
+        "score": res.get("score", "0 - 4"),
         "home_team": {
-            "name": "FC Barcelona",
-            "short_name": "BAR",
-            "kit_color": "blaugrana",
+            "name": "Real Madrid",
+            "short_name": "RMA",
+            "kit_color": "white",
             "starting_xi": home_starters,
             "substitutes": home_bench,
             "substitutions": home_subs,
             "red_cards": [],
         },
         "away_team": {
-            "name": "Real Madrid",
-            "short_name": "RMA",
-            "kit_color": "white",
+            "name": "FC Barcelona",
+            "short_name": "BAR",
+            "kit_color": "blaugrana",
             "starting_xi": away_starters,
             "substitutes": away_bench,
             "substitutions": away_subs,
@@ -186,7 +189,7 @@ def load_canonical_matches() -> Dict[str, Any]:
     }
 
     matches_dict = {
-        "barcelona_vs_real_madrid_2023_oct28": match_payload,
+        "real_madrid_vs_barcelona_2024_oct26": match_payload,
     }
 
     try:
@@ -231,10 +234,10 @@ def resolve_active_squad_at_instant(
             s_sec = s.get("second", 0)
             s_total = s_min * 60 + s_sec
             if s_total <= current_sec:
-                p_out_name = s.get("player_out", "")
-                p_in_name = s.get("player_in", "")
-                in_num = s.get("in_number", 0)
-                in_role = s.get("in_role", "MF")
+                p_out_name = s.get("player_out") or s.get("out", {}).get("name", "")
+                p_in_name = s.get("player_in") or s.get("in", {}).get("name", "")
+                in_num = s.get("in_number") or s.get("in_num") or s.get("in", {}).get("num", 0)
+                in_role = s.get("in_role") or s.get("in", {}).get("role", "MF")
 
                 norm_out = GroundTruthDictionary._normalize_name(p_out_name)
                 norm_in = GroundTruthDictionary._normalize_name(p_in_name)
@@ -341,7 +344,11 @@ def get_frame_metadata(
         shot_type = "wide_tactical"
         has_gk_visible = False
 
-    match_data = canonical_matches.get("barcelona_vs_real_madrid_2023_oct28") or list(canonical_matches.values())[0]
+    match_data = (
+        canonical_matches.get("real_madrid_vs_barcelona_2024_oct26")
+        or canonical_matches.get("barcelona_vs_real_madrid_2024")
+        or list(canonical_matches.values())[0]
+    )
 
     return match_data, minute, second, clock_str, shot_type, rma_def_x, bar_def_x, has_gk_visible
 
@@ -663,7 +670,8 @@ def solve_tactical_assignment(
         "DM": (0.40, 0.50), "CM": (0.50, 0.50), "RCM": (0.52, 0.65), "LCM": (0.52, 0.35),
         "AM": (0.60, 0.50),
         # Attackers (forward)
-        "RW": (0.75, 0.78), "LW": (0.75, 0.22), "CF": (0.80, 0.50)
+        "RW": (0.75, 0.78), "LW": (0.75, 0.22), "CF": (0.80, 0.50),
+        "CF-L": (0.80, 0.32), "CF-R": (0.80, 0.68)
     }
 
     def get_role_target(role: str) -> Tuple[float, float]:
@@ -749,7 +757,7 @@ def solve_tactical_assignment(
     # ANY EXTRA BOXES BEYOND THE SQUAD SIZE MUST NEVER DUPLICATE A PLAYER!
     assigned_rows = set(row_ind)
     for r in range(n_boxes):
-        if r not in assigned_rows:
+        if r not in assigned_rows or team_boxes[r][0] not in assignments:
             tid, box, meta = team_boxes[r]
             assignments[tid] = {
                 "name": "Unconfirmed",
@@ -873,8 +881,8 @@ def process_eval_frame_production(
             rma_candidates.append((tid, b, meta))
         raw_gk_candidates = []
 
-    rma_gk_player = next((p for p in rma_active if p.get("is_gk")), {"name": "Kepa Arrizabalaga", "number": 25, "role": "GK"})
-    bar_gk_player = next((p for p in bar_active if p.get("is_gk")), {"name": "Marc-André ter Stegen", "number": 1, "role": "GK"})
+    rma_gk_player = next((p for p in rma_active if p.get("is_gk")), {"name": "Andriy Lunin", "number": 13, "role": "GK"})
+    bar_gk_player = next((p for p in bar_active if p.get("is_gk")), {"name": "Iñaki Peña", "number": 13, "role": "GK"})
 
     rma_gk_cands = []
     bar_gk_cands = []
