@@ -54,12 +54,22 @@ class VideoTrackingPipeline:
         home_team_name: str = "Real Madrid",
         away_team_name: str = "Barcelona",
         canonical_roster_path: Optional[str] = None,
+        home_def_x: Optional[float] = None,
+        away_def_x: Optional[float] = None,
+        period: Optional[int] = None,
+        match_minute: int = 46,
     ):
         self.stride = stride
         self.conf_thresh = conf_thresh
         self.device = device
         self.home_team_name = home_team_name
         self.away_team_name = away_team_name
+        self.match_minute = match_minute
+        self.period = period if period is not None else (2 if match_minute > 45 else 1)
+        # Halftime orientation: Period 1 (RMA defends right 1.0), Period 2 (RMA defends left 0.0)
+        self.home_def_x = home_def_x if home_def_x is not None else (0.0 if self.period == 2 else 1.0)
+        self.away_def_x = away_def_x if away_def_x is not None else (1.0 if self.period == 2 else 0.0)
+        self.locked_track_identities: Dict[int, Dict[str, Any]] = {}
 
         print(f"[VideoTrackingPipeline] Loading YOLO model from {yolo_model_path} on {device}...")
         self.yolo = YOLO(yolo_model_path)
@@ -289,14 +299,33 @@ class VideoTrackingPipeline:
                 frame_cache=shot_frame_cache,
                 active_roster=self.roster,
                 fps=fps,
+                home_def_x=self.home_def_x,
+                away_def_x=self.away_def_x,
+                period=self.period,
             )
 
             identities: Dict[int, Dict[str, Any]] = {}
             if home_payload:
-                h_ids = self.batcher.resolve_team_identities(home_payload, output_dir)
+                # Track-level cache check: reuse high-confidence assignments
+                if all(tid in self.locked_track_identities for tid in home_payload.track_ids):
+                    h_ids = {tid: dict(self.locked_track_identities[tid]) for tid in home_payload.track_ids}
+                    print(f"[VideoTrackingPipeline] Track-level Cache HIT: Reused {len(h_ids)} {self.home_team_name} identities")
+                else:
+                    h_ids = self.batcher.resolve_team_identities(home_payload, output_dir)
+                    for tid, id_data in h_ids.items():
+                        if id_data.get("confidence", 0.0) >= 0.80:
+                            self.locked_track_identities[tid] = id_data
                 identities.update(h_ids)
+
             if away_payload:
-                a_ids = self.batcher.resolve_team_identities(away_payload, output_dir)
+                if all(tid in self.locked_track_identities for tid in away_payload.track_ids):
+                    a_ids = {tid: dict(self.locked_track_identities[tid]) for tid in away_payload.track_ids}
+                    print(f"[VideoTrackingPipeline] Track-level Cache HIT: Reused {len(a_ids)} {self.away_team_name} identities")
+                else:
+                    a_ids = self.batcher.resolve_team_identities(away_payload, output_dir)
+                    for tid, id_data in a_ids.items():
+                        if id_data.get("confidence", 0.0) >= 0.80:
+                            self.locked_track_identities[tid] = id_data
                 identities.update(a_ids)
 
             for tid, id_data in identities.items():

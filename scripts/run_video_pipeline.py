@@ -31,7 +31,7 @@ import cv2
 import numpy as np
 
 # Ensure project root is in sys.path
-PROJECT_ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -39,6 +39,7 @@ from src.vision.player_identity_resolver import PlayerIdentityResolver
 from src.vision.player_detector import CVPlayerDetector
 from src.vision.tactical_vision_engine import TacticalVisionEngine
 from src.vision.match_roster_engine import ActiveXIResolver
+from src.detection_engine.tracking.video_pipeline import VideoTrackingPipeline
 
 logging.basicConfig(
     level=logging.INFO,
@@ -259,6 +260,10 @@ def main():
     parser.add_argument("--api-key", type=str, default=None, help="Gemini API Key (optional, defaults to GEMINI_API_KEY env).")
     parser.add_argument("--no-vlm", action="store_true", help="Disable VLM and use local Hungarian solver only.")
     parser.add_argument("--force-frame", action="store_true", help="Force exact frame index without scanning for wide tactical view.")
+    parser.add_argument("--continuous", "-c", action="store_true", help="Run full continuous video tracking across all frames using BoT-SORT + SmartCollageBatcher.")
+    parser.add_argument("--max-frames", type=int, default=None, help="Maximum number of frames to process in continuous mode.")
+    parser.add_argument("--stride", type=int, default=2, help="Frame stride for detection in continuous mode (default: 2).")
+    parser.add_argument("--render-video", action="store_true", default=True, help="Render tracked output MP4 video with tactical HUD badges.")
 
     args = parser.parse_args()
 
@@ -273,6 +278,44 @@ def main():
     period = args.period if args.period is not None else (2 if args.minute > 45 else 1)
     api_key = args.api_key or os.environ.get("GEMINI_API_KEY")
     use_vlm = not args.no_vlm and bool(api_key)
+
+    # -------------------------------------------------------------------------
+    # CONTINUOUS VIDEO MODE: BoT-SORT + SmartCollageBatcher + VLM Caching
+    # -------------------------------------------------------------------------
+    if args.continuous or (input_path.suffix.lower() in (".mp4", ".mkv", ".avi", ".mov", ".ts") and not args.force_frame and args.frame_idx == 66 and not args.overrides):
+        logger.info("Executing Continuous Video Tracking Pipeline...")
+        yolo_path = "yolov8x.pt" if Path("yolov8x.pt").is_file() else "yolov8n.pt"
+        roster_path = str(PROJECT_ROOT / "test_data" / "canonical_el_clasico_roster.json")
+
+        pipeline = VideoTrackingPipeline(
+            yolo_model_path=yolo_path,
+            stride=args.stride,
+            conf_thresh=0.25,
+            device="cpu",
+            home_team_name=args.home,
+            away_team_name=args.away,
+            canonical_roster_path=roster_path if Path(roster_path).is_file() else None,
+            period=period,
+            match_minute=args.minute,
+        )
+
+        tracking_res = pipeline.process_video(
+            video_path=str(input_path),
+            output_dir=str(output_dir),
+            render_annotated_video=args.render_video,
+            max_frames=args.max_frames,
+        )
+
+        print("\n" + "=" * 78)
+        print(f" CONTINUOUS TRACKING COMPLETE: {args.home.upper()} vs {args.away.upper()} ({args.minute}')")
+        print("=" * 78)
+        print(f" Total Frames:     {tracking_res.total_frames}")
+        print(f" Shots Detected:   {tracking_res.shots_count} ({tracking_res.tactical_shots_count} tactical)")
+        print(f" Unique Tracks:    {tracking_res.unique_tracklets_count}")
+        print(f" Output Video:     {tracking_res.output_video_path}")
+        print(f" Diagnostics JSON: {tracking_res.diagnostics_json_path}")
+        print("=" * 78 + "\n")
+        return 0
 
     # -------------------------------------------------------------------------
     # PASS 1: Local CPU Detection & Team Clustering

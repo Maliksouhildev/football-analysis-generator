@@ -35,6 +35,8 @@ Integrates:
 
 from __future__ import annotations
 
+import hashlib
+
 import base64
 import copy
 import json
@@ -452,6 +454,10 @@ def classify_player_kit(
     return {"category": "barcelona", "white_ratio": white_ratio, "confidence": 0.95}
 
 
+VLM_CROP_CACHE_FILE = OUTPUT_DIR / "vlm_crop_cache.json"
+_vlm_crop_cache: Dict[str, Dict[str, Any]] = {}
+
+
 def call_crop_number_reader(
     frame: np.ndarray,
     box: np.ndarray,
@@ -459,8 +465,16 @@ def call_crop_number_reader(
 ) -> Optional[Dict[str, Any]]:
     """
     Calls Gemini Flash Lite on an individual player crop to read visible jersey numbers
-    and identify player biometrics matching the candidate squad.
+    and identify player biometrics matching the candidate squad, with persistent disk caching.
     """
+    global _vlm_crop_cache
+    if not _vlm_crop_cache and VLM_CROP_CACHE_FILE.is_file():
+        try:
+            with open(VLM_CROP_CACHE_FILE, "r", encoding="utf-8") as f:
+                _vlm_crop_cache = json.load(f)
+        except Exception:
+            _vlm_crop_cache = {}
+
     key = os.environ.get("GEMINI_API_KEY", "").strip()
     if not key:
         return None
@@ -479,7 +493,15 @@ def call_crop_number_reader(
         return None
 
     _, buf = cv2.imencode(".png", crop)
-    b64 = base64.b64encode(buf.tobytes()).decode("utf-8")
+    crop_bytes = buf.tobytes()
+    squad_sig = ",".join(str(p.get("number", 0)) for p in sorted(candidate_squad, key=lambda p: p.get("number", 0)))
+    cache_key = hashlib.sha256(crop_bytes + squad_sig.encode("utf-8")).hexdigest()
+
+    if cache_key in _vlm_crop_cache:
+        logger.debug(f"Crop VLM Cache HIT [key={cache_key[:12]}]")
+        return _vlm_crop_cache[cache_key]
+
+    b64 = base64.b64encode(crop_bytes).decode("utf-8")
 
     squad_summary = ", ".join([f"#{p['number']} {p['name']} ({p.get('role', 'CM')})" for p in candidate_squad])
     prompt = f"""Identify the football player in this crop.
@@ -522,6 +544,12 @@ If no number or identity can be discerned, return {{"number": 0, "name": ""}}.
             p_num = int(res.get("number", 0))
             p_name = res.get("name", "")
             if p_num > 0 or p_name:
+                _vlm_crop_cache[cache_key] = res
+                try:
+                    with open(VLM_CROP_CACHE_FILE, "w", encoding="utf-8") as f:
+                        json.dump(_vlm_crop_cache, f, indent=2)
+                except Exception:
+                    pass
                 return res
     except Exception as e:
         logger.debug(f"Crop VLM call notice: {e}")

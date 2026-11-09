@@ -9,6 +9,7 @@ Smart Collage Batcher & Pass-2 Identity Resolver.
 
 from dataclasses import dataclass, field
 import json
+import hashlib
 import os
 import re
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -35,6 +36,8 @@ class TeamGridPayload:
     context_frame_img: np.ndarray
     tracklet_metadata: List[Dict[str, Any]]
     active_roster: List[Dict[str, Any]]
+    defending_x: float = 0.0
+    period: int = 1
 
 
 class SmartCollageBatcher:
@@ -216,6 +219,9 @@ class SmartCollageBatcher:
         frame_cache: Dict[int, np.ndarray],
         active_roster: Dict[str, Any],
         fps: float = 30.0,
+        home_def_x: float = 0.0,
+        away_def_x: float = 1.0,
+        period: int = 1,
     ) -> Tuple[Optional[TeamGridPayload], Optional[TeamGridPayload], np.ndarray]:
         """
         Build TWO separate team payloads (Home vs Away) with 2D grids and a single Context Frame.
@@ -402,10 +408,32 @@ class SmartCollageBatcher:
                 gk_track_id = meta["track_id"]
 
         api_key = os.environ.get("GEMINI_API_KEY", "").strip()
-        vlm_results: List[Dict[str, Any]] = []
+        # Persistent VLM Cache Check (SHA256 of grid + label + active roster)
+        cache_file = os.path.join(output_dir, "vlm_grid_cache.json")
+        grid_bytes = payload.grid_img.tobytes()
+        roster_sig = ",".join(str(p.get("number", 0)) for p in sorted(payload.active_roster, key=lambda p: p.get("number", 0)))
+        cache_key = hashlib.sha256(grid_bytes + payload.team_label.encode("utf-8") + roster_sig.encode("utf-8")).hexdigest()
 
-        if api_key:
+        cache_data = {}
+        if os.path.isfile(cache_file):
+            try:
+                with open(cache_file, "r", encoding="utf-8") as f:
+                    cache_data = json.load(f)
+            except Exception:
+                cache_data = {}
+
+        if cache_key in cache_data:
+            print(f"[SmartCollageBatcher] VLM Cache HIT for Shot #{payload.shot_id} ({payload.team_name}) [key={cache_key[:12]}]")
+            vlm_results = cache_data[cache_key]
+        elif api_key:
             vlm_results = self._query_gemini_for_team(payload, grid_path, context_path, api_key)
+            if vlm_results:
+                cache_data[cache_key] = vlm_results
+                try:
+                    with open(cache_file, "w", encoding="utf-8") as f:
+                        json.dump(cache_data, f, indent=2)
+                except Exception:
+                    pass
 
         # Enforce Hard Team Firewall & 1-to-1 Bijection in Python
         final_assignments = self._enforce_strict_1to1_bijection(
@@ -433,19 +461,17 @@ class SmartCollageBatcher:
             kit_desc = "pure WHITE" if payload.team_label == "home" else "BLAUGRANA (Blue/Red stripes)"
             roster_json = json.dumps(payload.active_roster, indent=2)
 
-            if payload.team_label == "home":
-                flank_guidance = """
-TACTICAL FLANK ORIENTATION (Real Madrid attacking Left-to-Right):
-- TOP of screen (y -> 0.0) is Real Madrid's LEFT FLANK: Left-Back (Ferland Mendy #23, Fran Garcia #20), Left-Wing (Vinicius Junior #7).
-- BOTTOM of screen (y -> 1.0) is Real Madrid's RIGHT FLANK: Right-Back (Lucas Vazquez #17), Right-Midfield (Federico Valverde #8).
-- Real Madrid Left-Back/Wing CANNOT be at the bottom of the screen!
+            if getattr(payload, "defending_x", 0.0) <= 0.5:
+                flank_guidance = f"""
+TACTICAL FLANK ORIENTATION ({payload.team_name} defending Left goal X~0, attacking Left-to-Right +X):
+- TOP of screen (y -> 0.0) is {payload.team_name}'s LEFT FLANK: Left-Back (LB), Left-Wing (LW).
+- BOTTOM of screen (y -> 1.0) is {payload.team_name}'s RIGHT FLANK: Right-Back (RB), Right-Wing (RW).
 """
             else:
-                flank_guidance = """
-TACTICAL FLANK ORIENTATION (Barcelona attacking Right-to-Left):
-- TOP of screen (y -> 0.0) is Barcelona's RIGHT FLANK: Right-Back (Jules Kounde #23), Right-Wing (Lamine Yamal #19).
-- BOTTOM of screen (y -> 1.0) is Barcelona's LEFT FLANK: Left-Back (Alejandro Balde #3), Left-Wing (Raphinha #11).
-- Barcelona Left-Back (Alejandro Balde #3) is at the BOTTOM of the screen!
+                flank_guidance = f"""
+TACTICAL FLANK ORIENTATION ({payload.team_name} defending Right goal X~1, attacking Right-to-Left -X):
+- TOP of screen (y -> 0.0) is {payload.team_name}'s RIGHT FLANK: Right-Back (RB), Right-Wing (RW).
+- BOTTOM of screen (y -> 1.0) is {payload.team_name}'s LEFT FLANK: Left-Back (LB), Left-Wing (LW).
 """
 
             prompt_text = f"""
@@ -608,14 +634,14 @@ Output valid JSON ONLY.
 
             # Geometric flank firewall (unless super high confidence visible number >= 0.95)
             if conf < 0.95:
-                if payload.team_label == "home":
-                    # Real Madrid: LB/LW must be top (t_ry < 0.60); RB/RW must be bottom (t_ry > 0.40)
+                if getattr(payload, "defending_x", 0.0) <= 0.5:
+                    # Defending left: LB/LW must be top (t_ry < 0.60); RB/RW must be bottom (t_ry > 0.40)
                     if role in ["LB", "LW"] and t_ry > 0.60:
                         continue
                     if role in ["RB", "RW"] and t_ry < 0.40:
                         continue
                 else:
-                    # Barcelona: LB/LW (Balde) must be bottom (t_ry > 0.40); RB/RW (Yamal) must be top (t_ry < 0.60)
+                    # Defending right: LB/LW must be bottom (t_ry > 0.40); RB/RW must be top (t_ry < 0.60)
                     if role in ["LB", "LW"] and t_ry < 0.40:
                         continue
                     if role in ["RB", "RW"] and t_ry > 0.60:
@@ -662,7 +688,7 @@ Output valid JSON ONLY.
             global_sx = float(payload.tracklet_metadata[0].get("scale_sx", 0.50)) if payload.tracklet_metadata else 0.50
 
             if gk_m is not None:
-                gk_pitch_x = 0.05 if payload.team_label == "home" else 0.95
+                gk_pitch_x = 0.95 if getattr(payload, "defending_x", 0.0) > 0.5 else 0.05
                 t_x = gk_pitch_x - global_sx * float(gk_m.get("relative_x", 0.5))
             else:
                 t_x = f_mid_x - global_sx * screen_mid_x
@@ -678,8 +704,8 @@ Output valid JSON ONLY.
 
                 for j, p in enumerate(available_outfield):
                     role = p.get("role", "CM")
-                    # Target nominal (fx, fy) based on role
-                    if payload.team_label == "home":
+                    # Target nominal (fx, fy) based on role and direction
+                    if getattr(payload, "defending_x", 0.0) <= 0.5:
                         # Defending left goal, attacking left-to-right (+X)
                         # TOP of screen (y -> 0.0) is LEFT flank (LB, LCB, LW)
                         # BOTTOM of screen (y -> 1.0) is RIGHT flank (RB, RCB, RW)
@@ -687,8 +713,8 @@ Output valid JSON ONLY.
                         fy_map = {"GK": 0.50, "LB": 0.20, "LCB": 0.38, "CB": 0.50, "RCB": 0.62, "RB": 0.80, "DM": 0.50, "LCM": 0.35, "CM": 0.50, "RCM": 0.65, "AM": 0.50, "LW": 0.20, "CF": 0.50, "RW": 0.80}
                     else:
                         # Defending right goal, attacking right-to-left (-X)
-                        # TOP of screen (y -> 0.0) is RIGHT flank (RB, RCB, RW - Yamal #19, Kounde #23)
-                        # BOTTOM of screen (y -> 1.0) is LEFT flank (LB, LCB, LW - Balde #3, Raphinha #11)
+                        # TOP of screen (y -> 0.0) is RIGHT flank (RB, RCB, RW)
+                        # BOTTOM of screen (y -> 1.0) is LEFT flank (LB, LCB, LW)
                         fx_map = {"GK": 0.95, "RB": 0.78, "RCB": 0.80, "CB": 0.80, "LCB": 0.80, "LB": 0.78, "DM": 0.60, "RCM": 0.50, "CM": 0.50, "LCM": 0.50, "AM": 0.35, "RW": 0.25, "CF": 0.15, "LW": 0.25}
                         fy_map = {"GK": 0.50, "RB": 0.20, "RCB": 0.38, "CB": 0.50, "LCB": 0.62, "LB": 0.80, "DM": 0.50, "RCM": 0.35, "CM": 0.50, "LCM": 0.65, "AM": 0.50, "RW": 0.20, "CF": 0.50, "LW": 0.80}
 
