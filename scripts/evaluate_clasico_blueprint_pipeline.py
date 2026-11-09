@@ -363,10 +363,14 @@ def filter_candidate_boxes(
     shot_type: str,
     frame_name: str = "",
 ) -> Tuple[np.ndarray, Dict[str, Any]]:
-    """Filters raw YOLO detections against pitch boundary, scoreboards, and lower-third TV graphic banners."""
+    """
+    Filters raw detections against pitch boundary, scoreboards, lower-third TV graphics,
+    and enforces strict containment (IOSA) and same-player column suppression.
+    """
     h, w = frame.shape[:2]
     fname = frame_name.lower()
     geom_res = geom_engine.analyze(frame)
+    pitch_poly = geom_res.get("pitch_polygon")
 
     pass1_boxes = []
 
@@ -376,29 +380,48 @@ def filter_candidate_boxes(
         yc = (y1 + y2) // 2
         bw = max(1, x2 - x1)
         bh = max(1, y2 - y1)
+        feet_x = float(xc)
+        feet_y = float(y2)
 
-        # 1. Reject Top-Left Scoreboard Deadzone
+        # 1. Reject tiny noise fragments & non-human aspect ratios
+        if shot_type == "wide_tactical":
+            if bh < 42 or bw < 14:
+                continue
+            if (bh / float(bw)) < 1.1 and bh < 70:
+                continue
+        else:
+            if bh < 55 or bw < 18:
+                continue
+
+        # 2. Reject Top-Left Scoreboard Deadzone
         if x1 < 0.20 * w and y2 < 0.18 * h:
             continue
 
-        # 2. Reject Top-Right Channel Bug / Watermark
+        # 3. Reject Top-Right Channel Bug / Watermark
         if x1 > 0.88 * w and y2 < 0.16 * h:
             continue
 
-        # 3. Reject Spectators in stands high above pitch in wide shots
-        if shot_type == "wide_tactical" and y2 < 0.18 * h:
-            continue
-
-        # 4. Lower-Third Broadcast Graphic Banner Card Filter (e.g. 11 RAPHINHA card)
-        if y1 >= 0.78 * h and 0.40 * w <= xc <= 0.55 * w and bh < 0.25 * h:
+        # 4. Reject Lower-Third Broadcast Graphic Banner Card Filter (e.g. 11 RAPHINHA card)
+        if y1 >= 0.78 * h and 0.38 * w <= feet_x <= 0.58 * w and bh < 0.25 * h:
             logger.info(f"Filtered broadcast banner UI card at [{x1}, {y1}, {x2}, {y2}]")
             continue
 
         # 5. Reject Sitting Corner Photographers / Concrete Stewards
-        if y1 >= 0.94 * h and (x1 < 0.12 * w or x2 > 0.88 * w):
+        if shot_type == "wide_tactical" and feet_y > 0.94 * h:
             continue
 
-        # 6. Specific Boundary Edge Guards
+        # 6. Green Pitch Turf Masking (Strict Touchline & Pitch Polygon Boundary)
+        if shot_type == "wide_tactical" and pitch_poly is not None and len(pitch_poly) > 2:
+            poly_dist = cv2.pointPolygonTest(pitch_poly, (feet_x, feet_y), measureDist=True)
+            if poly_dist < -2.0:
+                # Feet are strictly outside green turf polygon (in crowd stands or concrete)
+                continue
+            top_y, bot_y = geom_engine.get_turf_hull_bounds(geom_res, (h, w), feet_x)
+            if feet_y < (top_y * h - 5.0) or feet_y > (bot_y * h + 5.0):
+                # Outside touchlines
+                continue
+
+        # 7. Specific Boundary Edge Guards
         if "frame_01" in fname and x1 < 400 and y2 < 260:
             continue
         if "frame_03" in fname and (bh < 150 or y2 < 500 or x1 > 1600):
@@ -411,7 +434,7 @@ def filter_candidate_boxes(
     if not pass1_boxes:
         return np.empty((0, 4)), geom_res
 
-    # Duel-Aware Non-Maximum Suppression
+    # Pass 2: Strict Containment (IOSA), Vertical Column Alignment, and Duel-Aware NMS
     final_boxes = []
     n_p = len(pass1_boxes)
     suppressed = set()
@@ -421,11 +444,18 @@ def filter_candidate_boxes(
             continue
         bi = pass1_boxes[i]
         area_i = (bi[2] - bi[0]) * (bi[3] - bi[1])
+        xc_i = (bi[0] + bi[2]) / 2.0
+        w_i = bi[2] - bi[0]
+        h_i = bi[3] - bi[1]
+
         for j in range(i + 1, n_p):
             if j in suppressed:
                 continue
             bj = pass1_boxes[j]
             area_j = (bj[2] - bj[0]) * (bj[3] - bj[1])
+            xc_j = (bj[0] + bj[2]) / 2.0
+            w_j = bj[2] - bj[0]
+            h_j = bj[3] - bj[1]
 
             ix1 = max(bi[0], bj[0])
             iy1 = max(bi[1], bj[1])
@@ -437,26 +467,35 @@ def filter_candidate_boxes(
 
             union = area_i + area_j - inter
             iou = inter / float(union) if union > 0 else 0.0
+            min_area = min(area_i, area_j)
+            iosa = inter / float(min_area) if min_area > 0 else 0.0
 
-            if "frame_03" in fname or shot_type == "duel":
-                w_i = bi[2] - bi[0]
-                w_j = bj[2] - bj[0]
-                if (w_i > 400 and (150 < w_j < 300 or bj[0] > 1400)) or (w_j > 400 and (150 < w_i < 300 or bi[0] > 1400)):
-                    continue
-                min_area = min(area_i, area_j)
-                if iou > 0.35 or (min_area > 0 and (inter / min_area) > 0.60):
-                    if area_i >= area_j:
-                        suppressed.add(j)
-                    else:
-                        suppressed.add(i)
-                        break
-            else:
-                if iou > 0.45:
-                    if area_i >= area_j:
-                        suppressed.add(j)
-                    else:
-                        suppressed.add(i)
-                        break
+            # 1. Containment Suppression: Prune child box (e.g. head, torso) nested inside player body
+            if iosa > 0.50:
+                if area_i >= area_j:
+                    suppressed.add(j)
+                else:
+                    suppressed.add(i)
+                    break
+
+            # 2. Vertical Column Alignment: Prune duplicate detection of the same player column
+            min_w = min(w_i, w_j)
+            min_h = min(h_i, h_j)
+            if abs(xc_i - xc_j) < 0.45 * min_w and ih > 0.50 * min_h:
+                if area_i >= area_j:
+                    suppressed.add(j)
+                else:
+                    suppressed.add(i)
+                    break
+
+            # 3. Standard IOU suppression
+            iou_thresh = 0.30 if shot_type == "wide_tactical" else 0.38
+            if iou > iou_thresh:
+                if area_i >= area_j:
+                    suppressed.add(j)
+                else:
+                    suppressed.add(i)
+                    break
 
         if i not in suppressed:
             final_boxes.append(bi)
@@ -475,7 +514,7 @@ def classify_player_kit(
     shot_type: str = "wide_tactical",
     has_gk_visible: bool = False,
 ) -> Dict[str, Any]:
-    """Extracts torso color metrics to strictly partition candidates into team categories."""
+    """Extracts torso and kit color metrics to strictly partition candidates into team categories."""
     h, w = frame.shape[:2]
     x1, y1, x2, y2 = [int(v) for v in box]
     bw = max(1, x2 - x1)
@@ -487,10 +526,15 @@ def classify_player_kit(
 
     # Sample Torso
     ty1 = max(0, y1 + int(0.15 * bh))
-    ty2 = min(h, y1 + int(0.50 * bh))
+    ty2 = min(h, y1 + int(0.52 * bh))
     tx1 = max(0, x1 + int(0.20 * bw))
     tx2 = min(w, x2 - int(0.20 * bw))
     torso = frame[ty1:ty2, tx1:tx2]
+
+    # Full upper body + shorts patch
+    sy1 = max(0, y1 + int(0.15 * bh))
+    sy2 = min(h, y1 + int(0.75 * bh))
+    upper = frame[sy1:sy2, tx1:tx2]
 
     if torso.size == 0:
         return {"category": "barcelona", "confidence": 0.5}
@@ -502,8 +546,13 @@ def classify_player_kit(
     sat_t = float(np.mean(hsv_t[:, :, 1]))
     val_t = float(np.mean(hsv_t[:, :, 2]))
 
-    white_mask = (hsv_t[:, :, 1] < 55) & (hsv_t[:, :, 2] > 135)
+    white_mask = (hsv_t[:, :, 1] < 55) & (hsv_t[:, :, 2] > 130)
     white_ratio = float(np.mean(white_mask))
+
+    if upper.size > 0:
+        hsv_u = cv2.cvtColor(upper, cv2.COLOR_BGR2HSV)
+        white_u = float(np.mean((hsv_u[:, :, 1] < 55) & (hsv_u[:, :, 2] > 130)))
+        white_ratio = max(white_ratio, white_u)
 
     # 1. Goalkeeper Detection (Orange/Coral Kit inside defensive goalmouth)
     if has_gk_visible:
@@ -521,8 +570,8 @@ def classify_player_kit(
         is_linesman = (norm_y < 0.25 and (norm_x > 0.60 or norm_x < 0.15)) or (shot_type == "penalty_box" and norm_x > 0.64 and norm_y < 0.22)
         return {"category": "referee", "is_linesman": is_linesman, "confidence": 0.96}
 
-    # 3. Real Madrid Outfield (Crisp White)
-    if white_ratio >= 0.28:
+    # 3. Real Madrid Outfield (Crisp White Shirt + Shorts)
+    if white_ratio >= 0.24:
         return {"category": "real_madrid", "white_ratio": white_ratio, "confidence": 0.95}
 
     # 4. FC Barcelona Outfield (Deep Blaugrana Burgundy / Navy)
@@ -651,6 +700,28 @@ def solve_tactical_assignment_metric(
     outfield_squad = [p for p in active_squad if not p.get("is_gk") and p.get("role") != "GK"]
     n_boxes = len(team_boxes)
     n_players = len(outfield_squad)
+
+    # Deduplicate locked numbers: ensure no two boxes lock onto the same player
+    claimed_locks: Dict[int, List[int]] = {}
+    for idx_b, (tid, box, meta) in enumerate(team_boxes):
+        lnum = meta.get("locked_number", 0)
+        if lnum > 0:
+            claimed_locks.setdefault(lnum, []).append(idx_b)
+
+    for lnum, indices in claimed_locks.items():
+        if len(indices) > 1:
+            p_obj = next((p for p in outfield_squad if p["number"] == lnum), None)
+            target_role = p_obj.get("role", "CM") if p_obj else "CM"
+            tx_m, ty_m = get_metric_target(target_role, defending_x)
+            best_idx = min(
+                indices,
+                key=lambda i_c: (team_boxes[i_c][2].get("pitch_coords", (52.5, 34.0))[0] - tx_m) ** 2
+                + (team_boxes[i_c][2].get("pitch_coords", (52.5, 34.0))[1] - ty_m) ** 2,
+            )
+            for i_c in indices:
+                if i_c != best_idx:
+                    team_boxes[i_c][2].pop("locked_number", None)
+                    team_boxes[i_c][2].pop("vlm_name", None)
 
     cost_matrix = np.zeros((n_boxes, n_players), dtype=float)
 
