@@ -400,22 +400,66 @@ class ActiveXIResolver:
             except Exception as e:
                 logger.debug("AutonomousMatchResolver auto-registration note: %s", e)
 
-        # Check for known match canonical rosters or if ground truth contains phantom players
+        if self.ground_truth is not None:
+            self.match_data = {
+                "match_id": f"{self.ground_truth.provider}:{self.ground_truth.fixture_id}",
+                "home_team": {
+                    "name": self.ground_truth.home_team,
+                    "starting_xi": [p.to_dict() for p in self.ground_truth.starting_xi("home")],
+                    "substitutions": [
+                        {
+                            "minute": e.minute,
+                            "player_out": e.player_name,
+                            "player_in": e.related_player_name,
+                            "in_number": e.raw_data.get("number", 12),
+                            "in_role": e.raw_data.get("position", "MF"),
+                        }
+                        for e in self.ground_truth.events_timeline if e.team_side == "home" and e.event_type == "substitution"
+                    ],
+                    "red_cards": [
+                        {
+                            "minute": e.minute,
+                            "player_sent_off": e.player_name,
+                        }
+                        for e in self.ground_truth.events_timeline if e.team_side == "home" and e.event_type in ("red_card", "yellow_red")
+                    ],
+                    "substitutes": [p.to_dict() for p in getattr(self.ground_truth, "substitutes_home", [])],
+                },
+                "away_team": {
+                    "name": self.ground_truth.away_team,
+                    "starting_xi": [p.to_dict() for p in self.ground_truth.starting_xi("away")],
+                    "substitutions": [
+                        {
+                            "minute": e.minute,
+                            "player_out": e.player_name,
+                            "player_in": e.related_player_name,
+                            "in_number": e.raw_data.get("number", 12),
+                            "in_role": e.raw_data.get("position", "MF"),
+                        }
+                        for e in self.ground_truth.events_timeline if e.team_side == "away" and e.event_type == "substitution"
+                    ],
+                    "red_cards": [
+                        {
+                            "minute": e.minute,
+                            "player_sent_off": e.player_name,
+                        }
+                        for e in self.ground_truth.events_timeline if e.team_side == "away" and e.event_type in ("red_card", "yellow_red")
+                    ],
+                    "substitutes": [p.to_dict() for p in getattr(self.ground_truth, "substitutes_away", [])],
+                },
+            }
+            return
+
+        # Check for known match canonical rosters if ground truth not available
         match_key = f"{str(home_team or '').lower()}_vs_{str(away_team or '').lower()}".replace(" ", "_")
         is_clasico = ("barca" in match_key or "barcelona" in match_key) and ("real" in match_key or "madrid" in match_key)
 
-        has_phantoms = False
-        if self.ground_truth is not None:
-            gt_starters = [p.name.lower() for p in self.ground_truth.starting_xi("home") + self.ground_truth.starting_xi("away")]
-            if any(phantom in " ".join(gt_starters) for phantom in ["joan garcia", "gordon", "cucurella", "konate", "huijsen"]):
-                has_phantoms = True
-
-        if is_clasico or has_phantoms:
+        if is_clasico:
             logger.info("ActiveXIResolver: Applying authentic canonical roster for El Clásico (Barcelona vs Real Madrid).")
             self.match_data = copy.deepcopy(CANONICAL_CLASICO_ROSTER)
             return
 
-        if self.ground_truth is not None:
+        if False:
             self.match_data = {
                 "match_id": f"{self.ground_truth.provider}:{self.ground_truth.fixture_id}",
                 "home_team": {
