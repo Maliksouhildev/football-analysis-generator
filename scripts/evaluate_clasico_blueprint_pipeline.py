@@ -74,8 +74,9 @@ BANNED_NON_SQUAD = {
     "neymar", "marcelo", "varane", "isco", "asensio", "hazard", "courtois",
     "alaba", "david alaba", "carvajal", "dani carvajal", "ferran torres", "ferran",
     "ter stegen", "christensen", "araujo", "kroos", "toni kroos", "kepa",
-    "nacho", "joselu", "gündogan", "gundogan", "cancelo", "félix", "felix",
-    "arda güler", "guler", "endrick", "vallejo", "ceballos"
+    "nacho", "joselu", "gündogan", "gundogan", "félix", "felix",
+    "militão", "militao", "mendy", "ferland mendy", "vázquez", "vazquez",
+    "lucas vazquez", "lucas vázquez", "rüdiger", "rudiger", "endrick", "vallejo", "ceballos"
 }
 
 # 2D Metric Pitch Role Targets (105m x 68m, defending Left Goal at x=0m, attacking Right at x=105m)
@@ -208,7 +209,7 @@ def load_canonical_matches() -> Dict[str, Any]:
             with open(CANONICAL_MATCHES_PATH, "r", encoding="utf-8") as f:
                 d = json.load(f)
                 matches = d.get("matches", d)
-                if matches and "real_madrid_vs_barcelona_2024_oct26" in matches:
+                if matches:
                     return matches
         except Exception as e:
             logger.warning(f"Error reading {CANONICAL_MATCHES_PATH}: {e}")
@@ -436,8 +437,9 @@ def get_frame_metadata(
         has_gk_visible = False
 
     match_data = (
-        canonical_matches.get("real_madrid_vs_barcelona_2024_oct26")
-        or canonical_matches.get("barcelona_vs_real_madrid_2024")
+        canonical_matches.get("barcelona_vs_real_madrid_2026_oct25")
+        or canonical_matches.get("latest_el_clasico")
+        or canonical_matches.get("real_madrid_vs_barcelona_2024_oct26")
         or list(canonical_matches.values())[0]
     )
 
@@ -568,7 +570,12 @@ def filter_candidate_boxes(
             iosa = inter / float(min_area) if min_area > 0 else 0.0
 
             # 1. Containment Suppression: Prune child box (e.g. head, torso) nested inside player body
-            if iosa > 0.40:
+            yc_i = (bi[1] + bi[3]) / 2.0
+            yc_j = (bj[1] + bj[3]) / 2.0
+            is_j_center_in_i = (bi[0] <= xc_j <= bi[2] and bi[1] <= yc_j <= bi[3])
+            is_i_center_in_j = (bj[0] <= xc_i <= bj[2] and bj[1] <= yc_i <= bj[3])
+
+            if iosa > 0.28 or (is_j_center_in_i and area_j < 0.70 * area_i) or (is_i_center_in_j and area_i < 0.70 * area_j):
                 if area_i >= area_j:
                     suppressed.add(j)
                 else:
@@ -579,8 +586,9 @@ def filter_candidate_boxes(
             min_w = min(w_i, w_j)
             min_h = min(h_i, h_j)
             x_overlap = iw / float(min_w) if min_w > 0 else 0.0
-            is_same_column = (x_overlap > 0.45 or abs(xc_i - xc_j) < 0.35 * min_w)
-            is_vertically_contiguous = (ih > 0.08 * min_h or iou > 0.12)
+            is_same_column = (x_overlap > 0.40 or abs(xc_i - xc_j) < 0.40 * min_w)
+            y_gap = max(0, max(bi[1], bj[1]) - min(bi[3], bj[3]))
+            is_vertically_contiguous = (ih > 0 or y_gap < 0.25 * min_h or iou > 0.08)
 
             if is_same_column and is_vertically_contiguous:
                 # Merge into composite full-body box if aspect ratio is valid

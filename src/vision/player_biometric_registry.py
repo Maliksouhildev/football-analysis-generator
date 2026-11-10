@@ -117,7 +117,32 @@ REAL_MADRID_PROFILES: List[PlayerBiometricProfile] = [
     ),
     # Defenders
     PlayerBiometricProfile(
-        name="Lucas Vázquez", number=17, team="real_madrid", role="RB",
+        name="Dean Huijsen", number=18, team="real_madrid", role="LCB",
+        skin_tone="fair", hair_style="short_neat", hair_color="dark_brown", facial_hair="clean_shaven",
+        height_cm=197, build="tall_muscular", distinguishing_features=["very_tall_cb", "aerial_reach"]
+    ),
+    PlayerBiometricProfile(
+        name="Ibrahima Konaté", number=4, team="real_madrid", role="RCB",
+        skin_tone="dark", hair_style="buzzcut", hair_color="black", facial_hair="stubble",
+        height_cm=194, build="tall_muscular", distinguishing_features=["tall_power_cb"]
+    ),
+    PlayerBiometricProfile(
+        name="Marc Cucurella", number=17, team="real_madrid", role="LB",
+        skin_tone="fair", hair_style="voluminous_curly", hair_color="dark_brown", facial_hair="clean_shaven",
+        height_cm=172, build="compact_agile", distinguishing_features=["signature_massive_bushy_curly_hair", "long_curls"]
+    ),
+    PlayerBiometricProfile(
+        name="Denzel Dumfries", number=2, team="real_madrid", role="RB",
+        skin_tone="dark", hair_style="fade", hair_color="black", facial_hair="clean_shaven",
+        height_cm=188, build="tall_muscular", distinguishing_features=["explosive_right_back"]
+    ),
+    PlayerBiometricProfile(
+        name="Trent Alexander-Arnold", number=12, team="real_madrid", role="RB",
+        skin_tone="light_brown", hair_style="fade", hair_color="black", facial_hair="stubble",
+        height_cm=180, build="athletic", distinguishing_features=["crossing_specialist"]
+    ),
+    PlayerBiometricProfile(
+        name="Lucas Vázquez", number=27, team="real_madrid", role="RB",
         skin_tone="fair", hair_style="short_neat", hair_color="dark_brown", facial_hair="stubble",
         height_cm=173, build="compact_agile", distinguishing_features=["right_back"]
     ),
@@ -137,6 +162,21 @@ REAL_MADRID_PROFILES: List[PlayerBiometricProfile] = [
         height_cm=180, build="tall_muscular", distinguishing_features=["left_back"]
     ),
     # Midfielders
+    PlayerBiometricProfile(
+        name="Bernardo Silva", number=20, team="real_madrid", role="CM",
+        skin_tone="olive", hair_style="short_neat", hair_color="dark_brown", facial_hair="full_beard",
+        height_cm=173, build="compact_agile", distinguishing_features=["playmaker", "beard"]
+    ),
+    PlayerBiometricProfile(
+        name="Arda Güler", number=15, team="real_madrid", role="RW",
+        skin_tone="fair", hair_style="short_neat", hair_color="dark_brown", facial_hair="clean_shaven",
+        height_cm=175, build="slender_agile", distinguishing_features=["creative_winger"]
+    ),
+    PlayerBiometricProfile(
+        name="Yann Diomande", number=25, team="real_madrid", role="LW",
+        skin_tone="dark", hair_style="fade", hair_color="black", facial_hair="clean_shaven",
+        height_cm=183, build="athletic", distinguishing_features=["pacey_winger"]
+    ),
     PlayerBiometricProfile(
         name="Aurélien Tchouaméni", number=14, team="real_madrid", role="DM",
         skin_tone="dark", hair_style="fade", hair_color="black", facial_hair="clean_shaven",
@@ -189,6 +229,11 @@ REAL_MADRID_PROFILES: List[PlayerBiometricProfile] = [
 BARCELONA_PROFILES: List[PlayerBiometricProfile] = [
     # Goalkeepers
     PlayerBiometricProfile(
+        name="Joan García", number=1, team="barcelona", role="GK",
+        skin_tone="fair", hair_style="short_neat", hair_color="dark_brown", facial_hair="clean_shaven",
+        height_cm=191, build="tall_muscular", distinguishing_features=["tall_gk", "gk_gloves"]
+    ),
+    PlayerBiometricProfile(
         name="Iñaki Peña", number=13, team="barcelona", role="GK",
         skin_tone="fair", hair_style="short_neat", hair_color="dark_brown", facial_hair="clean_shaven",
         height_cm=184, build="athletic", distinguishing_features=["gk_gloves"]
@@ -199,6 +244,21 @@ BARCELONA_PROFILES: List[PlayerBiometricProfile] = [
         height_cm=195, build="tall_muscular", distinguishing_features=["very_tall", "gk_gloves"]
     ),
     # Defenders
+    PlayerBiometricProfile(
+        name="Xavi Espart", number=22, team="barcelona", role="RB",
+        skin_tone="fair", hair_style="short_neat", hair_color="brown", facial_hair="clean_shaven",
+        height_cm=178, build="athletic", distinguishing_features=["young_right_back"]
+    ),
+    PlayerBiometricProfile(
+        name="Gerard Martín", number=24, team="barcelona", role="LCB",
+        skin_tone="fair", hair_style="short_neat", hair_color="brown", facial_hair="clean_shaven",
+        height_cm=186, build="athletic", distinguishing_features=["solid_defender"]
+    ),
+    PlayerBiometricProfile(
+        name="João Cancelo", number=12, team="barcelona", role="LB",
+        skin_tone="olive", hair_style="short_neat", hair_color="dark_brown", facial_hair="stubble",
+        height_cm=182, build="athletic", distinguishing_features=["experienced_fullback"]
+    ),
     PlayerBiometricProfile(
         name="Jules Koundé", number=23, team="barcelona", role="RB",
         skin_tone="dark", hair_style="locs_braids", hair_color="black", facial_hair="goatee",
@@ -221,6 +281,11 @@ BARCELONA_PROFILES: List[PlayerBiometricProfile] = [
     ),
     # Midfielders
     PlayerBiometricProfile(
+        name="Rodri", number=14, team="barcelona", role="DM",
+        skin_tone="fair", hair_style="short_neat", hair_color="dark_brown", facial_hair="clean_shaven",
+        height_cm=191, build="tall_muscular", distinguishing_features=["tall_pivot", "ballon_dor_winner"]
+    ),
+    PlayerBiometricProfile(
         name="Marc Casadó", number=17, team="barcelona", role="DM",
         skin_tone="fair", hair_style="short_neat", hair_color="dark_brown", facial_hair="clean_shaven",
         height_cm=172, build="compact_agile", distinguishing_features=["compact_pivot"]
@@ -239,6 +304,21 @@ BARCELONA_PROFILES: List[PlayerBiometricProfile] = [
         name="Frenkie de Jong", number=21, team="barcelona", role="CM",
         skin_tone="fair", hair_style="short_neat", hair_color="blonde", facial_hair="clean_shaven",
         height_cm=180, build="athletic", distinguishing_features=["signature_blonde_hair"]
+    ),
+    PlayerBiometricProfile(
+        name="Anthony Gordon", number=10, team="barcelona", role="LW",
+        skin_tone="fair", hair_style="short_neat", hair_color="blonde", facial_hair="clean_shaven",
+        height_cm=183, build="athletic", distinguishing_features=["blond_winger", "pacey"]
+    ),
+    PlayerBiometricProfile(
+        name="Karim Adeyemi", number=7, team="barcelona", role="LW",
+        skin_tone="light_brown", hair_style="fade", hair_color="black", facial_hair="clean_shaven",
+        height_cm=180, build="athletic", distinguishing_features=["rapid_winger"]
+    ),
+    PlayerBiometricProfile(
+        name="Gabriel Jesus", number=9, team="barcelona", role="CF",
+        skin_tone="brown", hair_style="fade", hair_color="black", facial_hair="goatee",
+        height_cm=175, build="athletic", distinguishing_features=["brazilian_striker"]
     ),
     PlayerBiometricProfile(
         name="Dani Olmo", number=20, team="barcelona", role="AM",
