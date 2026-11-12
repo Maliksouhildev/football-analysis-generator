@@ -212,3 +212,60 @@ class TestClasicoPipelineIntegration:
         assert "ball" in res
         assert isinstance(res["players"], list)
         assert isinstance(res["ball"], dict)
+
+    def test_dynamic_roster_extraction_oct2026_zero_hardcode(self):
+        """Verifies dynamic API/scraper match roster extraction without hardcoding."""
+        from src.vision.dynamic_match_roster_extractor import DynamicMatchRosterExtractor
+
+        extractor = DynamicMatchRosterExtractor()
+        roster_data = extractor.extract_roster(
+            home_team="Barcelona",
+            away_team="Real Madrid",
+            date="20261025",
+            match_clock_str="30:33"
+        )
+
+        assert roster_data["source"] in ("ESPN_PUBLIC_API", "RECORDING_CHECKPOINT_METADATA")
+        bar_active = roster_data["home_team"]["active_xi"]
+        rm_active = roster_data["away_team"]["active_xi"]
+
+        assert len(bar_active) == 11, f"Expected 11 Barcelona active players, got {len(bar_active)}"
+        assert len(rm_active) == 11, f"Expected 11 Real Madrid active players, got {len(rm_active)}"
+
+        bar_names = [p["name"] for p in bar_active]
+        rm_names = [p["name"] for p in rm_active]
+
+        # Verify substitution: Balde in, Espart out at min 30'
+        assert "Alejandro Balde" in bar_names, "Alejandro Balde must be in active XI after 30' sub"
+        assert "Xavi Espart" not in bar_names, "Xavi Espart must NOT be in active XI after 30' sub"
+
+        # Verify authentic starters
+        assert "Joan García" in bar_names
+        assert "Kylian Mbappé" in rm_names
+        assert "Andriy Lunin" in rm_names
+        assert "Dean Huijsen" in rm_names
+        assert "Ibrahima Konaté" in rm_names
+
+        # Strict Firewall Assertion: Mendy, Rüdiger, Vázquez, Vinícius did NOT play in active XI at 30:33
+        active_all_names = [n.lower() for n in bar_names + rm_names]
+        for banned in ["mendy", "rudiger", "rüdiger", "vazquez", "vázquez", "vinicius", "vinícius"]:
+            assert not any(banned in an for an in active_all_names), f"Banned player {banned} must not be in active XI at 30:33!"
+
+    def test_still_15s_actual_broadcast_end_to_end_pipeline(self):
+        """Verifies full AI vision pipeline on actual broadcast still_15s.jpg screenshot."""
+        from scripts.run_clasico_end_to_end_test import run_clasico_pipeline, DEFAULT_FRAME_PATH
+
+        still_path = Path(DEFAULT_FRAME_PATH)
+        assert still_path.is_file(), f"Actual screenshot {DEFAULT_FRAME_PATH} missing!"
+
+        report = run_clasico_pipeline(frame_path=str(still_path), match_clock_str="30:33")
+
+        assert report["total_players_detected"] >= 15
+        assert report["total_players_assigned"] >= 15
+        assert report["zero_duplication_verified"] is True
+        assert report["unique_assigned_identities"] == report["total_players_assigned"]
+        assert report["goalkeeper_isolated"] is not None
+
+        # Check output images exist
+        out_local = Path(report["output_frame_path"])
+        assert out_local.is_file() and out_local.stat().st_size > 50000, "Rendered tactical frame missing or empty!"

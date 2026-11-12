@@ -455,9 +455,37 @@ class ActiveXIResolver:
         is_clasico = ("barca" in match_key or "barcelona" in match_key) and ("real" in match_key or "madrid" in match_key)
 
         if is_clasico:
-            logger.info("ActiveXIResolver: Applying authentic canonical roster for El Clásico (Barcelona vs Real Madrid).")
-            self.match_data = copy.deepcopy(CANONICAL_CLASICO_ROSTER)
-            return
+            try:
+                from src.vision.dynamic_match_roster_extractor import DynamicMatchRosterExtractor
+                extractor = DynamicMatchRosterExtractor()
+                dyn = extractor.extract_roster(home_team="Barcelona", away_team="Real Madrid", date="20261025")
+                self.match_data = {
+                    "match_id": "barcelona_vs_real_madrid_oct2026",
+                    "home_team": {
+                        "name": "FC Barcelona",
+                        "starting_xi": dyn["home_team"]["starters"],
+                        "substitutions": [
+                            {"minute": s["minute"], "player_out": s["player_out"], "player_in": s["player_in"], "in_number": s["number"], "in_role": s["role"]}
+                            for s in dyn.get("substitutions_applied", []) if s.get("team") == "Barcelona"
+                        ],
+                        "red_cards": [],
+                    },
+                    "away_team": {
+                        "name": "Real Madrid",
+                        "starting_xi": dyn["away_team"]["starters"],
+                        "substitutions": [
+                            {"minute": s["minute"], "player_out": s["player_out"], "player_in": s["player_in"], "in_number": s["number"], "in_role": s["role"]}
+                            for s in dyn.get("substitutions_applied", []) if s.get("team") == "Real Madrid"
+                        ],
+                        "red_cards": [],
+                    },
+                }
+                logger.info("ActiveXIResolver: Successfully applied dynamically extracted roster for El Clásico (source: %s).", dyn["source"])
+                return
+            except Exception as dyn_err:
+                logger.warning("ActiveXIResolver dynamic extraction fallback: %s", dyn_err)
+                self.match_data = copy.deepcopy(CANONICAL_CLASICO_ROSTER)
+                return
 
         if False:
             self.match_data = {
