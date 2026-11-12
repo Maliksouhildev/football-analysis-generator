@@ -67,7 +67,7 @@ class AISupervisorAuditor:
     def __init__(
         self,
         api_key: Optional[str] = None,
-        model: str = "gemini-2.5-flash",
+        model: str = "gemini-2.0-flash",
         gk_color_threshold: float = 38.0,
         use_mock: bool = False,
     ):
@@ -79,12 +79,15 @@ class AISupervisorAuditor:
 
     def audit_crop_strip(
         self,
-        strip_image: np.ndarray,
+        strip_image: Optional[np.ndarray],
         track_id: int,
     ) -> Dict[str, Any]:
         """
         Audits a multi-angle temporal strip using unbiased Gemini VLM inspection.
         """
+        if strip_image is None or not isinstance(strip_image, np.ndarray) or strip_image.size == 0:
+            return self._mock_audit(strip_image, track_id)
+
         if self.use_mock or not self.api_key:
             return self._mock_audit(strip_image, track_id)
 
@@ -139,8 +142,20 @@ class AISupervisorAuditor:
             logger.warning("VLM audit call failed (%s); using offline heuristic fallback.", e)
             return self._mock_audit(strip_image, track_id)
 
-    def _mock_audit(self, strip_image: np.ndarray, track_id: int) -> Dict[str, Any]:
+    def _mock_audit(self, strip_image: Optional[np.ndarray], track_id: int) -> Dict[str, Any]:
         """Offline biometric heuristic extractor when VLM is offline or for CI tests."""
+        if strip_image is None or not isinstance(strip_image, np.ndarray) or strip_image.size == 0:
+            return {
+                "jersey_number": None,
+                "hair_color": "unknown",
+                "hair_style": "unknown",
+                "skin_tone": "unknown",
+                "primary_kit_color": "unknown",
+                "mean_hsv": [0.0, 0.0, 0.0],
+                "has_captain_armband": False,
+                "confidence": 0.20,
+            }
+
         hsv = cv2.cvtColor(strip_image, cv2.COLOR_BGR2HSV)
         mean_hsv = np.mean(hsv, axis=(0, 1))
 
@@ -242,26 +257,42 @@ class AISupervisorAuditor:
                 attack_direction=attack_direction,
             )
 
+            # Track profile allocations to strictly prevent duplicate player assignments
+            assigned_profiles: Dict[int, Dict[str, Any]] = {}
+            for idx, assign_info in assignments.items():
+                assigned_profiles[idx] = assign_info.get("profile") or {}
+
+            # First pass: Apply VLM ground-truth jersey numbers and swap if conflict
+            for idx, cand in enumerate(outfield):
+                vlm_num = cand["audit"].get("jersey_number")
+                if vlm_num is not None:
+                    exact_match = next(
+                        (p for p in outfield_roster if str(p.get("jersey_number")) == str(vlm_num)),
+                        None,
+                    )
+                    if exact_match is not None:
+                        # Find who currently has exact_match
+                        previous_holder_idx = next(
+                            (i for i, p in assigned_profiles.items() if p == exact_match),
+                            None,
+                        )
+                        if previous_holder_idx is not None and previous_holder_idx != idx:
+                            # Swap profiles between current track and previous holder
+                            assigned_profiles[previous_holder_idx] = assigned_profiles[idx]
+                        assigned_profiles[idx] = exact_match
+
             for idx, assign_info in assignments.items():
                 cand = outfield[idx]
                 tid = cand["track_id"]
-                p_info = assign_info.get("profile") or {}
-
-                # Check if visible number from VLM overrides or confirms
+                p_info = assigned_profiles.get(idx, {})
                 vlm_num = cand["audit"].get("jersey_number")
-                if vlm_num is not None:
-                    exact_num_match = next(
-                        (p for p in outfield_roster if p.get("jersey_number") == vlm_num),
-                        None,
-                    )
-                    if exact_num_match:
-                        p_info = exact_num_match
+                has_num_match = vlm_num is not None and str(p_info.get("jersey_number")) == str(vlm_num)
 
                 audited_tracks[tid] = {
                     "role": assign_info["role"],
                     "player_name": p_info.get("name", f"Player_{assign_info['role']}"),
                     "jersey_number": p_info.get("jersey_number"),
-                    "confidence": round(0.85 + (0.10 if vlm_num else 0.0), 2),
+                    "confidence": round(0.85 + (0.10 if has_num_match else 0.0), 2),
                     "is_goalkeeper": False,
                 }
 

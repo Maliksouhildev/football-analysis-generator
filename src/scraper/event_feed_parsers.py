@@ -26,6 +26,28 @@ from src.scraper.event_scraper import (
 logger = logging.getLogger("scraper.event_feed_parsers")
 
 
+def _safe_parse_period(val: Any) -> int:
+    """Safely normalizes period value across formats (int, str, dict)."""
+    if isinstance(val, dict):
+        val = val.get("value", 1)
+    if val is None:
+        return 1
+    if isinstance(val, (int, float)):
+        return int(val)
+    val_str = str(val).strip().lower()
+    if val_str.isdigit():
+        return int(val_str)
+    if "first" in val_str or "1" in val_str:
+        return 1
+    if "second" in val_str or "2" in val_str:
+        return 2
+    if "extra" in val_str or "et" in val_str:
+        return 3
+    if "penalty" in val_str or "shootout" in val_str:
+        return 5
+    return 1
+
+
 class WhoScoredMatchCenterParser:
     """
     Parses WhoScored internal match center event streams.
@@ -97,7 +119,7 @@ class WhoScoredMatchCenterParser:
             ev_id = str(ev.get("id") or ev.get("eventId") or f"ws_{fixture_id}_{idx}")
             minute = int(ev.get("minute") or 0)
             second = int(ev.get("second") or 0)
-            period = int(ev.get("period", {}).get("value", 1) if isinstance(ev.get("period"), dict) else (ev.get("period") or 1))
+            period = _safe_parse_period(ev.get("period"))
 
             raw_type = ev.get("type", {})
             type_name = str(raw_type.get("displayName", "") if isinstance(raw_type, dict) else raw_type).lower()
@@ -112,11 +134,15 @@ class WhoScoredMatchCenterParser:
                     is_goal = True
                     break
 
-            # Coordinates are in 0-100 space
-            px = float(ev.get("x", 50.0))
-            py = float(ev.get("y", 50.0))
-            end_x = float(ev.get("endX", px))
-            end_y = float(ev.get("endY", py))
+            # Coordinates are in 0-100 space, guarding against None
+            raw_px = ev.get("x")
+            raw_py = ev.get("y")
+            px = float(raw_px) if raw_px is not None else 50.0
+            py = float(raw_py) if raw_py is not None else 50.0
+            raw_end_x = ev.get("endX")
+            raw_end_y = ev.get("endY")
+            end_x = float(raw_end_x) if raw_end_x is not None else px
+            end_y = float(raw_end_y) if raw_end_y is not None else py
 
             player_id = ev.get("playerId")
             player_name = player_map.get(int(player_id), "") if player_id is not None else ""
@@ -188,7 +214,7 @@ class StatsBombOpenDataParser:
             ev_id = str(ev.get("id") or f"sb_{fixture_id}_{idx}")
             minute = int(ev.get("minute") or 0)
             second = int(ev.get("second") or 0)
-            period = int(ev.get("period") or 1)
+            period = _safe_parse_period(ev.get("period"))
 
             type_dict = ev.get("type", {})
             type_name = str(type_dict.get("name", "") if isinstance(type_dict, dict) else type_dict).lower()
@@ -197,19 +223,22 @@ class StatsBombOpenDataParser:
 
             # Check if shot was a goal
             shot_dict = ev.get("shot", {})
-            outcome_dict = shot_dict.get("outcome", {})
+            outcome_dict = shot_dict.get("outcome", {}) if isinstance(shot_dict, dict) else {}
             outcome_name = outcome_dict.get("name", "").lower() if isinstance(outcome_dict, dict) else ""
             is_goal = outcome_name == "goal"
             if is_goal:
                 canonical_type = CanonicalEventType.GOAL
 
-            xg = float(shot_dict.get("statsbomb_xg", 0.0))
+            raw_xg = shot_dict.get("statsbomb_xg") if isinstance(shot_dict, dict) else 0.0
+            xg = float(raw_xg) if raw_xg is not None else 0.0
 
             # Location: [x, y] on 120x80 pitch
-            location = ev.get("location", [60.0, 40.0])
+            location = ev.get("location")
             if isinstance(location, (list, tuple)) and len(location) >= 2:
-                raw_x = float(location[0])
-                raw_y = float(location[1])
+                loc_x = location[0]
+                loc_y = location[1]
+                raw_x = float(loc_x) if loc_x is not None else 60.0
+                raw_y = float(loc_y) if loc_y is not None else 40.0
                 # Normalize to 0-100 canonical space
                 px = min(100.0, max(0.0, (raw_x / 120.0) * 100.0))
                 py = min(100.0, max(0.0, (raw_y / 80.0) * 100.0))

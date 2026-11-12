@@ -150,31 +150,42 @@ class GlobalFormationMatcher:
         candidates: Sequence[Dict[str, Any]],
         gk_kit_hsv: Sequence[float],
         referee_kit_hsv: Optional[Sequence[float]] = None,
+        defending_goal_x: Optional[float] = None,
     ) -> Tuple[Optional[Dict[str, Any]], List[Dict[str, Any]]]:
         """
         Strictly uses kit color histogram/HSV distance to isolate goalkeeper.
         Outfield players in the penalty box are strictly excluded from GK labeling.
-        Pitch coordinates and referee color profiles are used to avoid referee confusion.
+        Pitch coordinates and referee color profiles are used to disambiguate against referees/spectators.
 
         Args:
             candidates: List of player track candidates. Each may contain 'mean_hsv',
                         'pitch_x', 'pitch_y', 'is_referee', etc.
             gk_kit_hsv: Registered HSV color profile of the official goalkeeper kit.
             referee_kit_hsv: Optional HSV color profile of referee.
+            defending_goal_x: Optional X coordinate of team's defending goal (e.g. 0.0 or 105.0).
 
         Returns:
             Tuple of (best_gk_candidate_or_None, list_of_outfield_candidates).
         """
         best_gk: Optional[Dict[str, Any]] = None
-        min_dist = float("inf")
+        min_score = float("inf")
         outfield_candidates: List[Dict[str, Any]] = []
 
         target_gk_hsv = np.array(gk_kit_hsv, dtype=np.float32)
 
         for cand in candidates:
-            # Exclude explicit referees or touchline spectators
+            # Exclude explicit referees or touchline officials
             if cand.get("is_referee", False) or cand.get("role") == "referee":
                 continue
+
+            px = cand.get("pitch_x")
+            py = cand.get("pitch_y")
+
+            # Pitch coordinate boundary filter: Disambiguate against touchline spectators/staff
+            if px is not None and py is not None:
+                # Discard spectators/cameramen beyond touchlines or deep behind goal boards
+                if py < -1.5 or py > self.pitch_width_m + 1.5 or px < -3.0 or px > self.pitch_length_m + 3.0:
+                    continue
 
             crop_hsv = np.array(cand.get("mean_hsv", [0, 0, 0]), dtype=np.float32)
 
@@ -195,11 +206,28 @@ class GlobalFormationMatcher:
                     continue
 
             # Goalkeeper qualification: strictly kit color below threshold
-            if dist < self.gk_color_threshold and dist < min_dist:
-                min_dist = dist
-                if best_gk is not None:
-                    outfield_candidates.append(best_gk)
-                best_gk = cand
+            if dist < self.gk_color_threshold:
+                # Use pitch coordinates to disambiguate against central referees or midfield outfielders
+                disambiguation_penalty = 0.0
+                if px is not None:
+                    # If defending goal is known, measure distance to defending goal line
+                    if defending_goal_x is not None:
+                        goal_dist = abs(float(px) - float(defending_goal_x))
+                    else:
+                        # Goalkeepers stay within 35m of either goal line
+                        goal_dist = min(abs(float(px) - 0.0), abs(float(px) - self.pitch_length_m))
+                    # Central pitch penalty (referees commonly operate around mid-pitch 40-65m)
+                    if goal_dist > 35.0:
+                        disambiguation_penalty += (goal_dist - 35.0) * 0.8
+
+                score = dist + disambiguation_penalty
+                if score < min_score:
+                    min_score = score
+                    if best_gk is not None:
+                        outfield_candidates.append(best_gk)
+                    best_gk = cand
+                else:
+                    outfield_candidates.append(cand)
             else:
                 outfield_candidates.append(cand)
 
@@ -211,16 +239,21 @@ class GlobalFormationMatcher:
         formation_template: Union[str, Dict[str, Tuple[float, float]]],
         unassigned_profiles: Sequence[Dict[str, Any]],
         attack_direction: str = "right",
+        relative_to_centroid: bool = True,
     ) -> Dict[int, Dict[str, Any]]:
         """
         Solves optimal role assignment using the Hungarian Algorithm (linear_sum_assignment)
         on 2D pitch coordinates against canonical formation roles.
+        Supports Relative Formation Graph Matching relative to team centroid to naturally
+        accommodate high defensive lines, inverted fullbacks, and set-piece overloads.
 
         Args:
             outfield_pitch_coords: (N, 2) array of detected outfielder pitch coordinates (in meters).
             formation_template: Name (e.g. '4-3-3') or dict mapping role name -> (x_m, y_m).
             unassigned_profiles: Roster profiles available for assignment.
             attack_direction: 'right' (0 -> 105) or 'left' (105 -> 0).
+            relative_to_centroid: If True, aligns formation template centroid with the
+                                  detected players' centroid to match relative spatial topology.
 
         Returns:
             Dict mapping player_idx -> {
@@ -253,11 +286,19 @@ class GlobalFormationMatcher:
             inverted_targets[:, 1] = self.pitch_width_m - target_positions[:, 1]
             target_positions = inverted_targets
 
+        # Relative formation topology: align template centroid with detected team centroid
+        if relative_to_centroid and n_players >= 3:
+            coords_centroid = np.mean(coords, axis=0)
+            target_centroid = np.mean(target_positions, axis=0)
+            comparison_targets = target_positions - target_centroid + coords_centroid
+        else:
+            comparison_targets = target_positions
+
         # Pairwise Euclidean distance cost matrix: shape (N, M)
         cost_matrix = np.zeros((n_players, len(roles)), dtype=np.float32)
         for i in range(n_players):
             for j in range(len(roles)):
-                cost_matrix[i, j] = np.linalg.norm(coords[i] - target_positions[j])
+                cost_matrix[i, j] = np.linalg.norm(coords[i] - comparison_targets[j])
 
         row_ind, col_ind = linear_sum_assignment(cost_matrix)
 
@@ -266,7 +307,7 @@ class GlobalFormationMatcher:
 
         for r, c in zip(row_ind, col_ind):
             assigned_role = roles[c]
-            target_pos = (float(target_positions[c, 0]), float(target_positions[c, 1]))
+            target_pos = (float(comparison_targets[c, 0]), float(comparison_targets[c, 1]))
             cost = float(cost_matrix[r, c])
 
             # Profile matching with role equivalence hierarchy

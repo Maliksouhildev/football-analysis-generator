@@ -32,8 +32,11 @@ class TrackStatus(str, enum.Enum):
 def compute_box_iou(box_a: Sequence[float], box_b: Sequence[float]) -> float:
     """
     Computes Intersection-over-Union (IoU) between two boxes [x1, y1, x2, y2].
-    Handles zero area and non-overlapping geometries safely.
+    Handles zero area, empty lists, and non-overlapping geometries safely.
     """
+    if box_a is None or box_b is None or len(box_a) < 4 or len(box_b) < 4:
+        return 0.0
+
     ax1, ay1, ax2, ay2 = float(box_a[0]), float(box_a[1]), float(box_a[2]), float(box_a[3])
     bx1, by1, bx2, by2 = float(box_b[0]), float(box_b[1]), float(box_b[2]), float(box_b[3])
 
@@ -146,6 +149,12 @@ class ProbabilisticBidirectionalTracker:
         last_known_box: Optional[List[float]] = target_track.get("box")
 
         frame_indices = sorted(all_tracks_per_frame.keys(), reverse=reverse)
+        anchor_frame = target_track.get("frame_idx")
+        if anchor_frame is not None:
+            if reverse:
+                frame_indices = [f for f in frame_indices if f <= anchor_frame]
+            else:
+                frame_indices = [f for f in frame_indices if f >= anchor_frame]
 
         for frame_idx in frame_indices:
             frame_tracks = all_tracks_per_frame[frame_idx]
@@ -153,13 +162,14 @@ class ProbabilisticBidirectionalTracker:
 
             if match is None:
                 consecutive_missing += 1
-                curr_confidence *= 0.50
                 occluded = True
                 box = last_known_box if last_known_box is not None else [0.0, 0.0, 0.0, 0.0]
 
-                # Check if missing for longer than occlusion threshold
+                # Check if missing for longer than occlusion threshold (>0.5s)
                 if consecutive_missing >= self.occlusion_frame_threshold:
-                    curr_confidence = min(curr_confidence, 0.50)
+                    curr_confidence = min(curr_confidence * 0.85, 0.50)
+                else:
+                    curr_confidence *= 0.95
             else:
                 consecutive_missing = 0
                 occluded = False
@@ -181,14 +191,15 @@ class ProbabilisticBidirectionalTracker:
                                 max_iou = iou
                             if iou > self.iou_threshold:
                                 had_same_team_overlap = True
-                                curr_confidence *= self.decay_rate
 
+                # Apply decay at most once per frame when overlap occurs
                 if had_same_team_overlap:
                     consecutive_overlaps += 1
+                    curr_confidence *= self.decay_rate
                 else:
                     consecutive_overlaps = max(0, consecutive_overlaps - 1)
 
-                # Overlap penalty threshold: > 0.4s (overlap_frame_threshold) sustained intersection
+                # Overlap penalty threshold: > 0.4s sustained intersection
                 if consecutive_overlaps >= self.overlap_frame_threshold:
                     # Downgrade to PROBABILISTIC_PRIOR (confidence <= 0.55)
                     curr_confidence = min(curr_confidence, 0.55)

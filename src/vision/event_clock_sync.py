@@ -42,10 +42,41 @@ class EventClockSynchronizer:
         self.min_density_threshold = max(1, min_density_threshold)
         self.num_bins = max(5, int(round((2.0 * self.search_window) / self.bin_width)))
 
+    def _extract_timestamp(self, item: Any) -> Optional[float]:
+        """Safely extracts seconds timestamp from a float, int, dict, or CanonicalMatchEvent."""
+        if item is None:
+            return None
+        if isinstance(item, (int, float)):
+            if math.isnan(item) or math.isinf(item):
+                return None
+            return float(item)
+        if isinstance(item, str):
+            try:
+                val = float(item)
+                return val if not math.isnan(val) else None
+            except ValueError:
+                return None
+        if isinstance(item, dict):
+            if "video_timestamp_sec" in item and item["video_timestamp_sec"] is not None:
+                return float(item["video_timestamp_sec"])
+            if "timestamp_sec" in item and item["timestamp_sec"] is not None:
+                return float(item["timestamp_sec"])
+            m = item.get("minute", 0) or 0
+            s = item.get("second", 0) or 0
+            return float(m) * 60.0 + float(s)
+        # Check object attributes (e.g. CanonicalMatchEvent)
+        if hasattr(item, "timestamp_sec") and getattr(item, "timestamp_sec") is not None:
+            return float(getattr(item, "timestamp_sec"))
+        if hasattr(item, "minute") and hasattr(item, "second"):
+            m = getattr(item, "minute") or 0
+            s = getattr(item, "second") or 0
+            return float(m) * 60.0 + float(s)
+        return None
+
     def estimate_clock_offset(
         self,
-        detected_kick_timestamps: Sequence[float],
-        feed_event_timestamps: Sequence[float],
+        detected_kick_timestamps: Sequence[Any],
+        feed_event_timestamps: Sequence[Any],
     ) -> float:
         """
         Estimates clock offset delta = (t_feed - t_video) in seconds.
@@ -54,14 +85,23 @@ class EventClockSynchronizer:
             t_video = t_feed - offset
 
         Args:
-            detected_kick_timestamps: List of detected kick/pass timestamps from video (seconds).
-            feed_event_timestamps: List of pass/shot timestamps from event feed (seconds).
+            detected_kick_timestamps: List of detected kick/pass timestamps from video (seconds or dicts).
+            feed_event_timestamps: List of pass/shot timestamps from event feed (seconds, dicts, or CanonicalMatchEvent).
 
         Returns:
             Estimated offset in seconds. Returns 0.0 if insufficient data or no correlation peak.
         """
-        kicks = [float(t) for t in detected_kick_timestamps if t is not None and not math.isnan(t)]
-        feeds = [float(t) for t in feed_event_timestamps if t is not None and not math.isnan(t)]
+        kicks: List[float] = []
+        for item in detected_kick_timestamps:
+            t = self._extract_timestamp(item)
+            if t is not None:
+                kicks.append(t)
+
+        feeds: List[float] = []
+        for item in feed_event_timestamps:
+            t = self._extract_timestamp(item)
+            if t is not None:
+                feeds.append(t)
 
         if not kicks or not feeds:
             logger.debug("Empty kick or feed timestamps; returning default 0.0s offset.")
@@ -155,22 +195,45 @@ class EventClockSynchronizer:
 
     def align_feed_events_to_video(
         self,
-        feed_events: Sequence[Dict[str, Any]],
+        feed_events: Sequence[Any],
         clock_offset_sec: float,
-    ) -> List[Dict[str, Any]]:
+    ) -> List[Any]:
         """
         Applies calibrated clock offset to feed events so their timestamps match video clock.
         t_video = t_feed - clock_offset_sec
+        Supports both dicts and CanonicalMatchEvent instances.
         """
-        aligned = []
+        aligned: List[Any] = []
         for ev in feed_events:
-            ev_copy = dict(ev)
-            raw_sec = ev_copy.get("timestamp_sec")
-            if raw_sec is None:
-                m = ev_copy.get("minute", 0)
-                s = ev_copy.get("second", 0)
-                raw_sec = m * 60.0 + s
+            if isinstance(ev, dict):
+                ev_copy = dict(ev)
+                raw_sec = ev_copy.get("timestamp_sec")
+                if raw_sec is None:
+                    m = ev_copy.get("minute", 0) or 0
+                    s = ev_copy.get("second", 0) or 0
+                    raw_sec = float(m) * 60.0 + float(s)
+                else:
+                    raw_sec = float(raw_sec)
 
-            ev_copy["video_timestamp_sec"] = max(0.0, float(raw_sec - clock_offset_sec))
-            aligned.append(ev_copy)
+                ev_copy["video_timestamp_sec"] = max(0.0, float(raw_sec - clock_offset_sec))
+                aligned.append(ev_copy)
+            elif hasattr(ev, "minute") and hasattr(ev, "second"):
+                # CanonicalMatchEvent or object
+                import copy
+                ev_copy = copy.copy(ev)
+                m = getattr(ev_copy, "minute", 0) or 0
+                s = getattr(ev_copy, "second", 0) or 0
+                raw_sec = float(m) * 60.0 + float(s)
+                video_t = max(0.0, float(raw_sec - clock_offset_sec))
+                if hasattr(ev_copy, "raw_payload"):
+                    p = dict(ev_copy.raw_payload) if ev_copy.raw_payload else {}
+                    p["video_timestamp_sec"] = video_t
+                    ev_copy.raw_payload = p
+                try:
+                    setattr(ev_copy, "video_timestamp_sec", video_t)
+                except Exception:
+                    pass
+                aligned.append(ev_copy)
+            else:
+                aligned.append(ev)
         return aligned

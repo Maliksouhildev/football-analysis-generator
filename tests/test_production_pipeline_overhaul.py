@@ -267,6 +267,170 @@ class TestProductionPipelineOverhaul(unittest.TestCase):
         self.assertIn("opp_striker", outfield_ids)
         self.assertIn("cb_defender", outfield_ids)
 
+    # =========================================================================
+    # Edge Cases & Robustness Fixes
+    # =========================================================================
+
+    def test_clock_sync_with_canonical_events(self):
+        """Verifies estimate_clock_offset and align_feed_events_to_video with CanonicalMatchEvent objects."""
+        sb_payload = [
+            {
+                "id": "sb_pass_1",
+                "minute": 10,
+                "second": 20,
+                "type": {"name": "Pass"},
+                "location": [60.0, 40.0],
+                "player": {"name": "Modric"},
+                "team": {"name": "Real Madrid"},
+            },
+            {
+                "id": "sb_pass_2",
+                "minute": 10,
+                "second": 45,
+                "type": {"name": "Pass"},
+                "location": [70.0, 45.0],
+                "player": {"name": "Bellingham"},
+                "team": {"name": "Real Madrid"},
+            },
+        ]
+        events = StatsBombOpenDataParser.parse_events(sb_payload)
+        sync = EventClockSynchronizer(search_window_sec=4.0)
+
+        # Video kicked 2.0s earlier than feed
+        detected_kicks = [618.0, 643.0]
+        offset = sync.estimate_clock_offset(detected_kicks, events)
+        self.assertAlmostEqual(offset, 2.0, places=1)
+
+        aligned = sync.align_feed_events_to_video(events, offset)
+        self.assertEqual(len(aligned), 2)
+        # 10m 20s = 620s. 620s - 2.0s = 618.0s
+        self.assertAlmostEqual(aligned[0].raw_payload["video_timestamp_sec"], 618.0, places=1)
+
+    def test_whoscored_feed_parser_edge_cases(self):
+        """Verifies WhoScored parser handles string periods and None coordinates safely."""
+        ws_payload = [
+            {
+                "id": "ws_sub_1",
+                "period": "FirstHalf",
+                "minute": 35,
+                "second": 10,
+                "x": None,
+                "y": None,
+                "type": {"displayName": "SubstitutionOn"},
+                "playerName": "Gavi",
+            }
+        ]
+        events = WhoScoredMatchCenterParser.parse_events(ws_payload)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].period, 1)
+        self.assertEqual(events[0].pitch_x, 50.0)
+        self.assertEqual(events[0].pitch_y, 50.0)
+        self.assertEqual(events[0].event_type, CanonicalEventType.TACTICAL_SUB)
+
+    def test_statsbomb_feed_parser_edge_cases(self):
+        """Verifies StatsBomb parser handles None statsbomb_xg and location None coordinates safely."""
+        sb_payload = [
+            {
+                "id": "sb_shot_none_xg",
+                "period": "SecondHalf",
+                "minute": 60,
+                "second": 30,
+                "type": {"name": "Shot"},
+                "shot": {"statsbomb_xg": None, "outcome": {"name": "Saved"}},
+                "location": [None, None],
+            }
+        ]
+        events = StatsBombOpenDataParser.parse_events(sb_payload)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].period, 2)
+        self.assertEqual(events[0].xg, 0.0)
+        self.assertEqual(events[0].pitch_x, 50.0)
+        self.assertEqual(events[0].pitch_y, 50.0)
+
+    def test_goalkeeper_pitch_boundary_spectator_disambiguation(self):
+        """
+        Spectators/cameramen beyond touchlines wearing neon GK kit MUST NOT be selected as GK.
+        Central referees wearing neon must be disambiguated against true GK near goal line.
+        """
+        matcher = GlobalFormationMatcher(gk_color_threshold=38.0)
+        gk_kit = [35.0, 200.0, 220.0]
+
+        candidates = [
+            # Cameraman on sideline (y = 72m, pitch width is 68m) wearing neon jacket
+            {"id": "sideline_cameraman", "pitch_x": 10.0, "pitch_y": 72.0, "mean_hsv": [35.0, 200.0, 220.0]},
+            # Central referee wearing neon yellow (x = 52m, mid pitch)
+            {"id": "central_referee", "pitch_x": 52.0, "pitch_y": 34.0, "mean_hsv": [35.0, 200.0, 220.0]},
+            # True Goalkeeper near defending goal (x = 4.0m)
+            {"id": "true_gk", "pitch_x": 4.0, "pitch_y": 34.0, "mean_hsv": [36.0, 195.0, 215.0]},
+        ]
+
+        best_gk, outfield = matcher.filter_goalkeepers(candidates, gk_kit, defending_goal_x=0.0)
+        self.assertIsNotNone(best_gk)
+        self.assertEqual(best_gk["id"], "true_gk", "Failed to disambiguate true GK from referee/spectators!")
+
+    def test_hungarian_relative_centroid_high_line(self):
+        """Verifies that relative centroid matching correctly maintains role assignments under a high defensive line."""
+        matcher = GlobalFormationMatcher()
+        template = CANONICAL_FORMATION_TEMPLATES["4-3-3"]
+        roles = list(template.keys())
+
+        # Entire 4-3-3 team pushes upfield by 20m, with inverted LB moving inside
+        coords = np.array([template[r] for r in roles]) + np.array([20.0, 0.0])
+        coords[0] = [48.0, 28.0]  # Inverted LB
+
+        roster = [{"name": f"Player_{r}", "role": r} for r in roles]
+        assignments = matcher.solve_formation_assignment(
+            coords,
+            "4-3-3",
+            roster,
+            relative_to_centroid=True,
+        )
+
+        self.assertEqual(len(assignments), 10)
+        # Verify LB and LCB roles are assigned to player index 0 and 1
+        self.assertEqual(assignments[0]["role"], "LB")
+        self.assertEqual(assignments[1]["role"], "LCB")
+
+    def test_temporal_crop_aggregator_list_buffer(self):
+        """Verifies aggregator accepts sequence_frames as a list of numpy frames."""
+        agg = TemporalCropAggregator(num_samples=3, target_height=120)
+        frames_list = [np.full((200, 200, 3), 100, dtype=np.uint8) for _ in range(5)]
+        boxes = {
+            0: [20, 20, 80, 80],
+            2: [25, 25, 85, 85],
+            4: [30, 30, 90, 90],
+        }
+        strip = agg.extract_sharpest_strip(1, frames_list, boxes)
+        self.assertIsNotNone(strip)
+        self.assertEqual(strip.shape[0], 120)
+
+    def test_ai_supervisor_auditor_zero_duplication_on_vlm_override(self):
+        """Verifies that VLM jersey number override swaps player profiles without duplicating names."""
+        from scripts.ai_supervisor_auditor import AISupervisorAuditor
+
+        auditor = AISupervisorAuditor(use_mock=True)
+        frames = {i: np.full((120, 160, 3), 200, dtype=np.uint8) for i in range(10)}
+        tracks_boxes = {
+            1: {i: [10, 10, 50, 60] for i in range(10)},
+            2: {i: [60, 60, 110, 110] for i in range(10)},
+        }
+        coords = {1: (20.0, 24.0), 2: (20.0, 44.0)}
+        roster = [
+            {"name": "Antonio Rudiger", "role": "LCB", "jersey_number": 22},
+            {"name": "Eder Militao", "role": "RCB", "jersey_number": 3},
+        ]
+        # In mock audit, override track 2 with jersey 22 (Rudiger)
+        res = auditor.audit_and_match_tracks(
+            sequence_frames=frames,
+            tracks_with_boxes=tracks_boxes,
+            track_pitch_coords=coords,
+            active_roster=roster,
+            gk_kit_hsv=[35.0, 200.0, 220.0],
+            formation="4-3-3",
+        )
+        assigned_names = [info["player_name"] for info in res.values()]
+        self.assertEqual(len(set(assigned_names)), len(assigned_names), "Duplicate player names detected!")
+
 
 if __name__ == "__main__":
     unittest.main()

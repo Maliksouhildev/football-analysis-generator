@@ -48,10 +48,24 @@ class TemporalCropAggregator:
         self.min_crop_w = max(5, int(min_crop_w))
         self.min_frame_spacing = max(1, int(min_frame_spacing))
 
+    def _get_frame(
+        self,
+        sequence_frames: Union[Dict[int, np.ndarray], Sequence[np.ndarray]],
+        f_idx: int,
+    ) -> Optional[np.ndarray]:
+        """Safely retrieves a frame by index from either a dictionary or a sequence/list."""
+        if isinstance(sequence_frames, dict):
+            return sequence_frames.get(f_idx)
+        if isinstance(sequence_frames, (list, tuple)):
+            if 0 <= f_idx < len(sequence_frames):
+                return sequence_frames[f_idx]
+            return None
+        return None
+
     def extract_sharpest_crops(
         self,
         track_id: int,
-        sequence_frames: Dict[int, np.ndarray],
+        sequence_frames: Union[Dict[int, np.ndarray], Sequence[np.ndarray]],
         track_boxes: Dict[int, Sequence[float]],
     ) -> List[Tuple[int, float, np.ndarray]]:
         """
@@ -63,7 +77,7 @@ class TemporalCropAggregator:
         scored_crops: List[Tuple[float, int, np.ndarray]] = []
 
         for f_idx, box in track_boxes.items():
-            frame = sequence_frames.get(f_idx)
+            frame = self._get_frame(sequence_frames, f_idx)
             if frame is None or not isinstance(frame, np.ndarray) or frame.size == 0:
                 continue
 
@@ -80,6 +94,12 @@ class TemporalCropAggregator:
                 y2 = int(round(b[3] * fh))
             else:
                 x1, y1, x2, y2 = [int(round(v)) for v in b]
+
+            # Standardize so x1 <= x2 and y1 <= y2
+            if x1 > x2:
+                x1, x2 = x2, x1
+            if y1 > y2:
+                y1, y2 = y2, y1
 
             # Boundary clamps
             x1 = max(0, min(fw - 1, x1))
@@ -143,7 +163,7 @@ class TemporalCropAggregator:
     def extract_sharpest_strip(
         self,
         track_id: int,
-        sequence_frames: Dict[int, np.ndarray],
+        sequence_frames: Union[Dict[int, np.ndarray], Sequence[np.ndarray]],
         track_boxes: Dict[int, Sequence[float]],
     ) -> Optional[np.ndarray]:
         """
