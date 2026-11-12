@@ -159,3 +159,56 @@ class TestClasicoPipelineIntegration:
         assigned_names = [a["profile"]["name"] for a in assignments.values() if a.get("profile")]
         assert len(assigned_names) == 10
         assert len(set(assigned_names)) == 10, "Duplicate player assignment detected in Hungarian solver!"
+
+    def test_authentic_el_clasico_match_photo_detection(self):
+        """Verifies LocalPlayerDetector localizes on-pitch duel players and ball on real match photo."""
+        real_photo_path = self.frames_dir / "real_clasico_match_action.jpg"
+        assert real_photo_path.is_file(), "Authentic October 26, 2024 El Clásico photo missing!"
+
+        detector = LocalPlayerDetector()
+        res = detector.detect(str(real_photo_path))
+
+        players = res.get("players", [])
+        ball = res.get("ball", {})
+
+        assert len(players) >= 2, f"Expected >= 2 players detected in real duel action photo, got {len(players)}"
+        assert ball.get("detected") is True, "Ball must be localized on real match action photo"
+
+        # Check that both Real Madrid and Barcelona kit profiles are present
+        kits = [p["kit_color"] for p in players]
+        has_rm = any("White" in k for k in kits)
+        has_bar = any("Blue" in k or "Blaugrana" in k for k in kits)
+        assert has_rm, f"Real Madrid kit not detected in real photo: {kits}"
+        assert has_bar, f"FC Barcelona kit not detected in real photo: {kits}"
+
+    def test_barcelona_goalkeeper_kit_color_firewall(self):
+        """Verifies Goalkeeper isolation for FC Barcelona (Iñaki Peña in neon green)."""
+        matcher = GlobalFormationMatcher(gk_color_threshold=40.0)
+        # Peña neon green HSV
+        gk_green_hsv = [60.0, 190.0, 240.0]
+        candidates = [
+            {"track_id": 1, "mean_hsv": [59.0, 185.0, 238.0], "pitch_x": 101.0, "pitch_y": 34.0},  # Peña (GK at right goal)
+            {"track_id": 2, "mean_hsv": [115.0, 160.0, 120.0], "pitch_x": 92.0, "pitch_y": 28.0},  # Cubarsí (RCB in box)
+            {"track_id": 3, "mean_hsv": [118.0, 155.0, 125.0], "pitch_x": 94.0, "pitch_y": 42.0},  # Martínez (LCB in box)
+        ]
+        best_gk, outfield = matcher.filter_goalkeepers(candidates, gk_green_hsv, defending_goal_x=105.0)
+
+        assert best_gk is not None
+        assert best_gk["track_id"] == 1
+        assert len(outfield) == 2
+        assert {c["track_id"] for c in outfield} == {2, 3}
+
+    def test_detector_exception_safety_no_unbound_error(self):
+        """Verifies detector safely handles corrupted/blank images without UnboundLocalError."""
+        from PIL import Image
+        import numpy as np
+
+        detector = LocalPlayerDetector()
+        # Create a tiny 2x2 image that would cause contour/erosion failures
+        tiny_img = Image.fromarray(np.zeros((2, 2, 3), dtype=np.uint8))
+        res = detector._detect_pitch_calibrated(tiny_img)
+
+        assert "players" in res
+        assert "ball" in res
+        assert isinstance(res["players"], list)
+        assert isinstance(res["ball"], dict)

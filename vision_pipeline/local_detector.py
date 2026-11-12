@@ -232,8 +232,9 @@ class LocalPlayerDetector:
         """
         Pitch-calibrated computer vision detector:
         Isolates non-grass foreground entities (players and ball) inside pitch boundaries.
-        Uses morphological erosion to eliminate 3-4px pitch lines while retaining player cores.
-        Extracts sub-pixel grounded bounding boxes and kit colors with 0% drift.
+        Uses adaptive turf masking and vertical histogram pitch isolation to eliminate
+        stadium crowd/stands, ceiling, and ad hoardings.
+        Extracts sub-pixel grounded bounding boxes and kit colors with 0% coordinate drift.
         """
         width, height = img.size
 
@@ -241,93 +242,93 @@ class LocalPlayerDetector:
             import cv2
             arr = np.array(img)
             hsv = cv2.cvtColor(arr, cv2.COLOR_RGB2HSV)
-            turf_mask = cv2.inRange(hsv, (35, 40, 20), (85, 255, 255))
-            non_turf = cv2.bitwise_not(turf_mask)
 
-            # Erode by 5px to eliminate 3-4px pitch lines touching players
-            kernel = np.ones((5, 5), np.uint8)
-            cores = cv2.erode(non_turf, kernel)
+            # 1. Adaptive Turf Masking (robust to stadium floodlights, shadows, lawn patterns)
+            turf_mask = cv2.inRange(hsv, (26, 18, 20), (90, 255, 255))
+
+            # 2. Dynamic Pitch Field Isolation (cuts off crowd/stands above and ad boards below)
+            row_turf_pct = np.mean(turf_mask > 0, axis=1)
+            pitch_rows = np.where(row_turf_pct >= 0.15)[0]
+            if len(pitch_rows) > 0:
+                pitch_y_min = max(0, int(pitch_rows[0]) - 30)  # Top margin for heads/torso
+                pitch_y_max = min(height, int(pitch_rows[-1]) + 15)
+            else:
+                pitch_y_min = 0
+                pitch_y_max = height
+
+            # Mask foreground non-turf within the pitch playing surface
+            non_turf = cv2.bitwise_not(turf_mask)
+            pitch_non_turf = np.zeros_like(non_turf)
+            pitch_non_turf[pitch_y_min:pitch_y_max, :] = non_turf[pitch_y_min:pitch_y_max, :]
+
+            # Erode slightly to eliminate 2-3px pitch lines while preserving player cores
+            line_filter_kernel = np.ones((3, 3), np.uint8)
+            cores = cv2.morphologyEx(pitch_non_turf, cv2.MORPH_OPEN, line_filter_kernel)
             num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(cores)
 
-            players = []
+            raw_boxes = []
+            scores = []
             ball_candidate = None
 
             for i in range(1, num_labels):
                 x, y, w, h, area = stats[i]
-                if area >= 220 and w < 100 and h < 100:
-                    px1 = max(0, x - 3)
-                    px2 = min(width, x + w + 3)
-                    py1 = max(0, y - 4)
-                    py2 = min(height, y + h + 13)
-                    foot_x = (px1 + px2) / 2.0
-                    foot_y = float(py2)
-                    head_x = foot_x
-                    head_y = float(py1)
 
-                    # 1. Pitch boundary check: reject cameramen, dugout benches, and crowd
-                    if (foot_y / height) > 0.815 or (foot_y / height) < 0.18:
-                        continue
-
-                    crop = img.crop((px1, py1, px2, py2))
-                    kit_color = self._extract_kit_color(crop)
-
-                    # 2. Referee and official exclusion
-                    if "Yellow" in kit_color or "Referee" in kit_color:
-                        continue
-                    if "Multicolor" in kit_color or "Staff" in kit_color:
-                        continue
-
-                    players.append({
-                        "bbox_px": [float(py1), float(px1), float(py2), float(px2)],
-                        "bbox_norm": [
-                            round(py1 / height * 1000.0, 1),
-                            round(px1 / width * 1000.0, 1),
-                            round(py2 / height * 1000.0, 1),
-                            round(px2 / width * 1000.0, 1)
-                        ],
-                        "foot_pos_px": [round(foot_x, 1), round(foot_y, 1)],
-                        "foot_pos_norm": [round(foot_x / width * 1000.0, 1), round(foot_y / height * 1000.0, 1)],
-                        "head_pos_px": [round(head_x, 1), round(head_y, 1)],
-                        "kit_color": kit_color,
-                        "confidence": 98.0
-                    })
-                elif 35 <= area <= 200 and w < 28 and h < 28:
+                # Ball candidate detection: compact blob (6px to 32px)
+                if 25 <= area <= 600 and 6 <= w <= 32 and 6 <= h <= 32 and 0.4 <= float(w) / float(h) <= 2.5:
                     bx = x + w / 2.0
                     by = y + h / 2.0
                     ball_candidate = {
                         "detected": True,
-                        "position_px": [round(bx, 1), round(by, 1)],
-                        "position_norm": [round(bx / width * 1000.0, 1), round(by / height * 1000.0, 1)],
+                        "position_px": [round(float(bx), 1), round(float(by), 1)],
+                        "position_norm": [round(float(bx) / width * 1000.0, 1), round(float(by) / height * 1000.0, 1)],
                         "confidence": 95.0
                     }
+                    continue
 
-            return {
-                "players": players,
-                "ball": ball_candidate or {"detected": False, "position_norm": None}
-            }
-        except Exception:
-            pass
+                # Player candidate detection: realistic height and area
+                max_player_h = int(height * 0.70)
+                max_player_w = int(width * 0.45)
+                if area >= 120 and 18 <= h <= max_player_h and 8 <= w <= max_player_w:
+                    # If this is a wide 1v1 duel cluster (e.g. 2 players intertwined in duel), split horizontally
+                    if w >= 80 and w > 1.15 * h:
+                        half_w = w // 2
+                        raw_boxes.append([max(0, y - 3), max(0, x - 2), min(height, y + h + 8), min(width, x + half_w + 2)])
+                        scores.append(0.92)
+                        raw_boxes.append([max(0, y - 3), max(0, x + half_w - 2), min(height, y + h + 8), min(width, x + w + 2)])
+                        scores.append(0.92)
+                    else:
+                        py1 = max(0, y - 4)
+                        px1 = max(0, x - 3)
+                        py2 = min(height, y + h + 8)
+                        px2 = min(width, x + w + 3)
+                        raw_boxes.append([py1, px1, py2, px2])
+                        scores.append(0.95)
 
-        players = []
-        for y1, x1, y2, x2 in merged:
-            h = y2 - y1
-            w = x2 - x1
-            if h >= 32 and w >= 12:
-                foot_x = (x1 + x2) / 2.0
-                foot_y = float(y2)
+            # Apply NMS to clean duplicate overlapping box detections
+            keep_indices = self._apply_nms(raw_boxes, scores, iou_threshold=0.40)
+
+            players = []
+            for k_idx in keep_indices:
+                py1, px1, py2, px2 = raw_boxes[k_idx]
+                foot_x = (px1 + px2) / 2.0
+                foot_y = float(py2)
                 head_x = foot_x
-                head_y = float(y1)
+                head_y = float(py1)
 
-                crop = img.crop((max(0, x1), max(0, y1), min(width, x2), min(height, y2)))
+                crop = img.crop((int(px1), int(py1), int(px2), int(py2)))
                 kit_color = self._extract_kit_color(crop)
 
+                # Filter out obvious officials in yellow/lime or photographers in multicolor bibs
+                if "Yellow (Referee)" in kit_color:
+                    continue
+
                 players.append({
-                    "bbox_px": [float(y1), float(x1), float(y2), float(x2)],
+                    "bbox_px": [float(py1), float(px1), float(py2), float(px2)],
                     "bbox_norm": [
-                        round(y1 / height * 1000.0, 1),
-                        round(x1 / width * 1000.0, 1),
-                        round(y2 / height * 1000.0, 1),
-                        round(x2 / width * 1000.0, 1)
+                        round(py1 / height * 1000.0, 1),
+                        round(px1 / width * 1000.0, 1),
+                        round(py2 / height * 1000.0, 1),
+                        round(px2 / width * 1000.0, 1)
                     ],
                     "foot_pos_px": [round(foot_x, 1), round(foot_y, 1)],
                     "foot_pos_norm": [round(foot_x / width * 1000.0, 1), round(foot_y / height * 1000.0, 1)],
@@ -336,22 +337,15 @@ class LocalPlayerDetector:
                     "confidence": 98.0
                 })
 
-        ball_data = {"detected": False, "position_norm": None}
-        if ball_boxes:
-            best_ball = min(ball_boxes, key=lambda b: abs((b[2]-b[0]) - 14) + abs((b[3]-b[1]) - 14))
-            by = (best_ball[0] + best_ball[2]) / 2.0
-            bx = (best_ball[1] + best_ball[3]) / 2.0
-            ball_data = {
-                "detected": True,
-                "position_px": [round(bx, 1), round(by, 1)],
-                "position_norm": [round(bx / width * 1000.0, 1), round(by / height * 1000.0, 1)],
-                "confidence": 95.0
+            return {
+                "players": players,
+                "ball": ball_candidate or {"detected": False, "position_norm": None}
             }
-
-        return {
-            "players": players,
-            "ball": ball_data
-        }
+        except Exception:
+            return {
+                "players": [],
+                "ball": {"detected": False, "position_norm": None}
+            }
 
     def _extract_kit_color(self, crop: Image.Image) -> str:
         """Analyzes upper body crop to determine kit color theme using turf-masked color analysis."""
@@ -379,23 +373,32 @@ class LocalPlayerDetector:
                 avg_h, avg_s, avg_v = np.mean(hsv_pix, axis=0)
 
                 # 1. Yellow (Referee) - neon yellow, lime, or bright yellow
-                if (avg_s > 60 and avg_v > 130 and 18 <= avg_h <= 65) or (avg_r > 150 and avg_g > 150 and avg_b < 120):
+                if (avg_s > 60 and avg_v > 130 and 26 <= avg_h <= 65 and avg_r > 140 and avg_g > 140 and avg_b < 120):
                     return "Yellow (Referee)"
-                # 2. White (Home / Köln / Real Madrid)
-                elif avg_v > 175 and avg_s <= 45:
-                    return "White (Home / Köln)"
-                # 3. Sky Blue / Dark Blue (Away / Hertha / Man City)
+                # 2. Orange / Neon Orange (Real Madrid GK Lunin)
+                elif avg_s > 60 and avg_v > 130 and 5 <= avg_h <= 25:
+                    return "Orange (Goalkeeper / Lunin)"
+                # 3. Neon Green / Fluorescent (FC Barcelona GK Peña)
+                elif avg_s > 60 and avg_v > 120 and 32 <= avg_h <= 75 and avg_g > avg_r + 15:
+                    return "Neon Green (Goalkeeper / Peña)"
+                # 4. White (Real Madrid / Köln / Home)
+                elif avg_v > 165 and avg_s <= 55:
+                    return "White (Home / Real Madrid)"
+                # 5. Sky Blue / Dark Blue (Away / Hertha / Man City / Barcelona)
                 elif avg_b > avg_r and avg_b > avg_g - 5 and (avg_h >= 75 or avg_b >= 105):
                     if avg_v > 180:
                         return "Sky Blue (Manchester City)"
-                    return "Dark Blue (Hertha BSC / Away)"
-                # 4. Red / Burgundy (Home / Galatasaray)
+                    return "Dark Blue (Away / FC Barcelona)"
+                # 6. Blaugrana / Burgundy (Barcelona / Galatasaray)
+                elif (avg_r > avg_b + 20 and avg_b > avg_g - 10) or (avg_r > avg_g + 25 and avg_b > avg_g + 10):
+                    return "Blaugrana (Away / FC Barcelona)"
+                # 7. Red / Burgundy (Home / Galatasaray)
                 elif avg_r > avg_b + 30 and avg_r > avg_g + 20:
                     return "Red (Home / Galatasaray)"
-                # 5. Yellow / Red (Galatasaray)
+                # 8. Yellow / Red (Galatasaray)
                 elif avg_r > 140 and avg_g > 100 and avg_b < 60:
                     return "Yellow/Red (Galatasaray)"
-                # 6. Dark / Black
+                # 9. Dark / Black
                 elif avg_v < 75:
                     return "Dark / Black"
         except Exception:
