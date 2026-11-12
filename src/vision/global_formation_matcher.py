@@ -79,27 +79,31 @@ CANONICAL_FORMATION_TEMPLATES: Dict[str, Dict[str, Tuple[float, float]]] = {
 
 ROLE_EQUIVALENCE_GROUPS: Dict[str, List[str]] = {
     "GK": ["GK", "GOALKEEPER"],
-    "LB": ["LB", "LWB", "DEFENDER", "DF"],
-    "RB": ["RB", "RWB", "DEFENDER", "DF"],
-    "LCB": ["LCB", "CB", "DEFENDER", "DF"],
-    "RCB": ["RCB", "CB", "DEFENDER", "DF"],
-    "CB": ["CB", "LCB", "RCB", "DEFENDER", "DF"],
-    "DM": ["DM", "CDM", "LDM", "RDM", "CM", "MIDFIELDER", "MF"],
-    "LDM": ["LDM", "DM", "CDM", "CM", "MIDFIELDER", "MF"],
-    "RDM": ["RDM", "DM", "CDM", "CM", "MIDFIELDER", "MF"],
-    "LCM": ["LCM", "CM", "AM", "LM", "MIDFIELDER", "MF"],
-    "RCM": ["RCM", "CM", "AM", "RM", "MIDFIELDER", "MF"],
-    "CM": ["CM", "LCM", "RCM", "DM", "AM", "MIDFIELDER", "MF"],
-    "CAM": ["CAM", "AM", "CM", "SS", "MIDFIELDER", "MF", "FW"],
-    "LAM": ["LAM", "LW", "LM", "AM", "MIDFIELDER", "MF", "FW"],
-    "RAM": ["RAM", "RW", "RM", "AM", "MIDFIELDER", "MF", "FW"],
-    "LW": ["LW", "LM", "LAM", "LWF", "FORWARD", "ST", "FW"],
-    "RW": ["RW", "RM", "RAM", "RWF", "FORWARD", "ST", "FW"],
-    "ST": ["ST", "CF", "LS", "RS", "FORWARD", "ATTACKER", "FW"],
-    "LS": ["LS", "ST", "CF", "FORWARD", "ATTACKER", "FW"],
-    "RS": ["RS", "ST", "CF", "FORWARD", "ATTACKER", "FW"],
-    "LWB": ["LWB", "LB", "LM", "DEFENDER", "DF"],
-    "RWB": ["RWB", "RB", "RM", "DEFENDER", "DF"],
+    "LB": ["LB", "LWB", "LCB", "CB", "DEFENDER", "DF"],
+    "RB": ["RB", "RWB", "RCB", "CB", "DEFENDER", "DF"],
+    "LCB": ["LCB", "CB", "LB", "RCB", "DEFENDER", "DF"],
+    "RCB": ["RCB", "CB", "RB", "LCB", "DEFENDER", "DF"],
+    "CB": ["CB", "LCB", "RCB", "LB", "RB", "DEFENDER", "DF"],
+    "DM": ["DM", "CDM", "LDM", "RDM", "CM", "LCM", "RCM", "AM", "CAM", "MIDFIELDER", "MF"],
+    "LDM": ["LDM", "DM", "CDM", "CM", "LCM", "RCM", "AM", "CAM", "MIDFIELDER", "MF"],
+    "RDM": ["RDM", "DM", "CDM", "CM", "RCM", "LCM", "AM", "CAM", "MIDFIELDER", "MF"],
+    "LCM": ["LCM", "CM", "DM", "LDM", "AM", "CAM", "LM", "RCM", "MIDFIELDER", "MF"],
+    "RCM": ["RCM", "CM", "DM", "RDM", "AM", "CAM", "RM", "LCM", "MIDFIELDER", "MF"],
+    "CM": ["CM", "LCM", "RCM", "DM", "LDM", "RDM", "AM", "CAM", "MIDFIELDER", "MF"],
+    "AM": ["AM", "CAM", "LAM", "RAM", "CM", "LCM", "RCM", "DM", "MIDFIELDER", "MF"],
+    "CAM": ["CAM", "AM", "CM", "LCM", "RCM", "SS", "MIDFIELDER", "MF", "FW"],
+    "LAM": ["LAM", "LW", "LM", "AM", "CAM", "MIDFIELDER", "MF", "FW"],
+    "RAM": ["RAM", "RW", "RM", "AM", "CAM", "MIDFIELDER", "MF", "FW"],
+    "LM": ["LM", "LW", "LCM", "CM", "DM", "MIDFIELDER", "MF"],
+    "RM": ["RM", "RW", "RCM", "CM", "DM", "MIDFIELDER", "MF"],
+    "LW": ["LW", "LM", "LAM", "LF", "LWF", "FORWARD", "ST", "CF", "FW"],
+    "RW": ["RW", "RM", "RAM", "RF", "RWF", "FORWARD", "ST", "CF", "FW"],
+    "ST": ["ST", "CF", "LS", "RS", "LF", "RF", "LW", "RW", "FORWARD", "ATTACKER", "FW"],
+    "CF": ["CF", "ST", "LS", "RS", "LF", "RF", "LW", "RW", "FORWARD", "ATTACKER", "FW"],
+    "LS": ["LS", "ST", "CF", "LW", "LF", "FORWARD", "ATTACKER", "FW"],
+    "RS": ["RS", "ST", "CF", "RW", "RF", "FORWARD", "ATTACKER", "FW"],
+    "LWB": ["LWB", "LB", "LM", "LCB", "DEFENDER", "DF"],
+    "RWB": ["RWB", "RB", "RM", "RCB", "DEFENDER", "DF"],
 }
 
 
@@ -329,17 +333,31 @@ class GlobalFormationMatcher:
                         matched_profile = p
                         break
 
-            # 3. Fallback to any remaining outfield profile
+            # 3. Fallback within the same tactical tier (DF, MF, FW) to prevent role-swapping disasters
+            def _get_tier(role_str: str) -> str:
+                r = str(role_str or "").upper()
+                if r in {"CB", "LCB", "RCB", "LB", "RB", "LWB", "RWB", "DEFENDER", "DF"}:
+                    return "DF"
+                if r in {"DM", "CDM", "LDM", "RDM", "CM", "LCM", "RCM", "LM", "RM", "AM", "CAM", "MIDFIELDER", "MF"}:
+                    return "MF"
+                if r in {"CF", "ST", "LS", "RS", "LW", "RW", "LF", "RF", "LAM", "RAM", "FORWARD", "ATTACKER", "FW"}:
+                    return "FW"
+                return "MF"
+
             if matched_profile is None and available_profiles:
-                # Exclude GK profile from outfield assignments
-                outfield_p = [
+                target_tier = _get_tier(assigned_role)
+                same_tier_profiles = [
                     p for p in available_profiles
-                    if str(p.get("role") or p.get("position") or "").upper() not in ("GK", "GOALKEEPER")
+                    if _get_tier(str(p.get("role") or p.get("position") or "")) == target_tier
                 ]
-                if outfield_p:
-                    matched_profile = outfield_p[0]
+                if same_tier_profiles:
+                    matched_profile = same_tier_profiles[0]
                 else:
-                    matched_profile = available_profiles[0]
+                    outfield_p = [
+                        p for p in available_profiles
+                        if str(p.get("role") or p.get("position") or "").upper() not in ("GK", "GOALKEEPER")
+                    ]
+                    matched_profile = outfield_p[0] if outfield_p else available_profiles[0]
 
             if matched_profile is not None:
                 available_profiles.remove(matched_profile)

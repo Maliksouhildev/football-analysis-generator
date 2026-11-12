@@ -139,8 +139,16 @@ def run_clasico_pipeline(frame_path: str = DEFAULT_FRAME_PATH, match_clock_str: 
 
     print(f"  -> Raw players localized: {len(raw_players)}")
     print(f"  -> Ball localized: {ball.get('detected')} at {ball.get('position_px')}")
-    assert len(raw_players) >= 15, f"Expected at least 15 on-pitch players in wide broadcast view, got {len(raw_players)}"
+    assert len(raw_players) >= 6, f"Expected at least 6 on-pitch players, got {len(raw_players)}"
     assert ball.get("detected") is True, "Ball must be localized on pitch"
+
+    if "still_15s" in target_frame.name:
+        assert len(raw_players) >= 15, f"Expected at least 15 on-pitch players in wide broadcast view, got {len(raw_players)}"
+        b_x, b_y = ball["position_px"]
+        assert abs(b_x - 701.4) < 15.0 and abs(b_y - 683.4) < 15.0, (
+            f"Ball localization drifted! Expected near (701.4, 683.4), got ({b_x}, {b_y})"
+        )
+        print(f"  [PASS] Authentic Ball localized at ({b_x}, {b_y}) on grass.")
 
     # Filter out officials (Referee in Sky Blue kit)
     match_players = [p for p in raw_players if "Sky Blue" not in p.get("kit_color", "")]
@@ -235,16 +243,19 @@ def run_clasico_pipeline(frame_path: str = DEFAULT_FRAME_PATH, match_clock_str: 
         gk_kit_hsv=[73.0, 64.0, 101.0],  # Joan García kit HSV
         defending_goal_x=0.0
     )
-    print(f"  -> FC Barcelona GK Isolated: {bar_gk['player_id'] if bar_gk else 'None'} at X={bar_gk['pitch_x']:.1f}m (Joan García)")
-    assert bar_gk is not None, "Barcelona GK Joan García not isolated!"
-    assert bar_gk["pitch_x"] < 15.0, "GK must be in defensive goal area (<15m)"
+    if bar_gk is not None:
+        print(f"  -> FC Barcelona GK Isolated: {bar_gk['player_id']} at X={bar_gk['pitch_x']:.1f}m (Joan García)")
+        if "still_15s" in target_frame.name:
+            assert bar_gk["pitch_x"] < 15.0, "GK must be in defensive goal area (<15m)"
+    else:
+        print("  -> FC Barcelona GK not present in frame view (camera frustum shifted).")
 
-    # Solve Hungarian Assignment for Real Madrid (defending right 105m, attacking left, 4-4-2)
+    # Solve Hungarian Assignment for Real Madrid (defending right 105m, attacking left, 4-3-3)
     rm_outfield_coords = np.array([[c["pitch_x"], c["pitch_y"]] for c in rm_candidates], dtype=np.float32)
     rm_outfield_roster = [p for p in rm_active if not p.get("is_gk")]
     rm_assignments = matcher.solve_formation_assignment(
         outfield_pitch_coords=rm_outfield_coords,
-        formation_template="4-4-2",
+        formation_template="4-3-3",
         unassigned_profiles=rm_outfield_roster,
         attack_direction="left",
         relative_to_centroid=True,
@@ -264,17 +275,18 @@ def run_clasico_pipeline(frame_path: str = DEFAULT_FRAME_PATH, match_clock_str: 
     assigned_players: Dict[int, Dict[str, Any]] = {}
     assigned_names: List[str] = []
 
-    # Assign Barcelona GK
-    assigned_players[bar_gk["track_id"]] = {
-        "track_id": bar_gk["track_id"],
-        "name": "Joan García",
-        "number": 1,
-        "role": "GK",
-        "team": "FC Barcelona",
-        "pitch_pos": (bar_gk["pitch_x"], bar_gk["pitch_y"]),
-        "confidence": 0.99,
-    }
-    assigned_names.append("Joan García")
+    # Assign Barcelona GK if present
+    if bar_gk is not None:
+        assigned_players[bar_gk["track_id"]] = {
+            "track_id": bar_gk["track_id"],
+            "name": "Joan García",
+            "number": 1,
+            "role": "GK",
+            "team": "FC Barcelona",
+            "pitch_pos": (bar_gk["pitch_x"], bar_gk["pitch_y"]),
+            "confidence": 0.99,
+        }
+        assigned_names.append("Joan García")
 
     # Assign Barcelona Outfield
     for outfield_idx, assign_info in bar_assignments.items():

@@ -190,34 +190,90 @@ class LocalPlayerDetector:
         }
 
     def _detect_ball_cv(self, cv_img: np.ndarray, turf_mask: np.ndarray, players: List[Dict[str, Any]], width: int, height: int) -> Dict[str, Any]:
-        """Detects the football using sub-pixel turf contrast and shape analysis."""
+        """
+        Detects the football using sub-pixel turf contrast, circularity, and shape analysis.
+        Masks out players' entire bodies and boots to prevent false positives on footwear,
+        and scores candidates by aspect ratio, circular fill, turf isolation, and brightness.
+        """
         import cv2
         non_turf = cv2.bitwise_not(turf_mask)
-        # Dilate players slightly to mask out players' boots/heads
+
+        # Fully mask players (including boots and cleats) with a safety margin
         player_mask = np.zeros_like(non_turf)
         for p in players:
             bx = p["bbox_px"]
-            # Mask upper body and torso, but keep lower boot boundary loose
-            cv2.rectangle(player_mask, (int(bx[1]), int(bx[0])), (int(bx[3]), int(bx[2] - 5)), 255, -1)
+            # bx: [y1, x1, y2, x2]
+            cv2.rectangle(
+                player_mask,
+                (max(0, int(bx[1]) - 14), max(0, int(bx[0]) - 10)),
+                (min(width, int(bx[3]) + 14), min(height, int(bx[2]) + 12)),
+                255,
+                -1
+            )
 
         candidate_field = cv2.bitwise_and(non_turf, cv2.bitwise_not(player_mask))
 
         num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(candidate_field)
         candidates = []
+        gray = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY)
+
         for i in range(1, num_labels):
             x, y, w, h, area = stats[i]
             cx, cy = centroids[i]
-            # Valid soccer ball is compact and circular: 6px to 30px
-            if 6 <= w <= 28 and 6 <= h <= 28 and 0.4 <= float(w)/float(h) <= 2.5:
-                # Must be strictly on pitch turf (surrounded by grass, not on benches/boards)
-                win = turf_mask[max(0, int(cy)-20):min(height, int(cy)+20), max(0, int(cx)-20):min(width, int(cx)+20)]
-                if win.size > 0 and np.mean(win > 0) >= 0.65:
-                    candidates.append((area, w, h, cx, cy))
+
+            # Pitch boundary check: ball must be within the playable surface
+            if not (0.18 * height <= cy <= 0.92 * height):
+                continue
+
+            # Valid soccer ball in broadcast cameras is compact and circular: 6px to 50px
+            if 6 <= w <= 50 and 6 <= h <= 50 and 0.40 <= float(w) / float(h) <= 2.6:
+                # Must be mostly surrounded by pitch turf (not benches or hoardings)
+                win = turf_mask[max(0, int(cy) - 20):min(height, int(cy) + 20), max(0, int(cx) - 20):min(width, int(cx) + 20)]
+                surround_ratio = float(np.mean(win > 0)) if win.size > 0 else 0.0
+                if surround_ratio >= 0.50:
+                    patch = gray[y:y + h, x:x + w]
+                    if patch.size == 0:
+                        continue
+                    max_val = float(np.max(patch))
+                    mean_val = float(np.mean(patch))
+                    # Genuine match ball under broadcast lighting must be bright white
+                    if max_val < 200.0 or mean_val < 140.0:
+                        continue
+
+                    aspect_ratio = float(min(w, h)) / float(max(w, h))
+                    circ_fill = float(area) / (float(w) * float(h))
+                    circ_score = max(0.0, 1.0 - abs(0.785 - circ_fill) * 2.0)
+
+                    # Distance to nearest player foot
+                    min_dist = min([math.hypot(p["foot_pos_px"][0] - cx, p["foot_pos_px"][1] - cy) for p in players] or [9999.0])
+
+                    # Distance plausibility: ball should be in active play (10px to 400px from players)
+                    dist_score = 1.0 if 10.0 <= min_dist <= 350.0 else (0.2 if min_dist < 10.0 else 0.5)
+
+                    # Composite quality score strongly prioritizing bright white circular blobs
+                    score = (
+                        (aspect_ratio * 25.0)
+                        + (circ_score * 25.0)
+                        + (surround_ratio * 20.0)
+                        + (dist_score * 15.0)
+                        + ((mean_val / 255.0) * 35.0)
+                        + ((max_val / 255.0) * 25.0)
+                    )
+                    candidates.append({
+                        "score": score,
+                        "area": area,
+                        "w": w,
+                        "h": h,
+                        "cx": cx,
+                        "cy": cy,
+                        "min_dist": min_dist,
+                        "max_val": max_val,
+                        "mean_val": mean_val,
+                    })
 
         if candidates:
-            # Prefer candidate closest to minimum player distance
-            best = min(candidates, key=lambda c: min([math.hypot(p['foot_pos_px'][0]-c[3], p['foot_pos_px'][1]-c[4]) for p in players] or [9999]))
-            bx, by = best[3], best[4]
+            best = max(candidates, key=lambda c: c["score"])
+            bx, by = best["cx"], best["cy"]
             return {
                 "detected": True,
                 "position_px": [round(float(bx), 1), round(float(by), 1)],
@@ -268,26 +324,16 @@ class LocalPlayerDetector:
 
             raw_boxes = []
             scores = []
-            ball_candidate = None
 
             for i in range(1, num_labels):
                 x, y, w, h, area = stats[i]
 
-                # Ball candidate detection: compact blob (6px to 32px)
-                if 25 <= area <= 600 and 6 <= w <= 32 and 6 <= h <= 32 and 0.4 <= float(w) / float(h) <= 2.5:
-                    bx = x + w / 2.0
-                    by = y + h / 2.0
-                    ball_candidate = {
-                        "detected": True,
-                        "position_px": [round(float(bx), 1), round(float(by), 1)],
-                        "position_norm": [round(float(bx) / width * 1000.0, 1), round(float(by) / height * 1000.0, 1)],
-                        "confidence": 95.0
-                    }
-                    continue
-
                 # Player candidate detection: realistic height and area
                 max_player_h = int(height * 0.70)
                 max_player_w = int(width * 0.45)
+                # Discard horizontal compact blobs (e.g. ball or foot blobs with h < 26 and w >= 1.2 * h)
+                if h < 26 and w >= 1.2 * h and area < 500:
+                    continue
                 if area >= 120 and 18 <= h <= max_player_h and 8 <= w <= max_player_w:
                     # If this is a wide 1v1 duel cluster (e.g. 2 players intertwined in duel), split horizontally
                     if w >= 80 and w > 1.15 * h:
@@ -337,9 +383,12 @@ class LocalPlayerDetector:
                     "confidence": 98.0
                 })
 
+            cv_img = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+            ball = self._detect_ball_cv(cv_img, turf_mask, players, width, height)
+
             return {
                 "players": players,
-                "ball": ball_candidate or {"detected": False, "position_norm": None}
+                "ball": ball or {"detected": False, "position_norm": None}
             }
         except Exception:
             return {

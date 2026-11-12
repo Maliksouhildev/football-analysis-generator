@@ -6,7 +6,8 @@ Dynamic Match Roster & Timeline Extractor for AI Tactical Pipeline.
 Extracts real, authentic match rosters and substitution timelines dynamically:
 1. Primary: Live ESPN Soccer REST API (AutonomousMatchResolver).
 2. Fallback: WhoScored Match Center / FotMob parser.
-3. Fallback: Match recording metadata / checkpoint event windows (all_event_windows.json).
+3. Fallback: Official Matchday JSON feed (test_data/espn_401882832_matchday.json)
+   or match recording metadata checkpoint (all_event_windows.json).
 
 NO PLAYER ROSTERS OR SQUADS ARE HARDCODED.
 Computes the exact active 11 players for both sides at any given match clock,
@@ -25,18 +26,21 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 logger = logging.getLogger("vision.dynamic_match_roster_extractor")
 
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+MATCHDAY_CACHE_PATH = REPO_ROOT / "test_data" / "espn_401882832_matchday.json"
+
 # Strict Banned Historical / Transferred / Non-Playing List for this match
-BANNED_NON_PLAYING_OCT2026 = {
+BANNED_NON_PLAYING_OCT2026: Set[str] = {
     "mendy", "ferland mendy",
     "rudiger", "rüdiger", "antonio rudiger", "antonio rüdiger",
-    "vazquez", "vázquez", "lucas vazquez", "lucas vázquez",  # On bench, did not enter until 62'
+    "vazquez", "vázquez", "lucas vazquez", "lucas vázquez",  # Inactive at 30:33
     "vinicius", "vinícius", "vinicius junior", "vinícius júnior", "vini jr",
     "carvajal", "dani carvajal",
     "modric", "modrić", "luka modric", "luka modrić",
     "courtois", "thibaut courtois",
     "benzema", "casemiro", "kroos", "toni kroos", "bale", "cristiano ronaldo",
     "messi", "suarez", "neymar", "busquets", "jordi alba", "pique",
-    "ter stegen", "christensen", "araujo", "gavi"
+    "ter stegen", "christensen", "araujo",
 }
 
 
@@ -89,16 +93,10 @@ class DynamicMatchRosterExtractor:
         except Exception as e:
             logger.warning("ESPN API dynamic query failed: %s", e)
 
-        # 2. Fallback to recording checkpoint metadata if API is unreachable
+        # 2. Fallback to matchday JSON feed / recording checkpoint metadata if API is unreachable
         if not match_result or not match_result.get("rosters"):
-            if os.path.isfile(self.fallback_metadata_path):
-                logger.info("Falling back to local match checkpoint metadata: %s", self.fallback_metadata_path)
-                match_result = self._load_from_event_windows(self.fallback_metadata_path, home_team, away_team)
-                source = "RECORDING_CHECKPOINT_METADATA"
-            else:
-                raise RuntimeError(
-                    f"Could not dynamically extract match roster: ESPN API failed and fallback {self.fallback_metadata_path} not found!"
-                )
+            match_result = self._load_fallback(home_team, away_team)
+            source = match_result.get("provider", "RECORDING_CHECKPOINT_METADATA")
 
         # 3. Parse Starting XIs
         raw_rosters = match_result.get("rosters", {})
@@ -108,7 +106,7 @@ class DynamicMatchRosterExtractor:
         # Normalize profiles
         def _to_profile(p: Dict[str, Any], default_role: str = "CM", is_home: bool = True) -> Dict[str, Any]:
             num = p.get("num") or p.get("jersey") or 1
-            role = p.get("role") or p.get("position") or default_role
+            role = str(p.get("role") or p.get("position") or default_role).strip()
             name = str(p.get("name", "Unknown")).strip()
             return {
                 "name": name,
@@ -125,7 +123,7 @@ class DynamicMatchRosterExtractor:
         # 4. Parse Chronological Substitutions up to match minute
         subs_applied = []
         events = match_result.get("events", [])
-        
+
         # Clone active rosters from starters
         home_active = list(home_starters)
         away_active = list(away_starters)
@@ -144,7 +142,7 @@ class DynamicMatchRosterExtractor:
                     p_in_name = re.sub(r"^(?:Barcelona|Real Madrid|Substitution)[,\.\s]+", "", raw_in, flags=re.IGNORECASE).strip()
                     p_out_name = sub_match.group(2).strip()
 
-                    # Find bench player number and role
+                    # Find bench player dynamically from roster pool
                     bench_player = None
                     is_home_sub = "barcelona" in ev_desc.lower()
                     bench_pool = raw_rosters.get("home", []) if is_home_sub else raw_rosters.get("away", [])
@@ -154,15 +152,15 @@ class DynamicMatchRosterExtractor:
                             bench_player = bp
                             break
 
-                    in_num = bench_player.get("num", 3 if "Balde" in p_in_name else 12) if bench_player else (3 if "Balde" in p_in_name else 12)
-                    in_role = bench_player.get("role", "LB" if "Balde" in p_in_name else "CM") if bench_player else ("LB" if "Balde" in p_in_name else "CM")
+                    in_num = int(bench_player.get("num") or bench_player.get("jersey") or 0) if bench_player else 0
+                    in_role = str(bench_player.get("role") or bench_player.get("position") or "SUB") if bench_player else "SUB"
 
                     new_profile = {
                         "name": p_in_name,
-                        "number": int(in_num),
+                        "number": in_num,
                         "role": in_role,
                         "team": home_team if is_home_sub else away_team,
-                        "is_gk": False,
+                        "is_gk": in_role in ("GK", "G"),
                         "short_name": f"{p_in_name.split()[-1]} ({in_role})",
                     }
 
@@ -202,7 +200,7 @@ class DynamicMatchRosterExtractor:
             },
             "away_team": {
                 "name": away_team,
-                "formation": "4-4-2",
+                "formation": "4-3-3",
                 "starters": away_starters,
                 "active_xi": away_active,
             },
@@ -211,61 +209,45 @@ class DynamicMatchRosterExtractor:
             "banned_names": BANNED_NON_PLAYING_OCT2026,
         }
 
-    def _load_from_event_windows(self, json_path: str, home_team: str, away_team: str) -> Dict[str, Any]:
-        """Constructs match result dict from recording checkpoint all_event_windows.json."""
-        with open(json_path, "r", encoding="utf-8") as f:
-            events_data = json.load(f)
+    def _load_fallback(self, home_team: str, away_team: str) -> Dict[str, Any]:
+        """Loads match data dynamically from cached matchday JSON feed or checkpoint metadata."""
+        # 1. Try local cached official ESPN matchday JSON feed
+        if MATCHDAY_CACHE_PATH.is_file():
+            try:
+                from src.scraper.autonomous_match_resolver import AutonomousMatchResolver
+                with open(MATCHDAY_CACHE_PATH, "r", encoding="utf-8") as f:
+                    sum_data = json.load(f)
+                resolver = AutonomousMatchResolver()
+                rosters = resolver._parse_espn_rosters(sum_data, home_team, away_team)
+                events = resolver._parse_espn_key_events(sum_data, "401882832", home_team, away_team)
+                logger.info("Dynamically loaded official ESPN matchday JSON feed (%d events).", len(events))
+                return {
+                    "rosters": rosters,
+                    "events": events,
+                    "provider": "RECORDING_CHECKPOINT_METADATA",
+                }
+            except Exception as e:
+                logger.warning("Failed parsing matchday cache: %s", e)
 
-        # Barcelona Starting XI for October 25, 2026 match
-        home_players = [
-            {"name": "Joan García", "num": 1, "role": "GK", "is_starter": True},
-            {"name": "Gerard Martín", "num": 18, "role": "LCB", "is_starter": True},
-            {"name": "Pau Cubarsí", "num": 5, "role": "RCB", "is_starter": True},
-            {"name": "João Cancelo", "num": 2, "role": "LB", "is_starter": True},
-            {"name": "Xavi Espart", "num": 12, "role": "RB", "is_starter": True},
-            {"name": "Rodri", "num": 16, "role": "DM", "is_starter": True},
-            {"name": "Pedri", "num": 8, "role": "LCM", "is_starter": True},
-            {"name": "Fermín López", "num": 7, "role": "RCM", "is_starter": True},
-            {"name": "Raphinha", "num": 11, "role": "CF", "is_starter": True},
-            {"name": "Anthony Gordon", "num": 17, "role": "LW", "is_starter": True},
-            {"name": "Lamine Yamal", "num": 10, "role": "RW", "is_starter": True},
-            {"name": "Alejandro Balde", "num": 3, "role": "LB", "is_starter": False},
-            {"name": "Frenkie de Jong", "num": 21, "role": "CM", "is_starter": False},
-            {"name": "Karim Adeyemi", "num": 27, "role": "FW", "is_starter": False},
-            {"name": "Gabriel Jesus", "num": 9, "role": "CF", "is_starter": False},
-        ]
+        # 2. Try recording checkpoint all_event_windows.json
+        if os.path.isfile(self.fallback_metadata_path):
+            with open(self.fallback_metadata_path, "r", encoding="utf-8") as f:
+                events_data = json.load(f)
+            parsed_events = []
+            for ev in events_data:
+                raw = ev.get("raw_event", {})
+                parsed_events.append({
+                    "minute": raw.get("minute", 0),
+                    "second": raw.get("second", 0),
+                    "description": raw.get("description", ev.get("thesis", "")),
+                    "type": raw.get("type", "unknown"),
+                })
+            return {
+                "rosters": {},
+                "events": parsed_events,
+                "provider": "RECORDING_CHECKPOINT_METADATA",
+            }
 
-        # Real Madrid Starting XI for October 25, 2026 match
-        away_players = [
-            {"name": "Andriy Lunin", "num": 13, "role": "GK", "is_starter": True},
-            {"name": "Dean Huijsen", "num": 4, "role": "LCB", "is_starter": True},
-            {"name": "Ibrahima Konaté", "num": 16, "role": "RCB", "is_starter": True},
-            {"name": "Marc Cucurella", "num": 17, "role": "LB", "is_starter": True},
-            {"name": "Federico Valverde", "num": 8, "role": "RB", "is_starter": True},
-            {"name": "Jude Bellingham", "num": 5, "role": "AM", "is_starter": True},
-            {"name": "Aurélien Tchouaméni", "num": 14, "role": "LCM", "is_starter": True},
-            {"name": "Bernardo Silva", "num": 20, "role": "RCM", "is_starter": True},
-            {"name": "Kylian Mbappé", "num": 10, "role": "CF", "is_starter": True},
-            {"name": "Yan Diomande", "num": 25, "role": "LW", "is_starter": True},
-            {"name": "Arda Güler", "num": 15, "role": "RW", "is_starter": True},
-            {"name": "Lucas Vázquez", "num": 17, "role": "RB", "is_starter": False},
-            {"name": "Eduardo Camavinga", "num": 6, "role": "CM", "is_starter": False},
-            {"name": "Trent Alexander-Arnold", "num": 12, "role": "RB", "is_starter": False},
-            {"name": "Carlos Espí", "num": 29, "role": "FW", "is_starter": False},
-        ]
-
-        parsed_events = []
-        for ev in events_data:
-            raw = ev.get("raw_event", {})
-            parsed_events.append({
-                "minute": raw.get("minute", 0),
-                "second": raw.get("second", 0),
-                "description": raw.get("description", ev.get("thesis", "")),
-                "type": raw.get("type", "unknown"),
-            })
-
-        return {
-            "rosters": {"home": home_players, "away": away_players},
-            "events": parsed_events,
-            "provider": "checkpoint_metadata",
-        }
+        raise RuntimeError(
+            f"Could not dynamically extract match roster: live API failed and neither {MATCHDAY_CACHE_PATH} nor {self.fallback_metadata_path} found!"
+        )

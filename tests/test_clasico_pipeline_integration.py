@@ -254,10 +254,23 @@ class TestClasicoPipelineIntegration:
     def test_still_15s_actual_broadcast_end_to_end_pipeline(self):
         """Verifies full AI vision pipeline on actual broadcast still_15s.jpg screenshot."""
         from scripts.run_clasico_end_to_end_test import run_clasico_pipeline, DEFAULT_FRAME_PATH
+        from vision_pipeline.local_detector import LocalPlayerDetector
 
         still_path = Path(DEFAULT_FRAME_PATH)
         assert still_path.is_file(), f"Actual screenshot {DEFAULT_FRAME_PATH} missing!"
 
+        # 1. Verify accurate ball localization directly from detector
+        detector = LocalPlayerDetector()
+        det_res = detector.detect(str(still_path))
+        ball = det_res.get("ball", {})
+        assert ball.get("detected") is True, "Ball must be detected on actual screenshot!"
+        bx, by = ball["position_px"]
+        # Authentic ball is near Rodri's feet at center circle (701.4, 683.4), NOT on Yamal's shoe at (1169, 983)
+        assert abs(bx - 701.4) < 15.0 and abs(by - 683.4) < 15.0, (
+            f"Ball localization drifted to footwear! Expected near (701.4, 683.4), got ({bx}, {by})"
+        )
+
+        # 2. Run full end-to-end tactical pipeline
         report = run_clasico_pipeline(frame_path=str(still_path), match_clock_str="30:33")
 
         assert report["total_players_detected"] >= 15
@@ -266,6 +279,26 @@ class TestClasicoPipelineIntegration:
         assert report["unique_assigned_identities"] == report["total_players_assigned"]
         assert report["goalkeeper_isolated"] is not None
 
-        # Check output images exist
+        # 3. Verify tactical role sanity: defenders are defenders, forwards are forwards
+        assigned = report["assigned_roster"]
+        rma_defenders = [
+            p for p in assigned
+            if p["team"] == "Real Madrid" and p["name"] in ("Marc Cucurella", "Dean Huijsen", "Ibrahima Konaté", "Federico Valverde")
+        ]
+        assert len(rma_defenders) == 4, f"Expected 4 Real Madrid defenders assigned, got {len(rma_defenders)}"
+        for d in rma_defenders:
+            assert d["role"] in ("LB", "LCB", "RCB", "RB", "CB", "DEFENDER", "DF"), (
+                f"FATAL: Defender {d['name']} assigned to non-defensive role: {d['role']}"
+            )
+            assert d["role"] not in ("ST", "RS", "LS", "CF", "FW"), (
+                f"FATAL: Defender {d['name']} must NEVER be assigned to striker role: {d['role']}"
+            )
+
+        # Verify Mbappé is assigned to striker/forward role
+        mbappe = next((p for p in assigned if p["name"] == "Kylian Mbappé"), None)
+        assert mbappe is not None, "Kylian Mbappé must be assigned"
+        assert mbappe["role"] in ("ST", "CF", "LS", "RS", "FORWARD", "FW"), f"Mbappé assigned invalid role: {mbappe['role']}"
+
+        # 4. Check output images exist and are valid JPEGs
         out_local = Path(report["output_frame_path"])
         assert out_local.is_file() and out_local.stat().st_size > 50000, "Rendered tactical frame missing or empty!"
