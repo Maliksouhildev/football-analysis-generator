@@ -139,6 +139,23 @@ class TestTacticalSubgraphSelector(unittest.TestCase):
         tids = [a["track_id"] for a in subgraph.tactical_actors]
         self.assertNotIn(99, tids)
 
+    def test_none_pitch_coords_gracefully_handled(self):
+        """Candidates with pitch_coords=None or missing coords do not cause TypeError."""
+        carrier = {"track_id": 1, "player_name": "Solo", "team": "Home", "pitch_coords": None, "pitch_x": None, "pitch_y": None}
+        p1 = {"track_id": 2, "player_name": "Teammate", "team": "Home", "pitch_coords": None, "pitch_x": 65.0, "pitch_y": 34.0}
+
+        subgraph = self.selector.extract_subgraph(carrier, [carrier, p1])
+        self.assertIsInstance(subgraph, TacticalSubgraph)
+        self.assertEqual(len(subgraph.tactical_actors), 2)
+
+    def test_solo_carrier_no_other_players(self):
+        """Carrier alone on pitch extracts valid subgraph with 0 pressers and 0 options."""
+        carrier = {"track_id": 1, "player_name": "Solo", "team": "Home", "pitch_x": 50.0, "pitch_y": 34.0}
+        subgraph = self.selector.extract_subgraph(carrier, [carrier])
+        self.assertEqual(len(subgraph.pressers), 0)
+        self.assertEqual(len(subgraph.passing_options), 0)
+        self.assertEqual(len(subgraph.tactical_actors), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

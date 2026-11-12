@@ -16,7 +16,9 @@ import unittest
 from pathlib import Path
 from PIL import Image
 import numpy as np
-import pandas as pd
+
+import pytest
+pd = pytest.importorskip("pandas")
 
 from src.rendering.tactical_visualization_engine import (
     TacticalVisualizationEngine,

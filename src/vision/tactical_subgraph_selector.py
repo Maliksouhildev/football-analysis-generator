@@ -120,12 +120,12 @@ class TacticalSubgraphSelector:
     @staticmethod
     def _get_player_coords(player: Dict[str, Any]) -> Tuple[float, float]:
         """Extracts (pitch_x, pitch_y) from player candidate dictionary."""
-        if "pitch_coords" in player:
-            coords = player["pitch_coords"]
+        coords = player.get("pitch_coords")
+        if coords is not None and isinstance(coords, (list, tuple)) and len(coords) >= 2:
             return (float(coords[0]), float(coords[1]))
-        px = player.get("pitch_x", 52.5)
-        py = player.get("pitch_y", 34.0)
-        return (float(px), float(py))
+        px = player.get("pitch_x")
+        py = player.get("pitch_y")
+        return (float(px if px is not None else 52.5), float(py if py is not None else 34.0))
 
     @staticmethod
     def _point_to_line_segment_dist(

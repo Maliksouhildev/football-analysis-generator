@@ -8,6 +8,9 @@ from datetime import datetime
 import os
 import sys
 
+import pytest
+pytest.importorskip("ultralytics")
+
 from src.detection_engine.tracking.video_pipeline import VideoTrackingPipeline
 
 

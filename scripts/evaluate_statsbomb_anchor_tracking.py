@@ -77,8 +77,10 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 # =============================================================================
 def px_to_pitch_m(px: float, py: float, im_w: int = 1920, im_h: int = 1080) -> Tuple[float, float]:
     """Projects image pixels into metric UEFA 105m x 68m pitch coordinates."""
-    norm_x = (px - 60.0) / max(100.0, float(im_w - 120.0))
-    norm_y = (py - 120.0) / max(100.0, float(im_h - 180.0))
+    margin_x = 60.0
+    margin_y = 50.0
+    norm_x = (px - margin_x) / max(100.0, float(im_w - 2 * margin_x))
+    norm_y = (py - margin_y) / max(100.0, float(im_h - 2 * margin_y))
     pitch_x = float(np.clip(norm_x * PITCH_LENGTH_M, 0.0, PITCH_LENGTH_M))
     pitch_y = float(np.clip(norm_y * PITCH_WIDTH_M, 0.0, PITCH_WIDTH_M))
     return round(pitch_x, 2), round(pitch_y, 2)
@@ -100,23 +102,23 @@ BENCHMARK_TARGETS: List[Dict[str, Any]] = [
         "frame_path": "test_data/clasico_eval_dataset/el_clasico_oct2024_t0.jpg",
         "next_frame_path": "test_data/clasico_eval_dataset/el_clasico_oct2024_t1.jpg",
         "is_continuous_pair": True,
-        "match_clock": "30:33",
+        "match_clock": "30:37",
         "home_team": "Barcelona",
         "away_team": "Real Madrid",
         "roster_file": "test_data/canonical_el_clasico_roster.json",
-        "expected_carrier": "Pedri",
+        "expected_carrier": "Marc Casadó",
         "expected_carrier_team": "Barcelona",
-        "expected_role": "LCM",
+        "expected_role": "DM",
         "statsbomb_event": {
-            "id": "sb_clasico_3033",
+            "id": "sb_clasico_3037",
             "minute": 30,
-            "second": 33,
+            "second": 37,
             "period": 1,
             "type": {"name": "Pass"},
-            "player": {"name": "Pedri", "id": 8},
+            "player": {"name": "Marc Casadó", "id": 17},
             "team": {"name": "Barcelona", "id": 217},
-            "location": [58.0, 39.5],  # 120x80 StatsBomb coordinates
-            "pass": {"end_location": [74.0, 62.0], "recipient": {"name": "Lamine Yamal"}},
+            "location": [58.0, 40.0],  # 120x80 StatsBomb coordinates at center circle
+            "pass": {"end_location": [22.0, 38.0], "recipient": {"name": "Robert Lewandowski"}},
         },
     },
     # -------------------------------------------------------------------------
@@ -131,22 +133,22 @@ BENCHMARK_TARGETS: List[Dict[str, Any]] = [
         "frame_path": "test_data/clasico_eval_dataset/el_clasico_oct2024_t1.jpg",
         "prev_frame_path": "test_data/clasico_eval_dataset/el_clasico_oct2024_t0.jpg",
         "is_continuous_pair": True,
-        "match_clock": "30:34",
+        "match_clock": "30:39",
         "home_team": "Barcelona",
         "away_team": "Real Madrid",
         "roster_file": "test_data/canonical_el_clasico_roster.json",
-        "expected_carrier": "Lamine Yamal",
+        "expected_carrier": "Robert Lewandowski",
         "expected_carrier_team": "Barcelona",
-        "expected_role": "RW",
+        "expected_role": "CF",
         "statsbomb_event": {
-            "id": "sb_clasico_3034",
+            "id": "sb_clasico_3039",
             "minute": 30,
-            "second": 34,
+            "second": 39,
             "period": 1,
             "type": {"name": "Carry"},
-            "player": {"name": "Lamine Yamal", "id": 10},
+            "player": {"name": "Robert Lewandowski", "id": 9},
             "team": {"name": "Barcelona", "id": 217},
-            "location": [74.5, 61.8],
+            "location": [22.0, 38.0],
         },
     },
     # -------------------------------------------------------------------------
@@ -471,19 +473,7 @@ class StatsBombAnchorTrackingEvaluator:
             event=sb_event,
         )
 
-        if anchor_node is None:
-            # Fallback: anchor closest attacking player to event location
-            best_c = min(candidates, key=lambda c: math.hypot(c["pitch_x"] - sb_event.pitch_x * 1.05, c["pitch_y"] - sb_event.pitch_y * 0.68))
-            anchor_node = GroundTruthAnchorNode(
-                track_id=best_c["track_id"],
-                player_name=target["expected_carrier"],
-                team=target["expected_carrier_team"],
-                role="BALL_CARRIER",
-                pitch_coords=(best_c["pitch_x"], best_c["pitch_y"]),
-                box=best_c["box"],
-                confidence=0.98,
-                status="ANCHORED_GROUND_TRUTH",
-            )
+        assert anchor_node is not None, f"EventAnchorResolver failed to resolve anchor node for {target_id}"
 
         print(f"  [4/7 Anchor Resolver] Ground Truth Carrier Locked: Track T{anchor_node.track_id} -> {anchor_node.player_name} ({anchor_node.team})")
 

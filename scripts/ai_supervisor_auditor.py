@@ -625,6 +625,27 @@ class AISupervisorAuditor:
                 tid: info["player_name"] for tid, info in outfield_assignments.items()
             }
 
+            # Standardize anchor tracks set to protect them from post-processing heuristic swaps
+            locked_anchored_tids: set[int] = set()
+            locked_anchored_names: set[str] = set()
+            if anchor_nodes:
+                if isinstance(anchor_nodes, dict):
+                    for k, v in anchor_nodes.items():
+                        tid = getattr(v, "track_id", None) or (v.get("track_id") if isinstance(v, dict) else k)
+                        p_name = getattr(v, "player_name", None) or (v.get("player_name") if isinstance(v, dict) else "")
+                        if tid is not None:
+                            locked_anchored_tids.add(int(tid))
+                        if p_name:
+                            locked_anchored_names.add(str(p_name).lower())
+                elif isinstance(anchor_nodes, (list, tuple)):
+                    for v in anchor_nodes:
+                        tid = getattr(v, "track_id", None) or (v.get("track_id") if isinstance(v, dict) else 0)
+                        p_name = getattr(v, "player_name", None) or (v.get("player_name") if isinstance(v, dict) else "")
+                        if tid is not None:
+                            locked_anchored_tids.add(int(tid))
+                        if p_name:
+                            locked_anchored_names.add(str(p_name).lower())
+
             for cand in outfield:
                 vlm_num = cand["audit"].get("jersey_number")
                 if vlm_num is not None:
@@ -639,6 +660,12 @@ class AISupervisorAuditor:
                             (t for t, name in assigned_profiles_by_tid.items() if name == target_name),
                             None,
                         )
+                        # Ground Truth Anchor nodes are LOCKED by authoritative events; never swap them
+                        if curr_tid in locked_anchored_tids or prev_holder_tid in locked_anchored_tids:
+                            continue
+                        if target_name.lower() in locked_anchored_names:
+                            continue
+
                         if prev_holder_tid is not None and prev_holder_tid != curr_tid:
                             # Swap names between tracks to strictly preserve uniqueness
                             curr_old_name = assigned_profiles_by_tid[curr_tid]

@@ -212,11 +212,15 @@ class ShotBoundaryDetector:
             self.hist_weight * hist_dist + self.ssim_weight * structural_diff
         )
 
-        is_cut = (
-            combined_score >= self.combined_threshold
-            or hist_dist >= self.hist_threshold
-            or ssim_val <= self.ssim_threshold
-        )
+        # High structural similarity (SSIM >= 0.85) indicates continuous framing within same shot
+        if ssim_val >= 0.85:
+            is_cut = False
+        else:
+            is_cut = (
+                combined_score >= self.combined_threshold
+                or (hist_dist >= self.hist_threshold and ssim_val <= 0.70)
+                or ssim_val <= self.ssim_threshold
+            )
 
         if not is_cut:
             cut_type = CutType.NO_CUT
@@ -243,13 +247,18 @@ class ShotBoundaryDetector:
         self,
         frames: Union[Sequence[np.ndarray], Dict[int, np.ndarray]],
         fps: float = 30.0,
+        detect_gradual_transitions: bool = True,
+        transition_window: int = 10,
     ) -> List[Dict[str, Any]]:
         """
         Analyzes a sequence of frames and segments into continuous shot intervals.
+        Detects both instantaneous hard cuts and gradual dissolves/transitions.
 
         Args:
             frames: Sequence of frames or dict mapping frame_idx -> image array.
             fps: Video frames per second.
+            detect_gradual_transitions: If True, evaluates multi-frame rolling window for dissolves/wipes.
+            transition_window: Span of frames over which to detect gradual transitions.
 
         Returns:
             List of shot segment dicts:
@@ -291,13 +300,26 @@ class ShotBoundaryDetector:
 
         shots: List[Dict[str, Any]] = []
         shot_start_idx = frame_list[0][0]
+        shot_ref_frame = frame_list[0][1]
 
         for i in range(len(frame_list) - 1):
             curr_idx, curr_frame = frame_list[i]
             next_idx, next_frame = frame_list[i + 1]
 
             diff = self.compute_frame_difference(curr_frame, next_frame)
-            if diff["is_cut"]:
+            is_cut = diff["is_cut"]
+
+            # Gradual dissolve / transition sting detection across rolling window
+            if not is_cut and detect_gradual_transitions and i >= 2:
+                win_back_idx, win_back_frame = frame_list[max(0, i + 1 - transition_window)]
+                win_diff = self.compute_frame_difference(win_back_frame, next_frame)
+                ref_diff = self.compute_frame_difference(shot_ref_frame, next_frame)
+
+                if (win_diff["hist_distance"] >= self.hist_threshold * 1.05 and win_diff["structural_diff"] >= 0.40) or \
+                   (ref_diff["hist_distance"] >= self.hist_threshold * 1.15 and win_diff["combined_diff_score"] >= 0.38):
+                    is_cut = True
+
+            if is_cut:
                 # End current shot at curr_idx
                 start_t = shot_start_idx / fps
                 end_t = curr_idx / fps
@@ -314,6 +336,7 @@ class ShotBoundaryDetector:
                     }
                 )
                 shot_start_idx = next_idx
+                shot_ref_frame = next_frame
 
         # Append final segment
         last_idx = frame_list[-1][0]

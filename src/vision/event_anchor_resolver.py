@@ -284,30 +284,34 @@ class EventAnchorResolver:
             box = cand.get("box", [0, 0, 0, 0])
             foot_pt = self.compute_foot_point(box)
 
-            # 1. Foot to ball distance score
+            # 1. Foot to ball distance score (multi-modal: pitch metric + screen pixel distance)
             cand_px = cand.get("pitch_x")
             cand_py = cand.get("pitch_y")
 
+            s_dist_metric = None
+            d_ball_m = 999.0
             if has_pitch_ball and cand_px is not None and cand_py is not None:
-                # Metric pitch distance
-                d_ball = math.hypot(float(cand_px) - float(ball_pitch_x), float(cand_py) - float(ball_pitch_y))
-                if d_ball > self.max_carrier_ball_dist_m:
-                    s_dist = 0.0
-                else:
-                    # Gaussian-like decay with sigma = 1.8m
-                    s_dist = math.exp(- (d_ball ** 2) / (2.0 * (1.8 ** 2)))
-            elif ball_img_pos is not None:
-                # Pixel distance fallback normalized by bounding box height
-                cand_h = max(10.0, float(box[3] - box[1]))
+                d_ball_m = math.hypot(float(cand_px) - float(ball_pitch_x), float(cand_py) - float(ball_pitch_y))
+                s_dist_metric = math.exp(- (d_ball_m ** 2) / (2.0 * (3.8 ** 2)))
+
+            s_dist_px = None
+            d_norm_px = 999.0
+            if ball_img_pos is not None:
+                cand_h = max(15.0, float(box[3] - box[1]))
                 d_px = math.hypot(float(foot_pt[0]) - float(ball_img_pos[0]), float(foot_pt[1]) - float(ball_img_pos[1]))
-                d_normalized = d_px / cand_h  # Distance relative to player height
-                if d_normalized > 2.5:
-                    s_dist = 0.0
-                else:
-                    s_dist = math.exp(- (d_normalized ** 2) / (2.0 * (0.8 ** 2)))
-                d_ball = d_normalized * 1.8
+                d_norm_px = d_px / cand_h
+                s_dist_px = math.exp(- (d_norm_px ** 2) / (2.0 * (1.0 ** 2)))
+
+            if s_dist_metric is not None and s_dist_px is not None:
+                s_dist = max(s_dist_metric, s_dist_px)
+                d_ball = min(d_ball_m, d_norm_px * 2.0)
+            elif s_dist_metric is not None:
+                s_dist = s_dist_metric
+                d_ball = d_ball_m
+            elif s_dist_px is not None:
+                s_dist = s_dist_px
+                d_ball = d_norm_px * 2.0
             else:
-                # No ball detection: neutral fallback
                 s_dist = 0.5
                 d_ball = 2.0
 
@@ -325,7 +329,7 @@ class EventAnchorResolver:
                 if d_event > self.max_event_dist_m:
                     s_pitch = 0.0
                 else:
-                    s_pitch = math.exp(- (d_event ** 2) / (2.0 * (12.0 ** 2)))
+                    s_pitch = math.exp(- (d_event ** 2) / (2.0 * (14.0 ** 2)))
             else:
                 s_pitch = 0.5
                 d_event = 10.0
@@ -343,16 +347,15 @@ class EventAnchorResolver:
                 + self.w_vel * s_vel
             )
 
-            # Hard spatial bounds: If player is physically separated from ball or event location,
-            # they cannot possess the ball regardless of kit or velocity
-            if d_ball > self.max_carrier_ball_dist_m:
-                total_score *= max(0.0, 1.0 - (d_ball - self.max_carrier_ball_dist_m) / 10.0)
+            # Soft spatial bounds: prevent distant players while preserving carriers during passes/duels
+            if d_ball > 16.0:
+                total_score *= max(0.4, 1.0 - (d_ball - 16.0) / 25.0)
             if d_event > self.max_event_dist_m:
-                total_score *= max(0.0, 1.0 - (d_event - self.max_event_dist_m) / 20.0)
+                total_score *= max(0.0, 1.0 - (d_event - self.max_event_dist_m) / 15.0)
 
-            # If kit mismatch on offensive event, enforce severe penalty cap
+            # Defense Tackle Firewall: strict cap against opposing defenders during offensive events
             if is_offensive and s_kit == 0.0:
-                total_score = min(total_score, 0.25)
+                total_score = min(total_score, 0.20)
 
             cand_eval = dict(cand)
             cand_eval["foot_point"] = foot_pt

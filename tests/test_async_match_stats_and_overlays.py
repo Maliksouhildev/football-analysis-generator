@@ -12,7 +12,8 @@ import os
 import unittest
 from PIL import Image, ImageDraw
 
-import pandas as pd
+import pytest
+pd = pytest.importorskip("pandas")
 
 from src.scraper.async_match_stats import AsyncMatchStatsScraper, PlayerOfficialStats
 from src.rendering.match_stats_provider import MatchStatsProvider

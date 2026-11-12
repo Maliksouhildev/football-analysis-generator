@@ -213,6 +213,66 @@ class TestEventAnchorResolver(unittest.TestCase):
         anchor = self.resolver.resolve_anchor(distant_cand, ball, ev)
         self.assertIsNone(anchor)
 
+    def test_multimodal_screen_pixel_distance_fallback(self):
+        """Verifies candidate with screen pixel proximity to ball is recognized even under metric distortion."""
+        # Player box has foot at (500, 400), height = 100px
+        cand = {
+            "track_id": 7,
+            "team": "Barcelona",
+            "pitch_x": 52.0,
+            "pitch_y": 34.0,
+            "box": [450, 300, 550, 400],
+        }
+        # Ball has center right at player's foot on screen: (505, 405)
+        ball = {
+            "pitch_x": 60.0,  # Metric distance has 8m calibration offset
+            "pitch_y": 34.0,
+            "center": (505.0, 405.0),
+        }
+        ev = {
+            "player": {"name": "Pedri"},
+            "team": {"name": "Barcelona"},
+            "type": "carry",
+            "pitch_x": 52.0,
+            "pitch_y": 34.0,
+        }
+
+        anchor = self.resolver.resolve_anchor([cand], ball, ev)
+        self.assertIsNotNone(anchor)
+        self.assertEqual(anchor.player_name, "Pedri")
+        self.assertGreater(anchor.possession_score, 0.55)
+
+    def test_duel_loose_ball_recovery(self):
+        """In a contested duel with loose ball, the attacking carrier is anchored over defending slide-tackler."""
+        cand_defender = {
+            "track_id": 4,
+            "team": "Real Madrid",
+            "pitch_x": 54.0,
+            "pitch_y": 34.0,
+            "box": [100, 100, 150, 200],
+        }
+        cand_carrier = {
+            "track_id": 9,
+            "team": "Barcelona",
+            "pitch_x": 50.0,
+            "pitch_y": 34.0,
+            "box": [100, 100, 150, 200],
+        }
+        # Ball is loose 5 meters ahead in duel
+        ball = {"pitch_x": 55.0, "pitch_y": 34.0}
+        ev = {
+            "player": {"name": "Robert Lewandowski"},
+            "team": {"name": "Barcelona"},
+            "type": "carry",
+            "pitch_x": 50.0,
+            "pitch_y": 34.0,
+        }
+
+        anchor = self.resolver.resolve_anchor([cand_defender, cand_carrier], ball, ev)
+        self.assertIsNotNone(anchor)
+        self.assertEqual(anchor.track_id, 9)
+        self.assertEqual(anchor.player_name, "Robert Lewandowski")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -133,6 +133,33 @@ class TestShotBoundaryDetector(unittest.TestCase):
         self.assertFalse(diff["is_cut"])
         self.assertAlmostEqual(diff["ssim"], 1.0, places=2)
 
+    def test_slow_transition_dissolve_detected(self):
+        """
+        Attacking the untested edge case:
+        Gradual dissolve / wipe across 15 frames where adjacent frames have small diff,
+        but cumulative multi-frame window triggers shot boundary transition.
+        """
+        shot_a = np.full((180, 320, 3), (34, 139, 34), dtype=np.uint8)   # Green pitch
+        shot_b = np.full((180, 320, 3), (220, 50, 30), dtype=np.uint8)   # Red broadcast replay
+
+        # 5 frames of Shot A, 14 frames of linear dissolve, 5 frames of Shot B
+        sequence = [shot_a.copy() for _ in range(5)]
+        for step in range(1, 15):
+            alpha = step / 15.0
+            blended = cv2.addWeighted(shot_a, 1.0 - alpha, shot_b, alpha, 0.0)
+            sequence.append(blended)
+        sequence.extend([shot_b.copy() for _ in range(5)])
+
+        # Verify that adjacent frames during dissolve have small step difference (< 0.15)
+        adj_diff = self.detector.compute_frame_difference(sequence[7], sequence[8])
+        self.assertFalse(adj_diff["is_cut"], "Individual adjacent dissolve step should not trigger hard cut")
+
+        # But windowed shot boundary detector successfully detects the transition
+        shots = self.detector.detect_shot_boundaries(sequence, fps=30.0, detect_gradual_transitions=True, transition_window=10)
+        self.assertGreaterEqual(len(shots), 2, "Gradual dissolve must be segmented into distinct shots")
+        self.assertEqual(shots[0]["start_frame"], 0)
+        self.assertEqual(shots[-1]["end_frame"], len(sequence) - 1)
+
 
 if __name__ == "__main__":
     unittest.main()
