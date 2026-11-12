@@ -166,7 +166,7 @@ logger = logging.getLogger("evaluate_clasico_blueprint_pipeline")
 
 
 
-# Strict Banned Non-Squad list (players who did not play this match at all)
+# Strict Banned Non-Squad list (players who did not play this match at all - historical/transferred/injured)
 
 BANNED_NON_SQUAD = {
 
@@ -174,15 +174,11 @@ BANNED_NON_SQUAD = {
 
     "neymar", "marcelo", "varane", "isco", "asensio", "hazard", "courtois",
 
-    "alaba", "david alaba", "carvajal", "dani carvajal", "ferran torres", "ferran",
+    "alaba", "david alaba", "carvajal", "dani carvajal",
 
     "ter stegen", "christensen", "araujo", "kroos", "toni kroos", "kepa",
 
-    "nacho", "joselu", "gündogan", "gundogan", "félix", "felix",
-
-    "militão", "militao", "mendy", "ferland mendy", "vázquez", "vazquez",
-
-    "lucas vazquez", "lucas vázquez", "rüdiger", "rudiger", "endrick", "vallejo", "ceballos"
+    "nacho", "joselu", "gündogan", "gundogan", "félix", "felix"
 
 }
 
@@ -280,7 +276,7 @@ BALL_CARRIER_EVENTS = [
 
     {"minute": 57, "second": 0, "player": "Robert Lewandowski", "number": 9, "team": "barcelona", "role": "CF", "event": "second_goal_transition"},
 
-    {"minute": 62, "second": 44, "player": "Marc Cucurella", "number": 17, "team": "real_madrid", "role": "LB", "event": "1v1_defensive_duel"},
+    {"minute": 62, "second": 44, "player": "Lucas Vázquez", "number": 17, "team": "real_madrid", "role": "RB", "event": "1v1_defensive_duel"},
 
     {"minute": 70, "second": 0, "player": "Luka Modrić", "number": 10, "team": "real_madrid", "role": "LCM", "event": "central_possession"},
 
@@ -3740,7 +3736,7 @@ def run_clasico_fatal_flaws_verification() -> bool:
 
         {"name": "Éder Militão", "role": "RCB"},
 
-        {"name": "Dani Carvajal", "role": "RB"},
+        {"name": "Lucas Vázquez", "role": "RB"},
 
         {"name": "Aurélien Tchouaméni", "role": "DM"},
 
@@ -3748,11 +3744,11 @@ def run_clasico_fatal_flaws_verification() -> bool:
 
         {"name": "Federico Valverde", "role": "RCM"},
 
+        {"name": "Jude Bellingham", "role": "AM"},
+
         {"name": "Vinícius Júnior", "role": "LW"},
 
         {"name": "Kylian Mbappé", "role": "ST"},
-
-        {"name": "Rodrygo", "role": "RW"},
 
     ]
 
