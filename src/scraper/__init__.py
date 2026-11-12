@@ -43,6 +43,7 @@ from .masterclass_sequencer import (
 from .lineup_scraper import MatchLineupResolver
 from .crowd_consensus import CrowdConsensusScraper, CrowdConsensusResult
 from .evidence_matcher import EvidenceMatcher, GeminiFailoverPool, TacticalThesis
+from .event_feed_parsers import WhoScoredMatchCenterParser, StatsBombOpenDataParser
 
 __all__ = [
     # Event Scraper
@@ -85,4 +86,6 @@ __all__ = [
     "EvidenceMatcher",
     "GeminiFailoverPool",
     "TacticalThesis",
+    "WhoScoredMatchCenterParser",
+    "StatsBombOpenDataParser",
 ]

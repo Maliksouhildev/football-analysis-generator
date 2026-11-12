@@ -10,7 +10,10 @@ from typing import Dict, List, Optional, Tuple
 import cv2
 import numpy as np
 
-from ultralytics.trackers.bot_sort import BOTSORT
+try:
+    from ultralytics.trackers.bot_sort import BOTSORT
+except ImportError:
+    BOTSORT = None
 
 
 @dataclass

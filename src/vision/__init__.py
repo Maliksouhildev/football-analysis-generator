@@ -81,6 +81,17 @@ from src.vision.telestration_adapter import (
     SyntheticTacticalGenerator,
     extract_tactical_telestration,
 )
+from src.vision.event_clock_sync import EventClockSynchronizer
+from src.vision.probabilistic_bidi_tracker import (
+    ProbabilisticBidirectionalTracker,
+    TrackStatus,
+    compute_box_iou,
+)
+from src.vision.temporal_crop_aggregator import TemporalCropAggregator
+from src.vision.global_formation_matcher import (
+    GlobalFormationMatcher,
+    CANONICAL_FORMATION_TEMPLATES,
+)
 
 __all__ = [
     # Tactical entities & schema
@@ -150,5 +161,13 @@ __all__ = [
     "find_continuous_tactical_buildup",
     "evaluate_tactical_spatial_metrics",
     "rank_buildup_candidates",
+    # Production Overhaul Pipeline Components
+    "EventClockSynchronizer",
+    "ProbabilisticBidirectionalTracker",
+    "TrackStatus",
+    "compute_box_iou",
+    "TemporalCropAggregator",
+    "GlobalFormationMatcher",
+    "CANONICAL_FORMATION_TEMPLATES",
 ]
 
