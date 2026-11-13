@@ -329,8 +329,8 @@ class LocalPlayerDetector:
                 x, y, w, h, area = stats[i]
 
                 # Player candidate detection: realistic height and area
-                max_player_h = int(height * 0.70)
-                max_player_w = int(width * 0.45)
+                max_player_h = int(height * 0.96)
+                max_player_w = int(width * 0.75)
                 # Discard horizontal compact blobs (e.g. ball or foot blobs with h < 26 and w >= 1.2 * h)
                 if h < 26 and w >= 1.2 * h and area < 500:
                     continue

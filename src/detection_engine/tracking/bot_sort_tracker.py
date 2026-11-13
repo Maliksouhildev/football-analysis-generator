@@ -197,7 +197,8 @@ class _DetectionsWrapper:
 
 class _FallbackGMC:
     """Standalone Camera Motion Compensation via OpenCV Sparse Optical Flow."""
-    def __init__(self):
+    def __init__(self, method: str = "sparseOptFlow"):
+        self.method = method
         self.prev_frame = None
         self.prev_pts = None
 
@@ -230,12 +231,34 @@ class _FallbackGMC:
         return np.eye(2, 3, dtype=np.float32)
 
 
+class _FallbackTrack:
+    """Internal state for tracked bounding box during fallback tracking."""
+    def __init__(self, track_id: int, bbox: np.ndarray, conf: float, cls_id: int):
+        self.track_id = track_id
+        self.bbox = np.array(bbox, dtype=np.float32).copy()
+        self.conf = float(conf)
+        self.cls_id = int(cls_id)
+        self.lost_frames = 0
+
+    def predict(self, warp: np.ndarray):
+        pts = np.array([[self.bbox[0], self.bbox[1]], [self.bbox[2], self.bbox[3]]], dtype=np.float32)
+        pts_hom = np.hstack([pts, np.ones((2, 1), dtype=np.float32)])
+        warped = pts_hom @ warp.T
+        x1 = min(warped[0, 0], warped[1, 0])
+        y1 = min(warped[0, 1], warped[1, 1])
+        x2 = max(warped[0, 0], warped[1, 0])
+        y2 = max(warped[0, 1], warped[1, 1])
+        self.bbox = np.array([x1, y1, x2, y2], dtype=np.float32)
+
+
 class _FallbackBoTSORT:
     """Lightweight fallback BoTSORT when Ultralytics is not available."""
     def __init__(self, parent):
         self.parent = parent
-        self.gmc = _FallbackGMC()
+        self.gmc = _FallbackGMC(method="sparseOptFlow")
+        self.encoder = None
         self.next_id = 1
+        self.active_tracks: List[_FallbackTrack] = []
 
     def update(self, dets, img=None):
         warp = self.gmc.apply(img)
@@ -245,14 +268,77 @@ class _FallbackBoTSORT:
         confs = dets.conf if hasattr(dets, "conf") else np.empty(0)
         classes = dets.cls if hasattr(dets, "cls") else np.empty(0)
 
+        if len(boxes) == 0:
+            for t in self.active_tracks:
+                t.predict(warp)
+                t.lost_frames += 1
+            self.active_tracks = [t for t in self.active_tracks if t.lost_frames <= self.parent.track_buffer]
+            return np.empty((0, 8), dtype=np.float32)
+
+        # Warp existing tracks with camera motion
+        for t in self.active_tracks:
+            t.predict(warp)
+
+        matched_track_indices = set()
+        matched_det_indices = set()
         out_tracks = []
-        for i, box in enumerate(boxes):
-            tid = self.next_id
-            self.next_id += 1
-            conf = float(confs[i]) if i < len(confs) else 0.9
-            cls_id = int(classes[i]) if i < len(classes) else 0
-            out_tracks.append([box[0], box[1], box[2], box[3], tid, conf, cls_id, i])
-        return np.array(out_tracks, dtype=np.float32) if out_tracks else np.empty((0, 8))
+
+        if self.active_tracks:
+            n_t = len(self.active_tracks)
+            n_d = len(boxes)
+            iou_mat = np.zeros((n_t, n_d), dtype=np.float32)
+
+            for i, t in enumerate(self.active_tracks):
+                tb = t.bbox
+                t_area = max(1.0, float((tb[2] - tb[0]) * (tb[3] - tb[1])))
+                for j, db in enumerate(boxes):
+                    d_area = max(1.0, float((db[2] - db[0]) * (db[3] - db[1])))
+                    ix1 = max(float(tb[0]), float(db[0]))
+                    iy1 = max(float(tb[1]), float(db[1]))
+                    ix2 = min(float(tb[2]), float(db[2]))
+                    iy2 = min(float(tb[3]), float(db[3]))
+                    iw = max(0.0, ix2 - ix1)
+                    ih = max(0.0, iy2 - iy1)
+                    inter = iw * ih
+                    union = t_area + d_area - inter
+                    iou = inter / union if union > 0 else 0.0
+                    iou_mat[i, j] = iou
+
+            try:
+                from scipy.optimize import linear_sum_assignment
+                row_ind, col_ind = linear_sum_assignment(1.0 - iou_mat)
+                for r, c in zip(row_ind, col_ind):
+                    if iou_mat[r, c] >= 0.15:
+                        t = self.active_tracks[r]
+                        t.bbox = np.array(boxes[c], dtype=np.float32)
+                        t.conf = float(confs[c]) if c < len(confs) else 0.9
+                        t.cls_id = int(classes[c]) if c < len(classes) else 0
+                        t.lost_frames = 0
+                        matched_track_indices.add(r)
+                        matched_det_indices.add(c)
+                        out_tracks.append([boxes[c][0], boxes[c][1], boxes[c][2], boxes[c][3], t.track_id, t.conf, t.cls_id, c])
+            except Exception:
+                pass
+
+        # Handle unmatched detections (new tracks)
+        for j, box in enumerate(boxes):
+            if j not in matched_det_indices:
+                conf = float(confs[j]) if j < len(confs) else 0.9
+                if conf >= self.parent.track_low_thresh:
+                    tid = self.next_id
+                    self.next_id += 1
+                    cls_id = int(classes[j]) if j < len(classes) else 0
+                    new_t = _FallbackTrack(tid, box, conf, cls_id)
+                    self.active_tracks.append(new_t)
+                    out_tracks.append([box[0], box[1], box[2], box[3], tid, conf, cls_id, j])
+
+        # Age unmatched active tracks
+        for i, t in enumerate(self.active_tracks):
+            if i not in matched_track_indices:
+                t.lost_frames += 1
+
+        self.active_tracks = [t for t in self.active_tracks if t.lost_frames <= self.parent.track_buffer]
+        return np.array(out_tracks, dtype=np.float32) if out_tracks else np.empty((0, 8), dtype=np.float32)
 
 
 class BoTSORTTracker:
