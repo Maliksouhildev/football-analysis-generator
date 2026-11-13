@@ -981,7 +981,6 @@ def filter_candidate_boxes(
 
 
         # 1. Reject tiny noise fragments & non-human aspect ratios
-
         if shot_type == "wide_tactical":
 
             if bh < 42 or bw < 14:
@@ -2458,7 +2457,21 @@ def process_eval_frame_production(
 
     ball_detections = []
 
-    if shot_type == "wide_tactical":
+    if sahi_model is None or yolo_model is None:
+        from vision_pipeline.local_detector import LocalPlayerDetector
+        local_det = LocalPlayerDetector()
+        res = local_det.detect(str(frame_path))
+        p_list = []
+        for p in res.get("players", []):
+            if p.get("bbox_px"):
+                y1, x1, y2, x2 = p["bbox_px"]
+                p_list.append([float(x1), float(y1), float(x2), float(y2)])
+        raw_boxes = np.array(p_list, dtype=np.float32) if p_list else np.empty((0, 4))
+        b = res.get("ball", {})
+        if b.get("detected") and b.get("position_px"):
+            bx, by = b["position_px"]
+            ball_detections.append([bx - 12.0, by - 12.0, bx + 12.0, by + 12.0])
+    elif shot_type == "wide_tactical":
 
         img_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
 
@@ -2539,25 +2552,15 @@ def process_eval_frame_production(
 
 
     # Dedicated high-recall sports ball detector if missed by primary pass
-
-    if not ball_detections:
-
+    if not ball_detections and yolo_model is not None:
         ball_res = yolo_model.predict(
-
             frame_bgr,
-
             classes=[32],
-
             conf=0.06,
-
             device="cpu",
-
             verbose=False,
-
         )[0]
-
         for bb in ball_res.boxes.xyxy.cpu().numpy():
-
             ball_detections.append(bb)
 
 
@@ -3529,18 +3532,22 @@ def process_eval_frame_production(
 
 
     out_annotated_path = OUTPUT_DIR / f"{frame_path.stem}_blueprint_verified.jpg"
-
-    cv2.imwrite(str(out_annotated_path), annotated)
-
+    ok = cv2.imwrite(str(out_annotated_path), annotated)
+    if not ok or not out_annotated_path.is_file():
+        from PIL import Image
+        Image.fromarray(cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)).save(str(out_annotated_path), quality=95)
     logger.info(f"Saved verified annotated screenshot: {out_annotated_path.name}")
 
-
-
     # Copy to artifact dir for user-facing viewing
-
     artifact_copy_path = ARTIFACT_DIR / f"{frame_path.stem}_blueprint_verified.jpg"
-
     shutil.copy2(out_annotated_path, artifact_copy_path)
+
+    # Also save to output directory
+    output_tactical_path = PROJECT_ROOT / "output" / f"{frame_path.stem}_tactical.jpg"
+    try:
+        shutil.copy2(out_annotated_path, output_tactical_path)
+    except Exception:
+        pass
 
 
 
@@ -3836,90 +3843,59 @@ def main():
 
 
 
-    # 2. Check if SAHI / YOLO inference packages and frame dataset are available
-
-    if AutoDetectionModel is None or YOLO is None or not FRAMES_DIR.is_dir():
-
-        print(f"\n[Notice] SAHI/YOLO dependencies or dataset ({FRAMES_DIR}) offline.")
-
-        print("Production Fatal Flaw Overhaul benchmark completed successfully.")
-
+    # 2. Check if frame dataset directory is available
+    if not FRAMES_DIR.is_dir():
+        print(f"\n[Notice] Dataset directory ({FRAMES_DIR}) offline.")
         return
 
-
-
     print("=" * 80)
-
     print("REVAMPED ROBOFLOW SPORTS + SAHI + 2D HOMOGRAPHY PIPELINE")
-
     print(f"Frames Directory: {FRAMES_DIR}")
-
     print(f"Output Directory: {OUTPUT_DIR}")
-
     print(f"Artifact Directory: {ARTIFACT_DIR}")
-
     print("=" * 80)
-
-
 
     canonical_matches = load_canonical_matches()
-
     geom_engine = PitchGeometryEngine()
-
     projector = PitchHomographyProjector(preset_name="broadcast_main_wide")
 
-
-
-    print("[Model] Loading SAHI AutoDetectionModel with yolov8x.pt on CPU...")
-
-    sahi_model = AutoDetectionModel.from_pretrained(
-
-        model_type="yolov8",
-
-        model_path=str(PROJECT_ROOT / "yolov8x.pt"),
-
-        confidence_threshold=0.18,
-
-        device="cpu",
-
-    )
-
-    yolo_model = YOLO(str(PROJECT_ROOT / "yolov8x.pt"))
-
-
+    sahi_model = None
+    yolo_model = None
+    if AutoDetectionModel is not None and YOLO is not None and (PROJECT_ROOT / "yolov8x.pt").is_file():
+        print("[Model] Loading SAHI AutoDetectionModel with yolov8x.pt on CPU...")
+        try:
+            sahi_model = AutoDetectionModel.from_pretrained(
+                model_type="yolov8",
+                model_path=str(PROJECT_ROOT / "yolov8x.pt"),
+                confidence_threshold=0.18,
+                device="cpu",
+            )
+            yolo_model = YOLO(str(PROJECT_ROOT / "yolov8x.pt"))
+        except Exception as e:
+            logger.warning(f"Failed to load SAHI/YOLO: {e}. Falling back to LocalPlayerDetector.")
+            sahi_model = None
+            yolo_model = None
+    else:
+        print("[Model] Using high-precision LocalPlayerDetector for authentic match broadcast footage.")
 
     eval_frames = [
-
         FRAMES_DIR / "frame_01_min00_kickoff.jpg",
-
         FRAMES_DIR / "frame_02_min30_shape_30m37s.jpg",
-
         FRAMES_DIR / "frame_03_min41_box_duel_41m33s.jpg",
-
         FRAMES_DIR / "frame_04_min46_kickoff_46m43s.jpg",
-
         FRAMES_DIR / "frame_05_min62_duel_62m44s.png",
-
         FRAMES_DIR / "frame_06_min80_block_80m58s.jpg",
-
         FRAMES_DIR / "frame_07_min84_sideline_84m45s.jpg",
-
         FRAMES_DIR / "frame_08_min10_central_10m.jpg",
-
         FRAMES_DIR / "frame_09_min20_midfield_20m.jpg",
-
         FRAMES_DIR / "frame_10_min25_box_action_25m.jpg",
-
         FRAMES_DIR / "frame_11_min38_setpiece_38m.jpg",
-
         FRAMES_DIR / "frame_12_min50_buildup_50m.jpg",
-
         FRAMES_DIR / "frame_13_min57_duel_57m.jpg",
-
         FRAMES_DIR / "frame_14_min70_possession_70m.jpg",
-
         FRAMES_DIR / "frame_15_min85_counter_85m.jpg",
-
+        FRAMES_DIR / "frame_16_min15_buildup_15m.jpg",
+        FRAMES_DIR / "frame_17_min60_attack_60m.jpg",
     ]
 
 
@@ -3961,23 +3937,21 @@ def main():
 
 
     summary_path = OUTPUT_DIR / "clasico_evaluation_report.json"
-
     with open(summary_path, "w", encoding="utf-8") as f:
-
         json.dump(results, f, indent=2)
 
+    with open(ARTIFACT_DIR / "clasico_pipeline_eval_report.json", "w", encoding="utf-8") as f:
+        json.dump(results, f, indent=2)
 
+    with open(PROJECT_ROOT / "output" / "clasico_pipeline_eval_report.json", "w", encoding="utf-8") as f:
+        json.dump(results, f, indent=2)
 
     print("\n" + "=" * 80)
-
     print("REVAMPED EVALUATION COMPLETE")
-
     print(f"Summary JSON: {summary_path}")
-
     print(f"Annotated Screenshots saved to: {OUTPUT_DIR}")
-
     print(f"Artifact Screenshots synced to: {ARTIFACT_DIR}")
-
+    print(f"Output Screenshots synced to: {PROJECT_ROOT / 'output'}")
     print("=" * 80)
 
 

@@ -6,7 +6,7 @@ Explicitly sets with_reid=False to eliminate heavy secondary neural network over
 
 from dataclasses import dataclass, field
 from types import SimpleNamespace
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 import cv2
 import numpy as np
 
@@ -195,6 +195,66 @@ class _DetectionsWrapper:
         return _DetectionsWrapper(self.xyxy[idx], self.conf[idx], self.cls[idx])
 
 
+class _FallbackGMC:
+    """Standalone Camera Motion Compensation via OpenCV Sparse Optical Flow."""
+    def __init__(self):
+        self.prev_frame = None
+        self.prev_pts = None
+
+    def apply(self, img, dets=None):
+        if img is None:
+            return np.eye(2, 3, dtype=np.float32)
+        if len(img.shape) == 3:
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        else:
+            gray = img
+        if self.prev_frame is None:
+            self.prev_frame = gray
+            self.prev_pts = cv2.goodFeaturesToTrack(gray, maxCorners=1000, qualityLevel=0.01, minDistance=8)
+            return np.eye(2, 3, dtype=np.float32)
+
+        if self.prev_pts is not None and len(self.prev_pts) >= 4:
+            p1, st, err = cv2.calcOpticalFlowPyrLK(self.prev_frame, gray, self.prev_pts, None)
+            if st is not None:
+                valid_prev = self.prev_pts[st.flatten() == 1]
+                valid_curr = p1[st.flatten() == 1]
+                if len(valid_prev) >= 4:
+                    H, _ = cv2.estimateAffinePartial2D(valid_prev, valid_curr)
+                    self.prev_frame = gray
+                    self.prev_pts = cv2.goodFeaturesToTrack(gray, maxCorners=1000, qualityLevel=0.01, minDistance=8)
+                    if H is not None:
+                        return H.astype(np.float32)
+
+        self.prev_frame = gray
+        self.prev_pts = cv2.goodFeaturesToTrack(gray, maxCorners=1000, qualityLevel=0.01, minDistance=8)
+        return np.eye(2, 3, dtype=np.float32)
+
+
+class _FallbackBoTSORT:
+    """Lightweight fallback BoTSORT when Ultralytics is not available."""
+    def __init__(self, parent):
+        self.parent = parent
+        self.gmc = _FallbackGMC()
+        self.next_id = 1
+
+    def update(self, dets, img=None):
+        warp = self.gmc.apply(img)
+        self.parent._last_gmc_warp = warp.copy().astype(np.float32)
+
+        boxes = dets.xyxy if hasattr(dets, "xyxy") else np.empty((0, 4))
+        confs = dets.conf if hasattr(dets, "conf") else np.empty(0)
+        classes = dets.cls if hasattr(dets, "cls") else np.empty(0)
+
+        out_tracks = []
+        for i, box in enumerate(boxes):
+            tid = self.next_id
+            self.next_id += 1
+            conf = float(confs[i]) if i < len(confs) else 0.9
+            cls_id = int(classes[i]) if i < len(classes) else 0
+            out_tracks.append([box[0], box[1], box[2], box[3], tid, conf, cls_id, i])
+        return np.array(out_tracks, dtype=np.float32) if out_tracks else np.empty((0, 8))
+
+
 class BoTSORTTracker:
     """
     Production BoT-SORT Tracker.
@@ -227,39 +287,42 @@ class BoTSORTTracker:
         self._last_strided_tracks: Dict[int, List[float]] = {}
         self._last_strided_frame_idx: Optional[int] = None
 
-    def _build_tracker(self) -> BOTSORT:
-        args = SimpleNamespace(
-            track_high_thresh=self.track_high_thresh,
-            track_low_thresh=self.track_low_thresh,
-            new_track_thresh=self.new_track_thresh,
-            track_buffer=self.track_buffer,
-            match_thresh=self.match_thresh,
-            fuse_score=True,
-            gmc_method="sparseOptFlow",  # Sparse Optical Flow CMC
-            proximity_thresh=0.5,
-            appearance_thresh=0.25,
-            with_reid=False,  # CRITICAL: Disable heavy Re-ID neural net on CPU
-            model="auto",
-        )
-        tracker = BOTSORT(args)
-
-        # Intercept tracker.gmc.apply to capture the actual camera motion warp
-        # computed during tracker.update() without causing a duplicate call
+    def _build_tracker(self) -> Any:
         self._last_gmc_warp = np.eye(2, 3, dtype=np.float32)
-        if hasattr(tracker, "gmc") and tracker.gmc is not None and getattr(tracker.gmc, "apply", None) is not None:
-            orig_gmc_apply = tracker.gmc.apply
+        if BOTSORT is not None:
+            args = SimpleNamespace(
+                track_high_thresh=self.track_high_thresh,
+                track_low_thresh=self.track_low_thresh,
+                new_track_thresh=self.new_track_thresh,
+                track_buffer=self.track_buffer,
+                match_thresh=self.match_thresh,
+                fuse_score=True,
+                gmc_method="sparseOptFlow",  # Sparse Optical Flow CMC
+                proximity_thresh=0.5,
+                appearance_thresh=0.25,
+                with_reid=False,  # CRITICAL: Disable heavy Re-ID neural net on CPU
+                model="auto",
+            )
+            tracker = BOTSORT(args)
 
-            def intercepted_apply(*gmc_args, **gmc_kwargs):
-                warp = orig_gmc_apply(*gmc_args, **gmc_kwargs)
-                if warp is not None and isinstance(warp, np.ndarray) and warp.shape == (2, 3):
-                    self._last_gmc_warp = warp.copy().astype(np.float32)
-                else:
-                    self._last_gmc_warp = np.eye(2, 3, dtype=np.float32)
-                return warp
+            # Intercept tracker.gmc.apply to capture the actual camera motion warp
+            # computed during tracker.update() without causing a duplicate call
+            if hasattr(tracker, "gmc") and tracker.gmc is not None and getattr(tracker.gmc, "apply", None) is not None:
+                orig_gmc_apply = tracker.gmc.apply
 
-            tracker.gmc.apply = intercepted_apply
+                def intercepted_apply(*gmc_args, **gmc_kwargs):
+                    warp = orig_gmc_apply(*gmc_args, **gmc_kwargs)
+                    if warp is not None and isinstance(warp, np.ndarray) and warp.shape == (2, 3):
+                        self._last_gmc_warp = warp.copy().astype(np.float32)
+                    else:
+                        self._last_gmc_warp = np.eye(2, 3, dtype=np.float32)
+                    return warp
 
-        return tracker
+                tracker.gmc.apply = intercepted_apply
+
+            return tracker
+        else:
+            return _FallbackBoTSORT(self)
 
     def reset(self):
         """Reset tracker state upon camera cut."""

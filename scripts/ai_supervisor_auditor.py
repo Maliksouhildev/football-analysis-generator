@@ -180,7 +180,7 @@ class BiometricAndNumberAuditor:
     def __init__(
         self,
         api_key: Optional[str] = None,
-        model: str = "gemini-2.0-flash",
+        model: str = "gemini-flash-lite-latest",
         use_mock: bool = False,
     ):
         self.api_key = api_key or os.getenv("GEMINI_API_KEY")
