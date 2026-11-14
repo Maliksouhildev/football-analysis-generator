@@ -178,7 +178,12 @@ BANNED_NON_SQUAD = {
     "nacho", "joselu", "gündogan", "gundogan", "félix", "felix",
     "militão", "militao", "mendy", "ferland mendy", "vázquez", "vazquez",
     "lucas vazquez", "lucas vázquez", "rüdiger", "rudiger", "vallejo",
-    "vinícius", "vinicius", "vinicius junior", "vinícius júnior", "júnior", "junior"
+    "vinícius", "vinicius", "vinicius junior", "vinícius júnior", "júnior", "junior",
+    "lewandowski", "robert lewandowski", "modric", "modrić", "luka modric", "luka modrić",
+    "koundé", "kounde", "jules koundé", "jules kounde",
+    "casadó", "casado", "marc casadó", "marc casado",
+    "martínez", "martinez", "iñigo martínez", "inigo martinez",
+    "olmo", "dani olmo",
 }
 
 
@@ -254,37 +259,21 @@ def get_metric_target(role: str, defending_x: float) -> Tuple[float, float]:
 # Authoritative Ball Carrier Chronological Match Events for Real Madrid vs FC Barcelona (2024-10-26)
 
 BALL_CARRIER_EVENTS = [
-
-    {"minute": 0, "second": 0, "player": "Robert Lewandowski", "number": 9, "team": "barcelona", "role": "CF", "event": "kickoff_pass"},
-
+    {"minute": 0, "second": 34, "player": "Pau Cubarsí", "number": 2, "team": "barcelona", "role": "RCB", "event": "kickoff_pass"},
     {"minute": 10, "second": 0, "player": "Pedri", "number": 8, "team": "barcelona", "role": "LCM", "event": "central_buildup"},
-
     {"minute": 20, "second": 0, "player": "Pedri", "number": 8, "team": "barcelona", "role": "LCM", "event": "midfield_progression"},
-
     {"minute": 25, "second": 0, "player": "Pau Cubarsí", "number": 2, "team": "barcelona", "role": "RCB", "event": "box_clearance"},
-
-    {"minute": 30, "second": 37, "player": "Marc Casadó", "number": 17, "team": "barcelona", "role": "DM", "event": "midfield_circulation"},
-
-    {"minute": 38, "second": 0, "player": "Raphinha", "number": 11, "team": "barcelona", "role": "LW", "event": "setpiece_delivery"},
-
-    {"minute": 41, "second": 33, "player": "Eduardo Camavinga", "number": 12, "team": "real_madrid", "role": "LCM", "event": "box_duel_retrieval"},
-
+    {"minute": 30, "second": 37, "player": "Rodri", "number": 16, "team": "barcelona", "role": "DM", "event": "midfield_circulation"},
+    {"minute": 38, "second": 0, "player": "Raphinha", "number": 11, "team": "barcelona", "role": "CF", "event": "setpiece_delivery"},
+    {"minute": 41, "second": 33, "player": "Aurélien Tchouaméni", "number": 14, "team": "real_madrid", "role": "DM", "event": "box_duel_retrieval"},
     {"minute": 46, "second": 43, "player": "Jude Bellingham", "number": 5, "team": "real_madrid", "role": "AM", "event": "second_half_kickoff_press"},
-
-    {"minute": 50, "second": 0, "player": "Frenkie de Jong", "number": 21, "team": "barcelona", "role": "AM", "event": "central_distribution"},
-
-    {"minute": 57, "second": 0, "player": "Robert Lewandowski", "number": 9, "team": "barcelona", "role": "CF", "event": "second_goal_transition"},
-
-    {"minute": 62, "second": 44, "player": "Lucas Vázquez", "number": 17, "team": "real_madrid", "role": "RB", "event": "1v1_defensive_duel"},
-
-    {"minute": 70, "second": 0, "player": "Luka Modrić", "number": 10, "team": "real_madrid", "role": "LCM", "event": "central_possession"},
-
-    {"minute": 80, "second": 58, "player": "Dani Olmo", "number": 20, "team": "barcelona", "role": "RCM", "event": "box_entry_attack"},
-
+    {"minute": 50, "second": 0, "player": "Pedri", "number": 8, "team": "barcelona", "role": "LCM", "event": "central_distribution"},
+    {"minute": 57, "second": 0, "player": "Kylian Mbappé", "number": 10, "team": "real_madrid", "role": "CF", "event": "transition_attack"},
+    {"minute": 62, "second": 44, "player": "Federico Valverde", "number": 8, "team": "real_madrid", "role": "RB", "event": "1v1_defensive_duel"},
+    {"minute": 70, "second": 0, "player": "Bernardo Silva", "number": 20, "team": "real_madrid", "role": "CM", "event": "central_possession"},
+    {"minute": 80, "second": 58, "player": "Frenkie de Jong", "number": 21, "team": "barcelona", "role": "CM", "event": "box_entry_attack"},
     {"minute": 84, "second": 45, "player": "Andriy Lunin", "number": 13, "team": "real_madrid", "role": "GK", "event": "box_control_clearance"},
-
-    {"minute": 85, "second": 0, "player": "Lamine Yamal", "number": 19, "team": "barcelona", "role": "RW", "event": "counterattack_burst"},
-
+    {"minute": 85, "second": 55, "player": "Lamine Yamal", "number": 10, "team": "barcelona", "role": "RW", "event": "counterattack_burst"},
 ]
 
 
@@ -746,10 +735,11 @@ def get_frame_metadata(
 
 
 
-    if "duel" in fname or "box_duel" in fname or "attack" in fname:
-
+    if fname.startswith("frame_") or "clasico" in fname or "tactical" in fname:
+        shot_type = "wide_tactical"
+        has_gk_visible = (minute >= 45 and "kickoff" in fname)
+    elif "duel" in fname or "box_duel" in fname or "attack" in fname:
         shot_type = "duel"
-
         has_gk_visible = False
 
     elif "buildup" in fname or "possession" in fname or "close_up" in fname:
@@ -919,47 +909,35 @@ def filter_candidate_boxes(
         if shot_type in ("wide_tactical", "penalty_box", "goal_line"):
 
             if bh < 0.25 * h:
-
                 top_y, bot_y = geom_engine.get_turf_hull_bounds(geom_res, (h, w), feet_x)
-
                 if feet_y < (top_y * h - 8.0) or feet_y > (bot_y * h + 15.0):
-
                     continue
 
-
-
                 if pitch_poly is not None and len(pitch_poly) > 2:
-
                     poly_dist = cv2.pointPolygonTest(pitch_poly, (feet_x, feet_y), measureDist=True)
-
-                    if poly_dist < -25.0:
-
+                    if poly_dist < -5.0:
                         # Feet are strictly outside green turf polygon (in crowd stands or concrete)
-
                         continue
 
+            # 6. Sideline Photographer Bib / Staff Filter (High saturation orange bibs)
+            torso_patch = frame[max(0, int(y1)):min(h, int(y1 + 0.6 * bh)), max(0, int(x1)):min(w, int(x2))]
+            if torso_patch.size > 0:
+                hsv_torso = cv2.cvtColor(torso_patch, cv2.COLOR_BGR2HSV)
+                orange_mask = (hsv_torso[:, :, 0] <= 24) & (hsv_torso[:, :, 1] >= 140) & (hsv_torso[:, :, 2] >= 120)
+                if np.mean(orange_mask) > 0.18:
+                    logger.info(f"Filtered sideline photographer in orange bib at [{x1}, {y1}, {x2}, {y2}]")
+                    continue
 
-
-            # 6. Foot Grass Ratio Test (Real players have their feet firmly planted on green turf)
-
+            # 7. Foot Grass Ratio Test (Real on-pitch players have feet firmly planted on green turf)
             hsv_f = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-
-            g_mask = (hsv_f[:, :, 0] >= 32) & (hsv_f[:, :, 0] <= 85) & (hsv_f[:, :, 1] >= 35) & (hsv_f[:, :, 2] >= 35)
-
+            g_mask = (hsv_f[:, :, 0] >= 30) & (hsv_f[:, :, 0] <= 88) & (hsv_f[:, :, 1] >= 28) & (hsv_f[:, :, 2] >= 28)
             py1, py2 = max(0, int(feet_y - 12)), min(h, int(feet_y + 12))
-
             px1, px2 = max(0, int(feet_x - 12)), min(w, int(feet_x + 12))
-
             foot_patch = g_mask[py1:py2, px1:px2]
-
             if foot_patch.size > 0:
-
                 grass_ratio = float(np.mean(foot_patch))
-
-                if feet_y < 0.90 * h and grass_ratio < 0.15:
-
-                    # Sitting on concrete/stand bench with no grass around feet
-
+                if grass_ratio < 0.18:
+                    # Off-pitch or sitting on bench/stewards area with insufficient grass
                     continue
 
         else:
@@ -983,14 +961,10 @@ def filter_candidate_boxes(
 
 
     # Pass 2: Strict Containment (IOSA), Vertical Column Alignment, and Duel-Aware NMS
-
     final_boxes = []
-
     n_p = len(pass1_boxes)
-
     suppressed = set()
-
-
+    med_h = float(np.median([b[3] - b[1] for b in pass1_boxes])) if pass1_boxes else 50.0
 
     for i in range(n_p):
 
@@ -1097,46 +1071,31 @@ def filter_candidate_boxes(
 
 
             if is_same_column and is_vertically_contiguous:
-
-                # Merge into composite full-body box if aspect ratio is valid
-
-                combo_box = np.array([
-
-                    min(bi[0], bj[0]),
-
-                    min(bi[1], bj[1]),
-
-                    max(bi[2], bj[2]),
-
-                    max(bi[3], bj[3])
-
-                ])
-
-                combo_w = combo_box[2] - combo_box[0]
-
-                combo_h = combo_box[3] - combo_box[1]
-
-                aspect_ratio = combo_h / float(max(1, combo_w))
-
-                if 1.15 <= aspect_ratio <= 4.8:
-
-                    if area_i >= area_j:
-
-                        pass1_boxes[i] = combo_box
-
-                        bi = combo_box
-
-                        area_i = combo_w * combo_h
-
-                        suppressed.add(j)
-
-                    else:
-
-                        pass1_boxes[j] = combo_box
-
-                        suppressed.add(i)
-
-                        break
+                # Anti-merge guard: If both boxes are substantial players (>= 0.65 * med_h),
+                # preserve both separate boxes for close duels or perspective depth
+                if h_i >= 0.65 * med_h and h_j >= 0.65 * med_h:
+                    pass
+                else:
+                    # Merge into composite full-body box only if one is a partial fragment
+                    combo_box = np.array([
+                        min(bi[0], bj[0]),
+                        min(bi[1], bj[1]),
+                        max(bi[2], bj[2]),
+                        max(bi[3], bj[3])
+                    ])
+                    combo_w = combo_box[2] - combo_box[0]
+                    combo_h = combo_box[3] - combo_box[1]
+                    aspect_ratio = combo_h / float(max(1, combo_w))
+                    if 1.15 <= aspect_ratio <= 2.85:
+                        if area_i >= area_j:
+                            pass1_boxes[i] = combo_box
+                            bi = combo_box
+                            area_i = combo_w * combo_h
+                            suppressed.add(j)
+                        else:
+                            pass1_boxes[j] = combo_box
+                            suppressed.add(i)
+                            break
 
 
 
@@ -1898,30 +1857,18 @@ def solve_tactical_assignment_metric(
 
 
 
-            # Priority 2: Direct Jersey OCR Locked Number
-
+            # Priority 2: Direct Jersey OCR Locked Number (Hard Cost Lock)
             if locked_num > 0:
-
                 if p_num == locked_num:
-
-                    cost_matrix[i, j] = -100.0
-
+                    cost_matrix[i, j] = -10000.0
                     continue
-
                 else:
-
-                    cost_matrix[i, j] = 500.0
-
+                    cost_matrix[i, j] = 100000.0
                     continue
-
-
 
             # Priority 3: VLM Identified Name Match
-
             if vlm_name and any(part in p_name for part in vlm_name.split() if len(part) > 3):
-
-                cost_matrix[i, j] = -80.0
-
+                cost_matrix[i, j] = -5000.0
                 continue
 
 
@@ -2979,7 +2926,7 @@ def process_eval_frame_production(
             "pitch_coords": meta.get("pitch_coords"),
         }
 
-    for tid, b, meta in linesman_cands[:2]:
+    for tid, b, meta in linesman_cands:
         assigned_identities[tid] = {
             "name": "Assistant Referee",
             "number": 0,
@@ -3001,20 +2948,6 @@ def process_eval_frame_production(
             "confidence": 0.95,
             "pitch_coords": meta.get("pitch_coords"),
         }
-
-
-
-    for tid, b, meta in linesman_cands[2:]:
-
-        w_rat = meta.get("raw_classification", {}).get("white_ratio", 0.0)
-
-        if w_rat >= 0.095:
-
-            rma_candidates.append((tid, b, meta))
-
-        else:
-
-            bar_candidates.append((tid, b, meta))
 
 
 
@@ -3045,11 +2978,16 @@ def process_eval_frame_production(
         bc_x = (bx1 + bx2) / 2.0
         bc_y = (by1 + by2) / 2.0
 
-        # 1. Pitch Polygon Enclosure
+        # 1. Pitch Polygon Enclosure & Playable Turf Margin
         if pitch_poly is not None and len(pitch_poly) >= 3:
             in_poly = cv2.pointPolygonTest(pitch_poly, (bc_x, bc_y), False)
             if in_poly < 0:
                 continue
+
+        top_y, bot_y = geom_engine.get_turf_hull_bounds(geom_res, (h, w), bc_x)
+        if bc_y < (top_y * h + 15.0) or bc_y > (bot_y * h - 15.0):
+            # Outside playable pitch turf (on perimeter LED advertising boards or painted sideline logos)
+            continue
 
         # 2. 5px Annular Ring Turf Ratio
         r_inner = max(bw, bh) / 2.0

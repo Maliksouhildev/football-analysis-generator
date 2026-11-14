@@ -214,7 +214,7 @@ REAL_MADRID_PROFILES: List[PlayerBiometricProfile] = [
         height_cm=176, build="slender_agile", distinguishing_features=["left_winger", "fast_dynamic"]
     ),
     PlayerBiometricProfile(
-        name="Kylian Mbappé", number=9, team="real_madrid", role="CF",
+        name="Kylian Mbappé", number=10, team="real_madrid", role="CF",
         skin_tone="brown", hair_style="buzzcut", hair_color="black", facial_hair="clean_shaven",
         height_cm=178, build="athletic", distinguishing_features=["signature_buzzcut", "explosive_speed"]
     ),
@@ -245,7 +245,7 @@ BARCELONA_PROFILES: List[PlayerBiometricProfile] = [
     ),
     # Defenders
     PlayerBiometricProfile(
-        name="Xavi Espart", number=22, team="barcelona", role="RB",
+        name="Xavi Espart", number=12, team="barcelona", role="RB",
         skin_tone="fair", hair_style="short_neat", hair_color="brown", facial_hair="clean_shaven",
         height_cm=178, build="athletic", distinguishing_features=["young_right_back"]
     ),
@@ -255,7 +255,7 @@ BARCELONA_PROFILES: List[PlayerBiometricProfile] = [
         height_cm=186, build="athletic", distinguishing_features=["solid_defender"]
     ),
     PlayerBiometricProfile(
-        name="João Cancelo", number=12, team="barcelona", role="LB",
+        name="João Cancelo", number=2, team="barcelona", role="LB",
         skin_tone="olive", hair_style="short_neat", hair_color="dark_brown", facial_hair="stubble",
         height_cm=182, build="athletic", distinguishing_features=["experienced_fullback"]
     ),
@@ -281,7 +281,7 @@ BARCELONA_PROFILES: List[PlayerBiometricProfile] = [
     ),
     # Midfielders
     PlayerBiometricProfile(
-        name="Rodri", number=14, team="barcelona", role="DM",
+        name="Rodri", number=16, team="barcelona", role="DM",
         skin_tone="fair", hair_style="short_neat", hair_color="dark_brown", facial_hair="clean_shaven",
         height_cm=191, build="tall_muscular", distinguishing_features=["tall_pivot", "ballon_dor_winner"]
     ),
@@ -296,7 +296,7 @@ BARCELONA_PROFILES: List[PlayerBiometricProfile] = [
         height_cm=174, build="slender_agile", distinguishing_features=["lean_playmaker"]
     ),
     PlayerBiometricProfile(
-        name="Fermín López", number=16, team="barcelona", role="AM",
+        name="Fermín López", number=7, team="barcelona", role="AM",
         skin_tone="fair", hair_style="short_neat", hair_color="brown", facial_hair="clean_shaven",
         height_cm=174, build="athletic", distinguishing_features=["energetic_midfielder"]
     ),
@@ -306,7 +306,7 @@ BARCELONA_PROFILES: List[PlayerBiometricProfile] = [
         height_cm=180, build="athletic", distinguishing_features=["signature_blonde_hair"]
     ),
     PlayerBiometricProfile(
-        name="Anthony Gordon", number=10, team="barcelona", role="LW",
+        name="Anthony Gordon", number=11, team="barcelona", role="LW",
         skin_tone="fair", hair_style="short_neat", hair_color="blonde", facial_hair="clean_shaven",
         height_cm=183, build="athletic", distinguishing_features=["blond_winger", "pacey"]
     ),
@@ -332,7 +332,7 @@ BARCELONA_PROFILES: List[PlayerBiometricProfile] = [
     ),
     # Forwards
     PlayerBiometricProfile(
-        name="Lamine Yamal", number=19, team="barcelona", role="RW",
+        name="Lamine Yamal", number=10, team="barcelona", role="RW",
         skin_tone="light_brown", hair_style="fade", hair_color="black", facial_hair="clean_shaven",
         height_cm=178, build="slender_agile", distinguishing_features=["signature_curled_fade", "left_footed_winger"]
     ),
