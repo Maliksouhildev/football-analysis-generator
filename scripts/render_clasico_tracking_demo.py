@@ -273,11 +273,20 @@ def build_demonstration_video():
             keyframe_captures["t2_rodri_reception.jpg"] = frame.copy()
 
     writer.release()
-    print(f"[3/3] Video successfully written: {video_out_path} ({video_out_path.stat().st_size // 1024} KB)")
+    print(f"[3/3] Raw video successfully written: {video_out_path} ({video_out_path.stat().st_size // 1024} KB)")
 
-    # Copy video to artifact directory
+    # Universal Web Browser Compatibility: Transcode to H.264 (yuv420p, +faststart) using ffmpeg
+    h264_out_path = OUTPUT_DIR / "clasico_tracking_pass_demonstration_h264.mp4"
+    ffmpeg_cmd = (
+        f'ffmpeg -y -i "{video_out_path}" -c:v libx264 -pix_fmt yuv420p -movflags +faststart "{h264_out_path}"'
+    )
+    code = os.system(ffmpeg_cmd)
+    target_video = h264_out_path if (code == 0 and h264_out_path.is_file()) else video_out_path
+
+    # Copy browser-compatible video to artifact directory
     artifact_video_path = ARTIFACT_DIR / "clasico_tracking_pass_demonstration.mp4"
-    shutil.copy2(video_out_path, artifact_video_path)
+    shutil.copy2(target_video, artifact_video_path)
+    shutil.copy2(target_video, video_out_path)
 
     # Save keyframes to artifact directory
     for k_name, k_img in keyframe_captures.items():
