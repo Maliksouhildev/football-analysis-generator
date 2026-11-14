@@ -302,3 +302,106 @@ class TestClasicoPipelineIntegration:
         # 4. Check output images exist and are valid JPEGs
         out_local = Path(report["output_frame_path"])
         assert out_local.is_file() and out_local.stat().st_size > 50000, "Rendered tactical frame missing or empty!"
+
+
+def test_active_11_kickoff_timestamp():
+    """At min 00:34 (kickoff), starters must be strictly active, bench & suspended banned."""
+    from src.vision.dynamic_match_roster_extractor import (
+        get_active_squad_at_timestamp,
+        CANONICAL_CLASICO_2026_FIXTURE,
+    )
+    from scripts.evaluate_clasico_blueprint_pipeline import BANNED_NON_SQUAD
+
+    current_sec = 34.0
+    home = CANONICAL_CLASICO_2026_FIXTURE["home_team"]
+    away = CANONICAL_CLASICO_2026_FIXTURE["away_team"]
+
+    bar_active, bar_banned = get_active_squad_at_timestamp(home, current_sec)
+    rma_active, rma_banned = get_active_squad_at_timestamp(away, current_sec)
+
+    assert len(bar_active) == 11
+    assert len(rma_active) == 11
+
+    # Check Real Madrid Active 11
+    rma_names = {p["name"] for p in rma_active}
+    expected_rma = {
+        "Andriy Lunin", "Marc Cucurella", "Dean Huijsen", "Ibrahima Konaté",
+        "Federico Valverde", "Aurélien Tchouaméni", "Bernardo Silva",
+        "Jude Bellingham", "Kylian Mbappé", "Arda Güler", "Yann Diomande"
+    }
+    assert rma_names == expected_rma
+
+    # Check Barcelona Active 11
+    bar_names = {p["name"] for p in bar_active}
+    expected_bar = {
+        "Joan García", "João Cancelo", "Gerard Martín", "Pau Cubarsí",
+        "Xavi Espart", "Rodri", "Pedri", "Fermín López",
+        "Anthony Gordon", "Raphinha", "Lamine Yamal"
+    }
+    assert bar_names == expected_bar
+
+    # Check Banned List at min 00:34
+    all_banned = bar_banned | rma_banned | BANNED_NON_SQUAD
+    for p in ["Vinícius Júnior", "Éder Militão", "Ferland Mendy", "Antonio Rüdiger", "Eduardo Camavinga", "Alejandro Balde"]:
+        assert any(p.lower() in b.lower() for b in all_banned), f"{p} should be banned at min 00:34!"
+
+
+def test_chronological_substitutions():
+    """Players entering at specific minutes become active only after their substitution second."""
+    from src.vision.dynamic_match_roster_extractor import (
+        get_active_squad_at_timestamp,
+        CANONICAL_CLASICO_2026_FIXTURE,
+    )
+
+    away = CANONICAL_CLASICO_2026_FIXTURE["away_team"]
+
+    # Before min 62 (e.g. min 50 = sec 3000)
+    rma_50, banned_50 = get_active_squad_at_timestamp(away, 3000.0)
+    names_50 = {p["name"] for p in rma_50}
+    assert "Eduardo Camavinga" not in names_50
+    assert any("camavinga" in b.lower() for b in banned_50)
+
+    # After min 62 (e.g. min 65 = sec 3900): Camavinga in, Valverde out
+    rma_65, banned_65 = get_active_squad_at_timestamp(away, 3900.0)
+    names_65 = {p["name"] for p in rma_65}
+    assert "Eduardo Camavinga" in names_65
+    assert "Federico Valverde" not in names_65
+    assert any("valverde" in b.lower() for b in banned_65)
+
+
+def test_referee_isolation_firewall():
+    """Officials with cyan, lime, or black kits are categorized as referee and isolated from players."""
+    import cv2
+    from scripts.evaluate_clasico_blueprint_pipeline import classify_player_kit
+
+    dummy_frame = np.zeros((100, 100, 3), dtype=np.uint8)
+
+    # Cyan kit: high B & G, lower R
+    dummy_frame[:, :] = (200, 180, 50)  # BGR
+    clf_cyan = classify_player_kit(dummy_frame, np.array([10, 10, 80, 80]), rma_def_x=0.0)
+    assert clf_cyan["category"] == "referee"
+
+    # All black kit: low value
+    dummy_frame[:, :] = (30, 30, 30)
+    clf_black = classify_player_kit(dummy_frame, np.array([10, 10, 80, 80]), rma_def_x=0.0)
+    assert clf_black["category"] == "referee"
+
+
+def test_kit_color_partitioning_threshold():
+    """White ratio threshold 0.26 correctly separates white RMA kits from Blaugrana kits with white accents."""
+    from scripts.evaluate_clasico_blueprint_pipeline import classify_player_kit
+
+    dummy_frame = np.zeros((100, 100, 3), dtype=np.uint8)
+
+    # Pure white kit (Real Madrid)
+    dummy_frame[:, :] = (240, 240, 240)
+    clf_rma = classify_player_kit(dummy_frame, np.array([10, 10, 80, 80]), rma_def_x=0.0)
+    assert clf_rma["category"] == "real_madrid"
+    assert clf_rma["white_ratio"] >= 0.26
+
+    # Dark Blaugrana kit with 10% white accent (Barcelona)
+    # 90% navy blue (BGR 80, 20, 10), 10% white (BGR 255, 255, 255)
+    dummy_frame[:, :] = (80, 20, 10)
+    dummy_frame[:10, :10] = (255, 255, 255)
+    clf_bar = classify_player_kit(dummy_frame, np.array([10, 10, 80, 80]), rma_def_x=0.0)
+    assert clf_bar["category"] == "barcelona"

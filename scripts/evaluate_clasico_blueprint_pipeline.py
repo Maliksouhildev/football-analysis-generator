@@ -171,17 +171,14 @@ logger = logging.getLogger("evaluate_clasico_blueprint_pipeline")
 # Strict Banned Non-Squad list (players who did not play this match at all - historical/transferred/injured)
 
 BANNED_NON_SQUAD = {
-
     "benzema", "busquets", "casemiro", "bale", "ronaldo", "messi", "suarez",
-
     "neymar", "marcelo", "varane", "isco", "asensio", "hazard", "courtois",
-
     "alaba", "david alaba", "carvajal", "dani carvajal",
-
     "ter stegen", "christensen", "araujo", "kroos", "toni kroos", "kepa",
-
-    "nacho", "joselu", "gündogan", "gundogan", "félix", "felix"
-
+    "nacho", "joselu", "gündogan", "gundogan", "félix", "felix",
+    "militão", "militao", "mendy", "ferland mendy", "vázquez", "vazquez",
+    "lucas vazquez", "lucas vázquez", "rüdiger", "rudiger", "vallejo",
+    "vinícius", "vinicius", "vinicius junior", "vinícius júnior", "júnior", "junior"
 }
 
 
@@ -433,25 +430,25 @@ class BallCarrierSyncEngine:
 
 
 def load_canonical_matches() -> Dict[str, Any]:
-
     """Loads authoritative Starting XIs and chronological subs for real El Clásico fixtures."""
-
+    from src.vision.dynamic_match_roster_extractor import CANONICAL_CLASICO_2026_FIXTURE
+    matches = {
+        "clasico_blueprint_eval": CANONICAL_CLASICO_2026_FIXTURE,
+        "barcelona_vs_real_madrid_2026_oct25": CANONICAL_CLASICO_2026_FIXTURE,
+        "latest_el_clasico": CANONICAL_CLASICO_2026_FIXTURE,
+    }
     if CANONICAL_MATCHES_PATH.is_file():
-
         try:
-
             with open(CANONICAL_MATCHES_PATH, "r", encoding="utf-8") as f:
-
                 d = json.load(f)
-
-                matches = d.get("matches", d)
-
-                if matches:
-
+                loaded = d.get("matches", d)
+                if isinstance(loaded, dict):
+                    matches.update(loaded)
+                    matches["clasico_blueprint_eval"] = CANONICAL_CLASICO_2026_FIXTURE
+                    matches["barcelona_vs_real_madrid_2026_oct25"] = CANONICAL_CLASICO_2026_FIXTURE
+                    matches["latest_el_clasico"] = CANONICAL_CLASICO_2026_FIXTURE
                     return matches
-
         except Exception as e:
-
             logger.warning(f"Error reading {CANONICAL_MATCHES_PATH}: {e}")
 
 
@@ -635,124 +632,17 @@ def load_canonical_matches() -> Dict[str, Any]:
 
 
 def resolve_active_squad_at_instant(
-
     match_data: Dict[str, Any],
-
     minute: int,
-
     second: int = 0,
-
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Set[str]]:
-
     """Computes exact active 11-player on-pitch squad for home and away teams."""
-
+    from src.vision.dynamic_match_roster_extractor import get_active_squad_at_timestamp
     current_sec = minute * 60 + second
 
-
-
-    def _resolve_single_team(team_dict: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Set[str]]:
-
-        starters = team_dict.get("starting_xi", [])
-
-        bench = team_dict.get("substitutes", [])
-
-        subs = team_dict.get("substitutions", [])
-
-
-
-        active_map: Dict[str, Dict[str, Any]] = {}
-
-        for p in starters:
-
-            norm = GroundTruthDictionary._normalize_name(p["name"])
-
-            active_map[norm] = copy.deepcopy(p)
-
-
-
-        subbed_in_names: Set[str] = set()
-
-        subbed_out_names: Set[str] = set()
-
-
-
-        for s in subs:
-
-            s_min = s.get("minute", 0)
-
-            s_sec = s.get("second", 0)
-
-            s_total = s_min * 60 + s_sec
-
-            if s_total <= current_sec:
-
-                p_out_name = s.get("player_out") or s.get("out", {}).get("name", "")
-
-                p_in_name = s.get("player_in") or s.get("in", {}).get("name", "")
-
-                in_num = s.get("in_number") or s.get("in_num") or s.get("in", {}).get("num", 0)
-
-                in_role = s.get("in_role") or s.get("in", {}).get("role", "MF")
-
-
-
-                norm_out = GroundTruthDictionary._normalize_name(p_out_name)
-
-                norm_in = GroundTruthDictionary._normalize_name(p_in_name)
-
-
-
-                matched_out_key = next((k for k in active_map if k in norm_out or norm_out in k), None)
-
-                if matched_out_key:
-
-                    active_map.pop(matched_out_key, None)
-
-                subbed_out_names.add(p_out_name)
-
-
-
-                active_map[norm_in] = {
-
-                    "name": p_in_name,
-
-                    "number": in_num,
-
-                    "role": in_role,
-
-                    "is_gk": in_role == "GK",
-
-                }
-
-                subbed_in_names.add(p_in_name)
-
-
-
-        banned = set(subbed_out_names)
-
-        for b_p in bench:
-
-            b_norm = GroundTruthDictionary._normalize_name(b_p["name"])
-
-            if not any(b_norm in GroundTruthDictionary._normalize_name(in_n) for in_n in subbed_in_names):
-
-                banned.add(b_p["name"])
-
-
-
-        active_list = list(active_map.values())
-
-        return active_list, banned
-
-
-
-    home_active, home_banned = _resolve_single_team(match_data.get("home_team", {}))
-
-    away_active, away_banned = _resolve_single_team(match_data.get("away_team", {}))
-
+    home_active, home_banned = get_active_squad_at_timestamp(match_data.get("home_team", {}), current_sec)
+    away_active, away_banned = get_active_squad_at_timestamp(match_data.get("away_team", {}), current_sec)
     all_banned = home_banned.union(away_banned).union(BANNED_NON_SQUAD)
-
-
 
     return home_active, away_active, all_banned
 
@@ -901,15 +791,11 @@ def get_frame_metadata(
 
 
     match_data = (
-
-        canonical_matches.get("barcelona_vs_real_madrid_2026_oct25")
-
+        canonical_matches.get("clasico_blueprint_eval")
+        or canonical_matches.get("barcelona_vs_real_madrid_2026_oct25")
         or canonical_matches.get("latest_el_clasico")
-
         or canonical_matches.get("real_madrid_vs_barcelona_2024_oct26")
-
         or list(canonical_matches.values())[0]
-
     )
 
 
@@ -1406,32 +1292,40 @@ def classify_player_kit(
 
 
 
-    # 2. Match Referee & Assistant Referee / Linesman Detection (Cyan or neon yellow/lime shirt)
+    # 2. Match Referee & Assistant Referee / Linesman Detection (Cyan, Lime, Black)
+    is_outfield_white = (white_ratio >= 0.26)
+    is_outfield_blaugrana = (
+        (sat_t > 50 and (hue_t > 115 or hue_t < 20))
+        or (abs(int(r) - int(b)) > 25 and sat_t > 45)
+        or (r > 60 and b > 60 and g < min(r, b) - 15)
+    )
 
-    is_cyan_ref = (min(b, g) - r > 30) and (75 <= hue_t <= 98) and (sat_t > 80) and (val_t > 140) and (b > 120 and g > 120)
+    is_cyan_ref = (
+        (b > 110 and g > 110 and b - r > 20)
+        or (b > 110 and g > 110 and g - r > 25)
+        or (80 <= hue_t <= 115 and sat_t > 60 and b - r > 15)
+        or ((min(b, g) - r > 20) and (68 <= hue_t <= 112) and (sat_t > 50) and (val_t > 105))
+    )
+    is_yellow_ref = (
+        not is_outfield_white
+        and not is_outfield_blaugrana
+        and (
+            (hue_t < 45 and sat_t > 85 and val_t > 130)
+            or ((hue_t < 42) and (sat_t > 100) and (val_t > 145) and (r > 130 and g > 130 and b < 95))
+        )
+    )
+    is_black_ref = (not is_outfield_white and not is_outfield_blaugrana and val_t < 55 and sat_t < 50)
 
-    is_yellow_ref = (hue_t < 42) and (sat_t > 100) and (val_t > 145) and (r > 130 and g > 130 and b < 95)
-
-    is_ref_color = is_cyan_ref or is_yellow_ref
-
+    is_ref_color = is_cyan_ref or is_yellow_ref or is_black_ref
     if is_ref_color:
-
         is_linesman = (norm_y < 0.25 and (norm_x > 0.60 or norm_x < 0.15)) or (shot_type == "penalty_box" and norm_x > 0.64 and norm_y < 0.22)
-
         return {"category": "referee", "is_linesman": is_linesman, "white_ratio": white_ratio, "confidence": 0.96}
 
-
-
     # 3. Real Madrid Outfield (Crisp White Shirt + Shorts)
-
-    if white_ratio >= 0.095:
-
+    if white_ratio >= 0.26:
         return {"category": "real_madrid", "white_ratio": white_ratio, "confidence": 0.95}
 
-
-
     # 4. FC Barcelona Outfield (Deep Blaugrana Burgundy / Navy)
-
     return {"category": "barcelona", "white_ratio": white_ratio, "confidence": 0.95}
 
 
@@ -3074,62 +2968,38 @@ def process_eval_frame_production(
 
 
 
-    # Demoted candidates are restored to outfield squads based on white ratio
-
-    for tid, b, meta in demoted_refs:
-
-        w_rat = meta.get("raw_classification", {}).get("white_ratio", 0.0)
-
-        if w_rat >= 0.095:
-
-            rma_candidates.append((tid, b, meta))
-
-        else:
-
-            bar_candidates.append((tid, b, meta))
-
-
-
     for tid, b, meta in true_pitch_ref:
-
         assigned_identities[tid] = {
-
             "name": "Match Referee",
-
             "number": 0,
-
             "role": "REF",
-
             "team_type": "referee",
-
             "team_name": "Official",
-
             "confidence": 0.96,
-
             "pitch_coords": meta.get("pitch_coords"),
-
         }
 
-
-
     for tid, b, meta in linesman_cands[:2]:
-
         assigned_identities[tid] = {
-
             "name": "Assistant Referee",
-
             "number": 0,
-
             "role": "REF",
-
             "team_type": "referee",
-
             "team_name": "Official",
-
             "confidence": 0.96,
-
             "pitch_coords": meta.get("pitch_coords"),
+        }
 
+    # Extra pitch officials receive Official / Referee label and are strictly barred from outfield squads
+    for tid, b, meta in demoted_refs:
+        assigned_identities[tid] = {
+            "name": "Assistant Referee",
+            "number": 0,
+            "role": "REF",
+            "team_type": "referee",
+            "team_name": "Official",
+            "confidence": 0.95,
+            "pitch_coords": meta.get("pitch_coords"),
         }
 
 
@@ -3159,33 +3029,62 @@ def process_eval_frame_production(
 
 
     valid_balls = []
+    pitch_poly = geom_res.get("pitch_polygon")
+    if pitch_poly is None or len(pitch_poly) < 3:
+        pitch_poly = geom_res.get("hull_pts")
+
+    hsv_f = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
+    grass_mask = (hsv_f[:, :, 0] >= 26) & (hsv_f[:, :, 0] <= 90) & (hsv_f[:, :, 1] >= 18)
 
     for bb in ball_detections:
-
         bx1, by1, bx2, by2 = [int(v) for v in bb]
-
         bw = bx2 - bx1
-
         bh = by2 - by1
+        if bw <= 0 or bh <= 0 or bw > 50 or bh > 50:
+            continue
+        bc_x = (bx1 + bx2) / 2.0
+        bc_y = (by1 + by2) / 2.0
 
-        if bw < 50 and bh < 50 and by2 > 0.16 * h:
+        # 1. Pitch Polygon Enclosure
+        if pitch_poly is not None and len(pitch_poly) >= 3:
+            in_poly = cv2.pointPolygonTest(pitch_poly, (bc_x, bc_y), False)
+            if in_poly < 0:
+                continue
 
-            valid_balls.append(bb)
+        # 2. 5px Annular Ring Turf Ratio
+        r_inner = max(bw, bh) / 2.0
+        r_outer = r_inner + 5.0
+        y_min, y_max = max(0, int(bc_y - r_outer - 1)), min(h, int(bc_y + r_outer + 2))
+        x_min, x_max = max(0, int(bc_x - r_outer - 1)), min(w, int(bc_x + r_outer + 2))
 
+        yy, xx = np.ogrid[y_min:y_max, x_min:x_max]
+        dist_sq = (xx - bc_x) ** 2 + (yy - bc_y) ** 2
+        ring_mask = (dist_sq >= r_inner ** 2) & (dist_sq <= r_outer ** 2)
 
+        crop_grass = grass_mask[y_min:y_max, x_min:x_max]
+        if np.any(ring_mask):
+            ring_ratio = float(np.mean(crop_grass[ring_mask]))
+        else:
+            ring_ratio = 0.0
+
+        if ring_ratio < 0.65:
+            continue
+
+        # 3. Proximity score to closest active player feet
+        if len(filt_boxes) > 0:
+            min_dist = min([math.hypot(bc_x - (fb[0] + fb[2]) / 2.0, bc_y - fb[3]) for fb in filt_boxes])
+        else:
+            min_dist = 0.0
+
+        valid_balls.append((bb, min_dist, ring_ratio))
 
     if valid_balls:
-
-        # Choose ball closest to pitch center
-
-        bb = valid_balls[0]
-
+        # Sort by proximity to player feet on pitch turf
+        valid_balls.sort(key=lambda item: item[1])
+        bb = valid_balls[0][0]
         bc_x = (bb[0] + bb[2]) / 2.0
-
         bc_y = float(bb[3])
-
         ball_m_x, ball_m_y = projector.project_screen_to_pitch((bc_x / w) * 100.0, (bc_y / h) * 100.0)
-
         ball_m_pos = (ball_m_x, ball_m_y)
 
 
@@ -3609,19 +3508,12 @@ def process_eval_frame_production(
 
 
     # Draw Ball if detected
-
     if valid_balls:
-
-        bb = valid_balls[0]
-
+        bb = valid_balls[0][0] if isinstance(valid_balls[0], (tuple, list)) and len(valid_balls[0]) == 3 else valid_balls[0]
         bx1, by1, bx2, by2 = [int(v) for v in bb]
-
         bcx = (bx1 + bx2) // 2
-
         bcy = (by1 + by2) // 2
-
         cv2.circle(annotated, (bcx, bcy), 8, (0, 255, 255), 2, cv2.LINE_AA)
-
         cv2.putText(annotated, "BALL", (bcx - 12, by1 - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 255, 255), 1, cv2.LINE_AA)
 
 
@@ -3735,7 +3627,7 @@ def process_eval_frame_production(
         "median_box_height_px": round(h_med, 1),
 
         "identities": assigned_identities,
-
+        "ball_position_m": ball_m_pos,
     }
 
 

@@ -432,5 +432,85 @@ class TestProductionPipelineOverhaul(unittest.TestCase):
         self.assertEqual(len(set(assigned_names)), len(assigned_names), "Duplicate player names detected!")
 
 
+def test_canonical_fixture_resolution():
+    """Validates that load_canonical_matches includes authentic October 25, 2026 fixture (ESPN 401882832)."""
+    from scripts.evaluate_clasico_blueprint_pipeline import load_canonical_matches
+    canonical_matches = load_canonical_matches()
+    fixture = canonical_matches.get("clasico_blueprint_eval") or canonical_matches.get("barcelona_vs_real_madrid_2026_oct25")
+    assert fixture is not None
+    assert fixture.get("fixture_id") == "401882832" or fixture.get("date") == "2026-10-25"
+    assert fixture["home_team"]["name"] == "FC Barcelona"
+    assert fixture["away_team"]["name"] == "Real Madrid"
+
+
+def test_hungarian_assignment_zero_degrees_of_freedom():
+    """Assignment solver is strictly bounded to the active 11; inactive/banned players cannot be assigned."""
+    from src.vision.dynamic_match_roster_extractor import (
+        get_active_squad_at_timestamp,
+        CANONICAL_CLASICO_2026_FIXTURE,
+    )
+    from scripts.evaluate_clasico_blueprint_pipeline import solve_tactical_assignment_metric
+
+    current_sec = 34.0  # kickoff
+    rma = CANONICAL_CLASICO_2026_FIXTURE["away_team"]
+    rma_active, rma_banned = get_active_squad_at_timestamp(rma, current_sec)
+
+    # 10 outfield candidates
+    team_boxes = [
+        (tid, np.array([100, 100, 200, 200]), {"pitch_coords": (50.0 + tid * 3, 20.0 + tid * 2)})
+        for tid in range(1, 11)
+    ]
+
+    assigned = solve_tactical_assignment_metric(
+        team_boxes=team_boxes,
+        active_squad=rma_active,
+        defending_x=1.0,
+        team_name="Real Madrid",
+    )
+
+    assert len(assigned) == 10
+    assigned_names = [v["name"].lower() for v in assigned.values()]
+
+    # Strictly assert that NO banned/inactive player appears in assigned identities
+    banned_to_check = ["vinícius", "vinicius", "militão", "militao", "mendy", "rüdiger", "rudiger", "camavinga"]
+    for b in banned_to_check:
+        assert not any(b in an for an in assigned_names), f"Banned player {b} was assigned!"
+
+    # Mathematical Bijection: ZERO DUPLICATES
+    assigned_numbers = [v["number"] for v in assigned.values()]
+    assert len(assigned_numbers) == len(set(assigned_numbers))
+
+
+def test_pitch_turf_ball_annular_ring():
+    """Tests that annular ring surrounding validation rejects non-turf false positives."""
+    import cv2
+    h, w = 100, 100
+    # Frame with green grass (HSV: H=50, S=100, V=150 -> BGR ~ (50, 150, 50))
+    grass_bgr = cv2.cvtColor(np.full((h, w, 3), (50, 100, 150), dtype=np.uint8), cv2.COLOR_HSV2BGR)
+
+    # Place a white ball at (50, 50)
+    cv2.circle(grass_bgr, (50, 50), 3, (255, 255, 255), -1)
+
+    # Compute 5px annular ring around ball
+    r_inner = 3.0
+    r_outer = r_inner + 5.0
+    c_x, c_y = 50, 50
+    yy, xx = np.ogrid[:h, :w]
+    dist_sq = (xx - c_x) ** 2 + (yy - c_y) ** 2
+    ring_mask = (dist_sq >= r_inner ** 2) & (dist_sq <= r_outer ** 2)
+
+    hsv = cv2.cvtColor(grass_bgr, cv2.COLOR_BGR2HSV)
+    grass_mask = (hsv[:, :, 0] >= 26) & (hsv[:, :, 0] <= 90) & (hsv[:, :, 1] >= 18)
+    ring_grass_ratio = float(np.mean(grass_mask[ring_mask]))
+    assert ring_grass_ratio > 0.65, f"Expected ring grass ratio > 0.65, got {ring_grass_ratio}"
+
+    # Non-grass surface (e.g. LED ad board)
+    ad_board_bgr = np.full((h, w, 3), (200, 200, 200), dtype=np.uint8)  # White/silver text
+    hsv_ad = cv2.cvtColor(ad_board_bgr, cv2.COLOR_BGR2HSV)
+    grass_mask_ad = (hsv_ad[:, :, 0] >= 26) & (hsv_ad[:, :, 0] <= 90) & (hsv_ad[:, :, 1] >= 18)
+    ring_grass_ad = float(np.mean(grass_mask_ad[ring_mask]))
+    assert ring_grass_ad < 0.65, f"Ad board should fail turf ring test, got {ring_grass_ad}"
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -92,7 +92,7 @@ class LocalPlayerDetector:
         boxes = []
         scores = []
         class_ids = []
-        ball_candidate = None
+        ball_candidates = []
 
         for row in preds:
             cx, cy, w, h = row[:4]
@@ -126,13 +126,11 @@ class LocalPlayerDetector:
             elif (class_id == 1 or class_id == 32) and score >= 0.15:
                 bx = float(cx) / input_size * width
                 by = float(cy) / input_size * height
-                if not ball_candidate or score > ball_candidate["confidence"]:
-                    ball_candidate = {
-                        "detected": True,
-                        "position_px": [round(bx, 1), round(by, 1)],
-                        "position_norm": [round(bx / width * 1000.0, 1), round(by / height * 1000.0, 1)],
-                        "confidence": round(score * 100.0, 1)
-                    }
+                ball_candidates.append({
+                    "bx": bx,
+                    "by": by,
+                    "score": score,
+                })
 
         # Apply Non-Maximum Suppression (NMS)
         indices = self._apply_nms(boxes, scores, iou_threshold=0.40)
@@ -179,6 +177,40 @@ class LocalPlayerDetector:
                 "kit_color": kit_color,
                 "confidence": round(scores[idx] * 100.0, 1)
             })
+
+        # Select best ball candidate with turf annular ring validation and proximity to player feet
+        ball_candidate = None
+        if ball_candidates:
+            hsv_grass = cv2.inRange(hsv, (26, 18, 20), (90, 255, 255))
+            valid_ball_list = []
+            for bc in ball_candidates:
+                bx, by = bc["bx"], bc["by"]
+                if bx < 0 or bx >= width or by < 0 or by >= height:
+                    continue
+                # 5px annular ring
+                r = 6.0
+                y_min, y_max = max(0, int(by - r - 5)), min(height, int(by + r + 6))
+                x_min, x_max = max(0, int(bx - r - 5)), min(width, int(bx + r + 6))
+                yy, xx = np.ogrid[y_min:y_max, x_min:x_max]
+                dist_sq = (xx - bx) ** 2 + (yy - by) ** 2
+                ring = (dist_sq >= r ** 2) & (dist_sq <= (r + 5.0) ** 2)
+                crop_grass = hsv_grass[y_min:y_max, x_min:x_max]
+                grass_ratio = float(np.mean(crop_grass[ring] > 0)) if np.any(ring) else 0.0
+
+                if grass_ratio >= 0.65:
+                    # Score by proximity to player feet
+                    min_dist = min([math.hypot(bx - p["foot_pos_px"][0], by - p["foot_pos_px"][1]) for p in players]) if players else 0.0
+                    valid_ball_list.append((bc, min_dist))
+
+            if valid_ball_list:
+                valid_ball_list.sort(key=lambda item: item[1])
+                best_bc = valid_ball_list[0][0]
+                ball_candidate = {
+                    "detected": True,
+                    "position_px": [round(best_bc["bx"], 1), round(best_bc["by"], 1)],
+                    "position_norm": [round(best_bc["bx"] / width * 1000.0, 1), round(best_bc["by"] / height * 1000.0, 1)],
+                    "confidence": round(best_bc["score"] * 100.0, 1)
+                }
 
         # If ball not detected by model, use CV turf-contrast blob detector
         if not ball_candidate or not ball_candidate.get("detected"):
